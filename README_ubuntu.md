@@ -16,8 +16,9 @@
 ```bash
 cd /puls_proekta
 source venv/bin/activate
-npm install
+npm ci
 npm run build
+npm run test:gantt
 
 gunicorn app:app --bind 0.0.0.0:39663
 ```
@@ -62,13 +63,16 @@ unzip puls-server-v2.6.1.zip -d /puls_proekta
 
 ```bash
 cd /puls_proekta
-npm install
+npm ci
 npm run build
+npm run test:gantt
 
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
+
+`npm run build` проверяет отслеживаемые production-артефакты и финализирует CSS-слои диаграммы. Полная пересборка React/Express недоступна, поскольку этот репозиторий содержит `dist`, но не содержит исходные каталоги `client`, `server` и `shared`.
 
 ### 5. Быстрый запуск
 
@@ -80,9 +84,7 @@ gunicorn app:app --bind 0.0.0.0:39663
 
 Должно появиться: `serving on port 5000` (Node.js запускается автоматически при первом запросе).
 
-Учётные данные по умолчанию:
-- **Логин:** admin
-- **Пароль:** pulsbald198!
+После первого входа замените первоначальные учётные данные администратора на уникальный пароль и не храните рабочий пароль в документации или репозитории.
 
 ### 6. Настройка Gunicorn через systemd
 
@@ -177,13 +179,13 @@ sudo cp /puls_proekta/puls.db /puls_proekta/puls-backup-$(date +%Y%m%d).db
 ```bash
 cd /puls_proekta
 sudo systemctl stop puls
-# Сохранить базу
 cp puls.db ../puls.db.bak
-# Загрузить новый архив
-unzip puls-server-vX.X.zip -d .
-npm install
+git fetch origin
+git switch v1.0.1
+git pull --ff-only origin v1.0.1
+npm ci
 npm run build
-# Восстановить базу
+npm run test:gantt
 cp ../puls.db.bak ./puls.db
 sudo systemctl start puls
 ```
@@ -198,73 +200,46 @@ pscp.exe -P 39651 -r puls-server-v2.6.1.zip yurasov@10.90.0.120:/home/yurasov/
 
 ## Запуск через tmux (без systemd)
 
-Альтернатива systemd — запуск в сессии tmux. Сервер продолжает работать после закрытия терминала.
-
-### Создать сессию и запустить
-
 ```bash
-# Создать сессию
 tmux new -s puls
-
-# Внутри сессии:
 cd /puls_proekta
 source venv/bin/activate
-npm install
+npm ci
 npm run build
-
+npm run test:gantt
 gunicorn app:app --bind 0.0.0.0:39663
 ```
 
-Приложение доступно по адресу `http://<IP-сервера>:39663`.
-
-### Отключиться от сессии (сервер продолжает работать)
-
-Закройте окно PuTTY или нажмите `Ctrl+B` затем `D`.
-
-### Вернуться в сессию
-
-```bash
-tmux attach -t puls
-```
-
-### Остановка сервера
-
-```bash
-# Подключиться к сессии
-tmux attach -t puls
-
-# Нажать Ctrl+C
-
-# Удалить сессию
-tmux kill-session -t puls
-```
+Отключиться: `Ctrl+B`, затем `D`. Вернуться: `tmux attach -t puls`. Остановить: `Ctrl+C`, затем `tmux kill-session -t puls`.
 
 ---
 
-## Структура проекта
+## Фактическая структура checkout
 
-```
+```text
 puls_proekta/
-├── app.py              # Python WSGI-обёртка (gunicorn)
-├── requirements.txt    # Python-зависимости (gunicorn)
+├── app.py
+├── requirements.txt
 ├── dist/
-│   ├── index.cjs       # Node.js сервер (собранный)
-│   └── public/         # Статические файлы (React)
-├── server/             # Исходники бэкенда
-├── client/             # Исходники фронтенда
-├── shared/             # Общие типы
-├── puls.db             # База данных SQLite (создаётся автоматически)
-└── package.json
+│   ├── index.cjs
+│   └── public/
+├── script/
+│   └── build.mjs
+├── tests/
+│   └── gantt-layering.test.mjs
+├── package.json
+└── package-lock.json
 ```
 
 ---
 
 ## Проверка v1.0.1
 
-Версия `v1.0.1` исправляет порядок слоёв диаграммы Ганта: линии и подписи вех отображаются поверх полос задач. Изменение не затрагивает API, структуру данных проектов и схему SQLite.
+Версия `v1.0.1` исправляет порядок слоёв диаграммы Ганта: линии вех, их подписи и линия текущей даты отображаются поверх полос задач. Изменение не затрагивает API, структуру данных проектов и схему SQLite.
 
 ```bash
 npm ci
+npm run build
 npm run test:gantt
 node --check dist/index.cjs
 python3 -m py_compile app.py

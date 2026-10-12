@@ -15,9 +15,12 @@ function zIndex(selector) {
 const task = zIndex(".taskWrap");
 const milestone = zIndex(".milestoneLine");
 const label = zIndex(".milestoneLabel");
+const today = zIndex(".todayLine");
 
 assert.ok(milestone > task, "milestone lines must render above task bars");
 assert.ok(label > milestone, "milestone labels must render above milestone lines");
+assert.ok(today > task, "today line must render above task bars");
 assert.match(html, /\.milestoneLine\{[^}]*pointer-events:none/, "milestone overlay must not block task interaction");
+assert.match(html, /\.todayLine\{[^}]*pointer-events:none/, "today overlay must not block task interaction");
 
-console.log("Gantt milestone layering regression check passed");
+console.log("Gantt timeline layering regression check passed");
