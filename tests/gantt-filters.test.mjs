@@ -29,6 +29,7 @@ function extract(name) {
 const sandbox = {
   g: () => ({ value: "" }),
   state: { rows: [], collapsed: {} },
+  categoryFilterSet: new Set(),
   statusFilterSet: new Set(),
   assigneeFilterSet: new Set(),
   document: { getElementById: () => ({ value: "" }), querySelectorAll: () => [] },
@@ -47,7 +48,7 @@ const src = [
   extract("statusObj"), extract("visibleRows"), extract("taskPassesFilters"),
 ].join("\n");
 vm.runInContext(src, ctx);
-const { state, statusFilterSet, assigneeFilterSet, visibleRows } = sandbox;
+const { state, categoryFilterSet, statusFilterSet, assigneeFilterSet, visibleRows } = sandbox;
 const ids = () => visibleRows().map((r) => r.id).join(",");
 
 let failed = 0;
@@ -67,7 +68,7 @@ const task = (id, start, end, extra = {}) => ({
   dependencyId: "", dependencyType: "FS", depLag: 0, status: "new",
   assigneeId: "", category: "", comments: [], changeHistory: [], ...extra,
 });
-const resetFilters = () => { statusFilterSet.clear(); assigneeFilterSet.clear(); };
+const resetFilters = () => { categoryFilterSet.clear(); statusFilterSet.clear(); assigneeFilterSet.clear(); };
 
 /* Base fixture:
    G1 (group)
@@ -129,15 +130,17 @@ check("статус done И исполнитель a1: никто не прох�
 resetFilters();
 
 /* --- category + status + assignee (AND) --- */
-sandbox.document = { getElementById: (id) => ({ value: id === "categoryFilter" ? "X" : "" }), querySelectorAll: () => [] };
+categoryFilterSet.add("X");
 statusFilterSet.add("inwork"); assigneeFilterSet.add("__none__");
 check("категория X И inwork И без исполнителя: пусто", ids(), "");
 resetFilters();
 statusFilterSet.add("blocked"); assigneeFilterSet.add("__none__");
 check("категория X И blocked И без исполнителя: пусто (C имеет a1)", ids(), "");
-resetFilters();
+resetFilters(); categoryFilterSet.add("X");
 check("категория X без статусного фильтра: задачи кат. X + предки", ids(), "G1,T1,T2,P,C,M1");
-sandbox.document = { getElementById: () => ({ value: "" }), querySelectorAll: () => [] };
+categoryFilterSet.clear(); categoryFilterSet.add("__none__");
+check("Без категории: только задачи с пустой категорией (S1)", ids(), "S1");
+resetFilters();
 
 /* --- deep hierarchy: group → parent of another category → matching child --- */
 state.rows = [

@@ -30,6 +30,7 @@ const g = () => ({ value: "", innerHTML: "", textContent: "" });
 const sandbox = {
   g,
   state: { rows: [], collapsed: {}, settings: { autoShift: true } },
+  categoryFilterSet: new Set(),
   statusFilterSet: new Set(),
   assigneeFilterSet: new Set(),
   document: { getElementById: () => ({ value: "" }), querySelectorAll: () => [] },
