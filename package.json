@@ -9,7 +9,7 @@
     "start": "node dist/index.cjs",
     "check": "tsc",
     "db:push": "drizzle-kit push",
-    "test:gantt": "node script/build.mjs && node tests/gantt-layering.test.mjs && node tests/gantt-links.test.mjs"
+    "test:gantt": "node script/build.mjs && node tests/gantt-layering.test.mjs && node tests/gantt-links.test.mjs && node tests/gantt-filters.test.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",
