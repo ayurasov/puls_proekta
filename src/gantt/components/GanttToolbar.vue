@@ -104,6 +104,8 @@ const columnLabels = computed(() => ({
   ...(jira.state.connected ? { jira: 'Задача Jira' } : {}),
 }))
 const jiraLinked = computed(() => (jira.state.connected ? jira.linkedItems().length : 0))
+const JIRA_AUTO_LABELS = { status: 'статус', dates: 'сроки', progress: 'прогресс', name: 'название' }
+const jiraAutoLabel = computed(() => jira.autoFields().map((f) => JIRA_AUTO_LABELS[f] || f).join(', '))
 // Число на кнопке J — строки, где в Jira иной статус, сроки или прогресс (одно лишь название не считается)
 const jiraDiffering = computed(() => (jira.state.loaded ? jira.linkedItems().filter((item) => jira.differs(item)).length : 0))
 function jiraAction(name) {
@@ -210,6 +212,7 @@ function toggleColumn(column) {
         <AppIcon name="checklist" /> Сверка с Jira…<span v-if="jiraDiffering" class="menu-hint">расходится: {{ jiraDiffering }}</span>
       </button>
       <button v-if="editor.canEdit" class="menu-item" type="button" data-testid="jira-import-open" @click="jiraAction('jira-import')"><AppIcon name="plus" /> Задачи из Jira…</button>
+      <div v-if="jira.autoFields().length" class="menu-note small" data-testid="jira-auto-note">Автоперенос: {{ jiraAutoLabel }}</div>
       <div v-if="jira.state.error" class="menu-note small">{{ jira.state.error }}</div>
     </PopupMenu>
 
