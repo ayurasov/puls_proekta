@@ -130,6 +130,7 @@ class Record:
     auth_source: str | None = None
     external_id: str | None = None
     avatar: str | None = None
+    podelu_id: str | None = None          # идентификатор в «По Делу» — только при синхронизации (ADR-0009)
     foreign: set = field(default_factory=set)
     notes: list = field(default_factory=list)   # что из записи не применится и почему
 
@@ -594,10 +595,12 @@ def _current_values(user, snap, avatar_hashes):
     }
 
 
-def plan_employees(records, *, actor_id, new_users="active", decisions=None, avatars=None):
+def plan_employees(records, *, actor_id, new_users="active", decisions=None, avatars=None, create_missing=True):
     """План загрузки. decisions — {ключ записи: {"identity": "same"|"new",
     "fields": {поле: {"choice": "current"|"incoming"|"merge"|"custom", "value": ...}}}};
-    avatars — фото в архиве: {ключ записи: SHA-256 файла} (или список ключей без хешей)."""
+    avatars — фото в архиве: {ключ записи: SHA-256 файла} (или список ключей без хешей).
+    create_missing=False — сотрудников, которых нет в системе, не создавать (запись пропускается).
+    Запись с идентификатором «По Делу» (синхронизация, ADR-0009) сопоставляется сначала по нему."""
     decisions = decisions if isinstance(decisions, dict) else {}
     if isinstance(avatars, dict):
         avatars = {str(key).lower(): str(digest or "") for key, digest in avatars.items()}
@@ -607,11 +610,13 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
     snap = OrgSnapshot()
     users = sorted(snap.users.values(), key=lambda u: u.id)
     avatar_hashes = dict(db.session.execute(select(UserAvatar.user_id, UserAvatar.sha256)).all())
-    by_email, by_login = {}, {}
+    by_email, by_login, by_podelu = {}, {}, {}
     for user in users:
         if (user.email or "").strip():
             by_email.setdefault(user.email.strip().lower(), []).append(user)
         by_login.setdefault(user.login.lower(), user)
+        if user.podelu_id:
+            by_podelu.setdefault(user.podelu_id, user)
     plan.paths = _Paths(snap)
     foreign = set().union(*(record.foreign for record in records)) if records else set()
     if foreign:
@@ -641,8 +646,10 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
         if record.login:
             seen_logins.setdefault(record.login.lower(), record.line)
         decision = decisions.get(key) if isinstance(decisions.get(key), dict) else {}
-        user = None
-        if record.email:
+        user = by_podelu.get(record.podelu_id) if record.podelu_id else None
+        if user is not None:
+            entry.matched = "podelu"   # тот же сотрудник «По Делу», даже если email или логин сменились
+        elif record.email:
             matches = by_email.get(record.email, [])
             if len(matches) > 1:
                 entry.errors.append("в системе несколько сотрудников с таким email — исправьте в системе")
@@ -670,6 +677,10 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
         if user is not None:
             seen_users[user.id] = record.line
         entry.user = user
+        if user is None and not create_missing:
+            entry.action = "skip"
+            entry.warnings.append("сотрудника нет в системе — не создаётся (создание новых сотрудников выключено)")
+            continue
         _plan_entry(entry, decision, actor_id=actor_id, new_users=new_users, snap=snap, by_login=by_login,
                     avatar_hashes=avatar_hashes, avatar_in_file=avatars.get(key) if key in avatars else None)
     _check_logins(plan, by_login)
@@ -921,17 +932,19 @@ def _check_admins(plan, snap):
 
 
 # ---------------------------------------------------------------- применение
-def apply_employees(records, *, actor_id, new_users="active", decisions=None, avatars=None):
+def apply_employees(records, *, actor_id, new_users="active", decisions=None, avatars=None, create_missing=True,
+                    source="import"):
     """(план, применён ли, {ключ записи: id}, [ключи, чьи фото загрузить], [id отключённых]).
-    При ошибках ничего не меняется."""
-    plan = plan_employees(records, actor_id=actor_id, new_users=new_users, decisions=decisions, avatars=avatars)
+    При ошибках ничего не меняется. source — источник новых сотрудников и подразделений (org_source)."""
+    plan = plan_employees(records, actor_id=actor_id, new_users=new_users, decisions=decisions, avatars=avatars,
+                          create_missing=create_missing)
     result = plan.as_dict()
     if not result["canApply"]:
         return result, False, {}, [], []
     ids = {}
     for item in plan.paths.created:
         department = Department(id=org.new_id(), name=item["name"], parent_id=ids.get(item["parentKey"], item["parentKey"]),
-                                kind=item["kind"], sort_order=0, org_source="import")
+                                kind=item["kind"], sort_order=0, org_source=source)
         db.session.add(department)
         ids[item["key"]] = department.id
         audit.record("Структура", "create", item["name"], "", "", f"{item['path']} (загрузка сотрудников)")
@@ -955,7 +968,7 @@ def apply_employees(records, *, actor_id, new_users="active", decisions=None, av
             login=login, name=final["name"], email=final.get("email") or "", position=final.get("position") or "",
             role=final.get("role") or "viewer", is_active=bool(final.get("isActive", True)), password_hash=None,
             auth_source=final.get("authSource") or "local", reports_to_none=bool(final.get("reportsToNone")),
-            org_source="import", external_id=final.get("externalId"),
+            org_source=source, external_id=final.get("externalId"),
         )
         db.session.add(user)
         db.session.flush()

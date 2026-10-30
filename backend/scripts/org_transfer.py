@@ -11,8 +11,17 @@
     python scripts/org_transfer.py import-employees employees.zip --actor admin --new-users inactive --apply
     python scripts/org_transfer.py import-csv people.csv --actor admin --create-missing --apply
     python scripts/org_transfer.py sync-ad --actor admin --create-missing --deactivate-missing --apply   # по расписанию
+    python scripts/org_transfer.py sync-podelu --actor admin --create-missing --apply                    # по расписанию
 
-Код возврата: 0 — успех, 1 — в плане есть ошибки (ничего не применено), 2 — файл не прочитан или каталог недоступен.
+sync-podelu — структура и сотрудники из «По Делу» по подключению из «Администрирование → Интеграции»
+(ADR-0009): структура, затем сотрудники — одной транзакцией. --prefer-podelu в коллизиях берёт значения
+«По Делу» (ФИО, должность, подразделение, руководитель, «первое лицо», руководимые подразделения,
+активность, фото); роль, логин и email не меняются никогда. Запись, для которой нужно решение «тот же ли это
+человек», — ошибка: разберите её один раз на странице «Импорт и экспорт → Из «По Делу»», дальше сотрудник
+сопоставляется по идентификатору «По Делу».
+
+Код возврата: 0 — успех, 1 — в плане есть ошибки (ничего не применено), 2 — файл не прочитан или каталог
+(«По Делу») недоступен.
 """
 
 import argparse
@@ -31,7 +40,9 @@ from sqlalchemy import select  # noqa: E402
 from app import audit  # noqa: E402
 from app.extensions import db  # noqa: E402
 from app.models import User  # noqa: E402
-from app.services import ad_sync, employee_transfer, org_import, org_transfer  # noqa: E402
+from app.podelu_client import PodeluError  # noqa: E402
+from app.security import ApiError  # noqa: E402
+from app.services import ad_sync, employee_transfer, org, org_import, org_transfer, podelu, podelu_sync  # noqa: E402
 from app.sessions import revoke_user_sessions  # noqa: E402
 
 
@@ -92,7 +103,15 @@ def _parser():
     command = commands.add_parser("sync-ad", help="синхронизация с Active Directory")
     command.add_argument("--create-missing", action="store_true")
     command.add_argument("--deactivate-missing", action="store_true")
-    for name in ("import-structure", "import-employees", "import-csv", "sync-ad"):
+    command = commands.add_parser("sync-podelu", help="структура и сотрудники из «По Делу»")
+    command.add_argument("--create-missing", action="store_true", help="создавать сотрудников, которых нет в системе")
+    command.add_argument("--new-users", choices=("active", "inactive", "file"), default="inactive",
+                         help="новые сотрудники: активными, неактивными или как в «По Делу»")
+    command.add_argument("--prefer-podelu", action="store_true",
+                         help="в коллизиях брать значения «По Делу» (кроме роли, логина и email)")
+    command.add_argument("--no-settings", action="store_true", help="оставить настройки структуры этой системы")
+    command.add_argument("--no-photos", action="store_true", help="не загружать фото сотрудников")
+    for name in ("import-structure", "import-employees", "import-csv", "sync-ad", "sync-podelu"):
         sub = commands.choices[name]
         sub.add_argument("--actor", required=True, help="логин администратора — автор изменений в реестре")
         sub.add_argument("--apply", action="store_true", help="применить (без флага — только проверка)")
@@ -115,8 +134,43 @@ def _export(args):
     return 0
 
 
+def _problems(employees):
+    problems = [f"{r['email'] or r['login']}: {'; '.join(r['errors'])}" for r in employees["records"] if r["errors"]]
+    problems += [f"{r['email']}: тот же человек, что {r['identity']['email']}? Решите на странице «Импорт и экспорт»"
+                 for r in employees["records"] if r["unresolved"]]
+    return problems
+
+
+def _sync_podelu(args, actor):
+    """Структура и сотрудники из «По Делу»: план, при --apply — применение одной транзакцией."""
+    options = podelu_sync.Options(apply_settings=not args.no_settings, new_users=args.new_users,
+                                  create_missing=args.create_missing, photos=not args.no_photos)
+    client = podelu.make_client()
+    db.session.rollback()   # выгрузка из «По Делу» — без открытой транзакции базы
+    snapshot = podelu_sync.fetch(client, photos=options.photos)
+    plan = podelu_sync.preview(snapshot, actor_id=actor.id, options=options)
+    decisions = podelu_sync.prefer_podelu_decisions(plan["employees"]) if args.prefer_podelu else {}
+    if decisions:
+        plan = podelu_sync.preview(snapshot, actor_id=actor.id, options=options, decisions=decisions)
+    deactivated, applied = [], False
+    if args.apply and plan["canApply"]:
+        plan, applied, deactivated = podelu_sync.apply(snapshot, actor_id=actor.id, options=options, decisions=decisions)
+        if applied:
+            try:
+                org.assert_consistent()   # итоговая структура без циклов (ADR-0008)
+            except ApiError as error:
+                plan = {**plan, "canApply": False, "structure": {**plan["structure"],
+                                                                 "errors": [*plan["structure"]["errors"], error.message]}}
+                applied, deactivated = False, []
+    result = {**plan, "summary": {"structure": plan["structure"]["summary"], "employees": plan["employees"]["summary"]}}
+    result.pop("snapshot", None)
+    return result, applied, plan["structure"]["errors"] + _problems(plan["employees"]), deactivated
+
+
 def _import(args, actor, avatar_limit):
     """(результат, применён ли, проблемы, id отключённых)."""
+    if args.command == "sync-podelu":
+        return _sync_podelu(args, actor)
     if args.command == "import-structure":
         bundle = Path(args.file).read_text(encoding="utf-8-sig")
         if args.apply:
@@ -136,10 +190,7 @@ def _import(args, actor, avatar_limit):
                                               max_bytes=avatar_limit)
         else:
             result, applied = employee_transfer.plan_employees(records, **options).as_dict(), False
-        problems = [f"{r['email'] or r['login']}: {'; '.join(r['errors'])}" for r in result["records"] if r["errors"]]
-        problems += [f"{r['email']}: тот же человек, что {r['identity']['email']}? Решите на странице «Импорт и экспорт»"
-                     for r in result["records"] if r["unresolved"]]
-        return result, applied, problems, deactivated
+        return result, applied, _problems(result), deactivated
     if args.command == "import-csv":
         raw = Path(args.file).read_bytes()
         try:
@@ -173,13 +224,14 @@ def run(app, argv=None, out=None):
         try:
             result, applied, problems, deactivated = _import(args, actor, app.config["AVATAR_MAX_BYTES"])
         except (org_transfer.StructureFormatError, employee_transfer.EmployeeFormatError,
-                org_import.ImportFormatError, ad_sync.AdSyncError, OSError, KeyError, ValueError) as error:
+                org_import.ImportFormatError, ad_sync.AdSyncError, PodeluError, OSError, KeyError, ValueError) as error:
             db.session.rollback()
             print(f"error: {error}", file=sys.stderr)
             return 2
         if args.apply and applied:
+            source = {"sync-ad": "AD", "sync-podelu": "По Делу"}.get(args.command) or Path(args.file).name
             audit.record("Структура" if args.command != "import-employees" else "Пользователи", "import",
-                         f"Командная строка: {args.command}", "", "", Path(getattr(args, "file", "") or "AD").name)
+                         f"Командная строка: {args.command}", "", "", source)
             db.session.commit()
             for user_id in dict.fromkeys(deactivated):
                 revoke_user_sessions(user_id)

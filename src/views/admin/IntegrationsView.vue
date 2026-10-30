@@ -5,6 +5,7 @@ import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import PodeluSettings from '../../components/integrations/PodeluSettings.vue'
 
 const ui = useUiStore()
 const { confirm } = useDialogs()
@@ -165,6 +166,8 @@ function fieldLabel(id) { return fieldOptions.value.find((f) => f.id === id)?.na
         </div>
       </form>
     </div>
+
+    <PodeluSettings />
   </div>
 </template>
 
