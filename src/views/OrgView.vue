@@ -6,6 +6,7 @@ import { useOrgStore } from '../stores/org'
 import { useAuthStore } from '../stores/auth'
 import { localStorageGet, localStorageSet, useUiStore } from '../stores/ui'
 import { pluralize } from '../utils/format'
+import { loadPodelu, podeluPersonLink, podeluUnitLink } from '../integrations/podelu'
 import {
   DEFAULT_LEVELS, DEFAULT_ORG_VIEW, LOOSE_ID, ORG_VIEWS, clampZoom, expandedToLevel, forestDepth, indexForest,
   normText, normalizeView, pathTo, peopleForest, readOrgPrefs, revealIn, searchOrg, unitForest, unitTableRows,
@@ -88,6 +89,11 @@ onMounted(async () => {
 })
 
 const unit = computed(() => org.depById[route.query.unit] || null)
+// Ссылки на то же подразделение и сотрудника в «По Делу», если она подключена и данные загружены оттуда (ADR-0009)
+const podelu = ref({ connected: false, baseUrl: null })
+loadPodelu().then((status) => { podelu.value = status })
+const unitPodeluUrl = computed(() => podeluUnitLink(podelu.value, unit.value))
+const cardPodeluUrl = computed(() => podeluPersonLink(podelu.value, card.value))
 const personId = computed(() => (route.query.user ? Number(route.query.user) : null))
 watch(personId, async (id) => {
   card.value = null
@@ -453,6 +459,9 @@ const without = computed(() => org.people.filter((p) => p.isActive && !p.departm
                 <h2>{{ card.name }}</h2>
                 <div class="muted">{{ card.position || 'Должность не указана' }}</div>
                 <div v-if="card.departmentPath.length" class="small path">{{ card.departmentPath.join(' / ') }}</div>
+                <a v-if="cardPodeluUrl" class="podelu-link small" :href="cardPodeluUrl" target="_blank" rel="noopener noreferrer" data-testid="org-person-podelu">
+                  <AppIcon name="external" :size="12" /> Открыть в «По Делу»
+                </a>
               </div>
               <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Закрыть" @click="go({ unit: route.query.unit })"><AppIcon name="close" /></button>
             </div>
@@ -508,6 +517,9 @@ const without = computed(() => org.people.filter((p) => p.isActive && !p.departm
               <template v-if="unit.branchEmployeeCount !== unit.employeeCount"> · {{ unit.branchEmployeeCount }} во всей ветке</template>
               <template v-if="childUnits.length"> · {{ childUnits.length }} {{ pluralize(childUnits.length, 'вложенное', 'вложенных', 'вложенных') }}</template>
             </div>
+            <a v-if="unitPodeluUrl" class="podelu-link small" :href="unitPodeluUrl" target="_blank" rel="noopener noreferrer" data-testid="org-unit-podelu">
+              <AppIcon name="external" :size="12" /> Открыть в «По Делу»
+            </a>
 
             <h3 class="section-title">{{ unit.headIds.length > 1 ? 'Руководители' : 'Руководитель' }}</h3>
             <div v-if="unit.headIds.length" class="people">
@@ -652,4 +664,6 @@ const without = computed(() => org.people.filter((p) => p.isActive && !p.departm
   .views button { flex: 1 1 0; justify-content: center; padding: 4px 6px; min-width: 0; }
   .tool-sep { display: none; }
 }
+.podelu-link { display: inline-flex; align-items: center; gap: 4px; margin-top: 6px; color: var(--color-primary-dark); text-decoration: none; font-weight: 600; }
+.podelu-link:hover { text-decoration: underline; }
 </style>
