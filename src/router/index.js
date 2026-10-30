@@ -35,6 +35,10 @@ export function legacyHashTarget(hash) {
 }
 
 router.beforeEach((to) => {
+  // Старые ссылки переводим здесь, а не до создания приложения: история роутера запоминает адрес
+  // при создании, и ссылка, открытая без входа, иначе терялась бы после страницы входа
+  const legacy = to.path === '/' ? legacyHashTarget(to.hash) : null
+  if (legacy) return { path: legacy, replace: true }
   const auth = useAuthStore()
   if (to.meta.public) {
     if (to.name === 'login' && auth.user) return { path: typeof to.query.next === 'string' ? to.query.next : '/' }

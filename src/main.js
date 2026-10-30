@@ -6,9 +6,6 @@ import { useAuthStore } from './stores/auth'
 import { setAuthLostHandler } from './api/client'
 import './style.css'
 
-const legacy = legacyHashTarget(window.location.hash)
-if (legacy) window.history.replaceState(null, '', legacy)
-
 const app = createApp(App)
 const pinia = createPinia()
 app.use(pinia)

@@ -31,6 +31,18 @@ test('ссылки 1.0.x вида /#/project/N открывают проект',
   assert.ok(await page.locator('.plan-tab').count() >= 2, 'у проекта 1 две вкладки-версии')
 })
 
+test('ссылка 1.0.x без входа: после входа открывается проект, а не главная', async () => {
+  const page = await newPage()
+  await page.goto(BASE + '/#/project/1')
+  await page.waitForURL(/\/login/)
+  assert.match(decodeURIComponent(new URL(page.url()).search), /next=\/projects\/1/)
+  await page.fill('[data-testid=login]', 'admin')
+  await page.fill('[data-testid=password]', PASSWORD)
+  await page.click('[data-testid=login-submit]')
+  await page.waitForURL(/\/projects\/1/)
+  await page.waitForSelector('.gantt .grid-row')
+})
+
 test('создание проекта открывает его пустой план', async () => {
   const page = await newPage()
   await login(page)
