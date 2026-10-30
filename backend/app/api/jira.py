@@ -164,6 +164,7 @@ class SearchIn(BaseModel):
     keys: str = Field(default="", max_length=20000)
     jql: str = Field(default="", max_length=2000)
     limit: Optional[int] = Field(default=SEARCH_MAX, ge=1, le=SEARCH_MAX)
+    refresh: bool = False
 
 
 @bp.post("/jira/search")
@@ -181,17 +182,22 @@ def search():
     keys, invalid = parse_issue_keys(payload.keys)
     if not keys and not payload.jql.strip():
         raise ApiError(400, "validation_error", "Укажите ключи задач или запрос JQL")
+    detailed = user.role == "admin"
+    if keys:
+        # По ключам — через кэш: так же карточка строки получает задачу сразу после ввода ссылки
+        wanted = keys[:SEARCH_MAX]
+        found, error, _fetched = jira_service.fetch_issues(wanted, refresh=payload.refresh, detailed=detailed)
+        if error and not any(k in found for k in wanted):
+            raise ApiError(502, "jira_error", error)
+        return jsonify({"issues": [found[k] for k in wanted if found.get(k)],
+                        "missing": [k for k in wanted if k in found and found[k] is None],
+                        "invalid": invalid, "truncated": len(keys) > SEARCH_MAX, "error": error})
     fmap = jira_service.field_map(conn)
     try:
-        client = jira_service.make_client(detailed=user.role == "admin")
-        if keys:
-            found = client.issues_by_keys(keys[:SEARCH_MAX], request_fields(fmap))
-            ordered = [(k, found[k]) for k in keys[:SEARCH_MAX] if k in found]
-            missing = [k for k in keys[:SEARCH_MAX] if k not in found]
-        else:
-            ordered = client.search(payload.jql.strip(), request_fields(fmap), limit=payload.limit or SEARCH_MAX)
-            missing = []
+        client = jira_service.make_client(detailed=detailed)
+        ordered = client.search(payload.jql.strip(), request_fields(fmap), limit=payload.limit or SEARCH_MAX)
     except JiraError as exc:
         raise _jira_failed(exc) from None
     return jsonify({"issues": [normalize_issue(k.upper(), f, conn["baseUrl"], fmap) for k, f in ordered],
-                    "missing": missing, "invalid": invalid, "truncated": len(keys) > SEARCH_MAX})
+                    "missing": [], "invalid": invalid, "truncated": len(ordered) >= (payload.limit or SEARCH_MAX),
+                    "error": None})
