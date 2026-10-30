@@ -130,7 +130,9 @@ docker compose up -d
 | `HTTP_PORT`, `HTTP_BIND` | Порт и адрес, на которых открывается система (`39663`, `0.0.0.0`) |
 | `SESSION_COOKIE_SECURE` | `true` — когда система открывается только по HTTPS |
 | `SESSION_LIFETIME_DAYS` | Срок жизни сессии без входа, дней (30) |
-| `LOGIN_RATE_LIMIT` | Ограничение попыток входа (`10 per minute;50 per hour`) |
+| `LOGIN_RATE_LIMIT` | Попыток входа на одну учётную запись (`10 per minute;50 per hour`) |
+| `LOGIN_IP_RATE_LIMIT` | Попыток входа с одного адреса (`300 per minute`, офис за NAT) |
+| `TRUSTED_PROXY_HOPS` | Прокси перед backend: `1` — nginx контейнера, `2` — плюс HTTPS-прокси сервера |
 | `SNAPSHOT_INTERVAL_MINUTES` | Как часто сохранять автоснимок плана при правках, минут (30) |
 | `BOOTSTRAP_ADMIN_PASSWORD` | Только новая установка без переноса: пароль первого администратора `admin` |
 | `BACKUP_DIR`, `BACKUP_HOUR`, `BACKUP_RETENTION_DAYS` | Каталог копий на сервере, час ежедневной копии, срок хранения |
@@ -159,7 +161,7 @@ npm run dev
 
 Рекомендуемая схема: `сотрудники → HTTPS-прокси :443 → frontend nginx :39663 → backend :5000 → PostgreSQL`.
 Для Caddy — [`Caddyfile.example`](Caddyfile.example); для nginx сервера — пример в руководстве по
-развёртыванию. После включения HTTPS: `HTTP_BIND=127.0.0.1`, `SESSION_COOKIE_SECURE=true`.
+развёртыванию. После включения HTTPS: `HTTP_BIND=127.0.0.1`, `SESSION_COOKIE_SECURE=true`, `TRUSTED_PROXY_HOPS=2`.
 
 ## База данных и миграции
 

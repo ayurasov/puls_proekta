@@ -41,6 +41,8 @@
 
 - Сессии в `user_sessions` (SHA-256 токена), cookie `puls_session`; отключение и смена/сброс пароля завершают
   сессии; `flask --app wsgi purge-sessions` — очистка истёкших.
+- Попытки входа ограничены на учётную запись (`LOGIN_RATE_LIMIT`) и с запасом на адрес (`LOGIN_IP_RATE_LIMIT`);
+  за HTTPS-прокси сервера — `TRUSTED_PROXY_HOPS=2`. Локальный администратор не связывается с каталогом LDAP.
 - CSRF (`X-CSRF-Token`), `LOGIN_RATE_LIMIT` (по умолчанию `10 per minute;50 per hour`, счётчик в памяти каждого
   процесса), bcrypt; `SECRET_KEY` обязателен (≥ 32 символов).
 - Роли: «Наблюдатель» ограничен просмотром на сервере; последнего активного администратора нельзя понизить или
@@ -49,7 +51,8 @@
 ### Конфигурация (`.env`)
 
 `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD`, `SECRET_KEY`, `HTTP_PORT`, `HTTP_BIND`,
-`SESSION_COOKIE_SECURE`, `SESSION_LIFETIME_DAYS`, `LOGIN_RATE_LIMIT`, `SNAPSHOT_INTERVAL_MINUTES`,
+`SESSION_COOKIE_SECURE`, `SESSION_LIFETIME_DAYS`, `LOGIN_RATE_LIMIT`, `LOGIN_IP_RATE_LIMIT`, `TRUSTED_PROXY_HOPS`,
+`SNAPSHOT_INTERVAL_MINUTES`, `ACCESS_LOG`,
 `BOOTSTRAP_ADMIN_PASSWORD` (только новая установка без переноса), `BACKUP_DIR`, `BACKUP_HOUR`,
 `BACKUP_RETENTION_DAYS`, `TZ`, `GUNICORN_WORKERS`. Описание — руководство по развёртыванию.
 
