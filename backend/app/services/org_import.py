@@ -88,7 +88,7 @@ def detect_delimiter(text):
 def _header_map(header, aliases):
     mapping = {}
     for index, title in enumerate(header):
-        key = (title or "").strip().lower().lstrip("﻿")
+        key = (title or "").strip().lower().lstrip("\ufeff")
         for column, names in aliases.items():
             if key in names and column not in mapping:
                 mapping[column] = index
@@ -97,7 +97,7 @@ def _header_map(header, aliases):
 
 def parse_csv(text):
     """CSV (разделитель «;» или «,», первая строка — заголовки) → список Row."""
-    text = (text or "").lstrip("﻿")
+    text = (text or "").lstrip("\ufeff")
     if not text.strip():
         raise ImportFormatError("Файл пустой")
     reader = csv.reader(io.StringIO(text), delimiter=detect_delimiter(text))

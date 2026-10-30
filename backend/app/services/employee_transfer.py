@@ -231,14 +231,14 @@ def _record(line, raw):
 
 
 def parse_csv(text):
-    text = (text or "").lstrip("﻿")
+    text = (text or "").lstrip("\ufeff")
     if not text.strip():
         raise EmployeeFormatError("Файл пустой")
     reader = csv.reader(io.StringIO(text), delimiter=detect_delimiter(text))
     header = next(reader, None) or []
     mapping = {}
     for index, title in enumerate(header):
-        key = (title or "").strip().lower().lstrip("﻿")
+        key = (title or "").strip().lower().lstrip("\ufeff")
         for column, aliases in ALIASES.items():
             if key in aliases and column not in mapping:
                 mapping[column] = index
@@ -352,7 +352,7 @@ def export_csv(records):
     writer.writerow([header for _key, header in CSV_COLUMNS])
     for record in records:
         writer.writerow([_csv_value(key, record.get(key)) for key, _header in CSV_COLUMNS])
-    return "﻿" + buffer.getvalue()   # BOM — Excel открывает UTF-8 без вопросов
+    return "\ufeff" + buffer.getvalue()   # BOM — Excel открывает UTF-8 без вопросов
 
 
 README = (

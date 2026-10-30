@@ -66,8 +66,8 @@ def test_export_formats_contain_no_passwords(app, admin, world):
     assert response.status_code == 200 and response.mimetype == "text/csv"
     assert response.headers["Content-Disposition"].startswith('attachment; filename="puls-employees-')
     raw = response.data.decode("utf-8")
-    assert raw.startswith("﻿") and "\r\n" in raw
-    rows = list(csv.reader(io.StringIO(raw.lstrip("﻿")), delimiter=";"))
+    assert raw.startswith("\ufeff") and "\r\n" in raw
+    rows = list(csv.reader(io.StringIO(raw.lstrip("\ufeff")), delimiter=";"))
     assert rows[0] == HEADER
     head = next(row for row in rows if row[0] == "et-head@example.test")
     assert head[1:8] == ["et-head", "Анна Руководитель", "Начальник отдела", "Вектор / Продажи", "", "нет",
@@ -468,3 +468,21 @@ def test_only_admin_transfers_employees(app, admin, world):
         assert client.get("/api/users/export").status_code == 403
         assert _import(client, _doc()).status_code == 403
         assert client.post("/api/users/import/avatars").status_code == 403
+
+
+def test_apply_is_one_transaction(app, admin, world, monkeypatch):
+    from app.services import employee_transfer
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("сбой посреди загрузки")
+
+    document = _doc({"email": "new@example.test", "name": "Новый", "department": ["Вектор", "Новый отдел"]},
+                    {"email": "et-worker@example.test", "position": "Аналитик"})
+    monkeypatch.setattr(employee_transfer, "_dep_name", broken)
+    with pytest.raises(RuntimeError):
+        _import(admin, {**document, "employees": [{**document["employees"][0], "heads": "да"}, document["employees"][1]]},
+                apply=True)
+    with app.app_context():
+        assert db.session.query(Department).filter_by(name="Новый отдел").count() == 0
+        assert db.session.query(User).filter_by(email="new@example.test").count() == 0
+        assert db.session.get(User, world["worker"]).position == ""

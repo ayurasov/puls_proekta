@@ -127,7 +127,7 @@ def test_csv_format_errors(app, admin, org):
 
 
 def test_csv_parsing_aliases_delimiters_and_paths():
-    rows = parse_csv("﻿E-mail,Login,Department_Path,Title,Manager_Email,Is_Head,External_ID,Name\n"
+    rows = parse_csv("\ufeffE-mail,Login,Department_Path,Title,Manager_Email,Is_Head,External_ID,Name\n"
                      "A@X.RU,anna,Компания > Продажи \\ B2B,  Менеджер ,BOSS@X.RU,yes,T-1,Анна\xa0 Иванова\n\n")
     assert len(rows) == 1
     row = rows[0]
@@ -176,3 +176,19 @@ def test_new_root_is_a_company_and_reports_to_none_is_cleared(app, admin, org):
 def test_only_admin_imports_csv(app, admin, org):
     for role in ("manager", "editor", "viewer"):
         assert new_client(app, f"csv-{role}", role).post("/api/org/import/csv", json={"csv": CSV}).status_code == 403
+
+
+def test_apply_is_one_transaction(app, admin, org, monkeypatch):
+    """Сбой посреди применения (подразделения уже добавлены в сессию) — в базе не остаётся ничего."""
+    from app.services import org_import
+
+    def broken(*_args, **_kwargs):
+        raise RuntimeError("сбой при создании сотрудника")
+
+    monkeypatch.setattr(org_import, "unique_login", broken)
+    with pytest.raises(RuntimeError):
+        _csv(admin, CSV, createMissing=True, apply=True)
+    with app.app_context():
+        assert db.session.query(Department).filter_by(name="Ключевые клиенты").count() == 0
+        assert db.session.get(User, org["ids"]["head"]).position == ""
+        assert db.session.query(AuditLog).filter(AuditLog.entity == "Ключевые клиенты").count() == 0
