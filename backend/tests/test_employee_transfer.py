@@ -433,12 +433,16 @@ def test_todo_planner_files(app, admin):
     assert [c["field"] for c in own["changes"]] == ["email"] and [c["field"] for c in own["conflicts"]] == ["name"]
     assert plan["canApply"], [r for r in plan["records"] if r["errors"] or r["unresolved"]]
     assert plan["summary"]["create"] == 7
+    sokolova = next(r for r in plan["records"] if r["name"] == "Ирина Соколова")
+    assert any("Администратор" in w for w in sokolova["warnings"])
+    assert {c["field"]: c["new"] for c in sokolova["changes"]}["role"] == "Наблюдатель"
     applied = _import(admin, document, options={"newUsers": "file"}, apply=True)
     assert applied.status_code == 200, applied.get_json()
     with app.app_context():
         users = {u.login: u for u in db.session.execute(select(User)).scalars()}
         assert users["a.kovaleva"].role == "manager" and users["a.kovaleva"].email == "sales.head@vector.test"
-        assert users["i.sokolova"].role == "admin" and users["i.sokolova"].reports_to_none
+        # Права администратора файлом не выдаются: новый сотрудник — наблюдатель, в плане — предупреждение
+        assert users["i.sokolova"].role == "viewer" and users["i.sokolova"].reports_to_none
         assert users["d.orlov"].role == "viewer" and users["p.ivanov"].role == "viewer"
         snap = OrgSnapshot()
         # Руководитель из файла совпадает с руководителем по структуре (руководит Лабораторией) — явным не записан
@@ -449,11 +453,12 @@ def test_todo_planner_files(app, admin):
         lab = db.session.execute(select(Department).where(Department.name == "Лаборатория")).scalar_one()
         assert db.session.get(DepartmentHead, (lab.id, users["i.sokolova"].id)) is not None
         assert users["admin"].email == "admin@todo-planner.local" and users["admin"].name == "Администратор"
-    # Повторная загрузка CSV и ZIP «По Делу» ничего не меняет (кроме имени администратора — коллизия)
+    # Повторная загрузка CSV и ZIP «По Делу» ничего не меняет сама: имя администратора и роль «Администратор»
+    # у Соколовой — коллизии, их решает администратор явно
     csv_text = (FIXTURES / "todo_employees.csv").read_bytes().decode("utf-8")
     plan = _import(admin, csv_text, fmt="csv").get_json()
     changed = [r for r in plan["records"] if r["action"] != "unchanged"]
-    assert changed == [] and plan["summary"]["conflicts"] == 1
+    assert changed == [] and plan["summary"]["conflicts"] == 2
     archive = zipfile.ZipFile(FIXTURES / "todo_employees.zip")
     inside = json.loads(archive.read("employees.json"))
     avatars = {item["email"].lower(): hashlib.sha256(archive.read(item["avatar"])).hexdigest()

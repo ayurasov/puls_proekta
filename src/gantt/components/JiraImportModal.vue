@@ -34,7 +34,7 @@ async function search() {
   error.value = ''
   busy.value = true
   try {
-    const body = mode.value === 'keys' ? { keys: keys.value } : { jql: jql.value }
+    const body = { planId: editor.state.plan.id, ...(mode.value === 'keys' ? { keys: keys.value } : { jql: jql.value }) }
     result.value = await api.post('/jira/search', body)
     picked.value = new Set(result.value.issues.filter((i) => !linked.value.has(i.key)).map((i) => i.key))
   } catch (err) {

@@ -58,6 +58,9 @@ def upgrade():
 
 
 def downgrade():
+    # Родитель подразделения защищён (RESTRICT): SQLite проверяет это и при DROP TABLE
+    op.execute("UPDATE departments SET parent_id = NULL")
+    op.execute("UPDATE users SET department_id = NULL")
     with op.batch_alter_table('users', schema=None) as batch_op:
         batch_op.drop_constraint(batch_op.f('fk_users_manager_id_users'), type_='foreignkey')
         batch_op.drop_constraint(batch_op.f('fk_users_department_id_departments'), type_='foreignkey')

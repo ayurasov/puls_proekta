@@ -97,8 +97,9 @@ def cap_level(user, level):
     return level
 
 
-def department_chain(user):
-    """Подразделение сотрудника и все вышестоящие: доступ, выданный подразделению, действует на всю его ветку."""
+def department_chain(user, parents=None):
+    """Подразделение сотрудника и все вышестоящие: доступ, выданный подразделению, действует на всю его ветку.
+    parents — {id: parent_id} всех подразделений, если вызывающий считает цепочки для многих сотрудников сразу."""
     if user is None or not user.department_id:
         return []
     cache = g.setdefault("department_chains", {})
@@ -107,7 +108,8 @@ def department_chain(user):
         dep_id = user.department_id
         while dep_id and dep_id not in out and len(out) < 50:
             out.append(dep_id)
-            dep_id = db.session.execute(select(Department.parent_id).where(Department.id == dep_id)).scalar()
+            dep_id = parents.get(dep_id) if parents is not None else \
+                db.session.execute(select(Department.parent_id).where(Department.id == dep_id)).scalar()
         cache[user.id] = out
     return cache[user.id]
 

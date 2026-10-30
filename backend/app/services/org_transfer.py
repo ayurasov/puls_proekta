@@ -140,7 +140,7 @@ def parse_bundle(bundle):
                 heads.append({"email": email, "login": login, "primary": bool(head.get("primary"))})
         try:
             sort_order = max(-100000, min(100000, int(item.get("sortOrder") or 0)))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             sort_order = 0
         keys.add(key)
         external_id = str(item["externalId"])[:255] if item.get("externalId") else None
@@ -250,7 +250,7 @@ def plan_structure(bundle, *, apply_settings=True):
     if apply_settings and "org_max_depth" in settings:
         try:
             depth = max(2, min(30, int(settings["org_max_depth"])))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             plan.errors.append("org_max_depth: ожидается целое число")
         else:
             if depth != max_depth:

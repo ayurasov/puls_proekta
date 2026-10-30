@@ -129,8 +129,14 @@ def create_user():
 @admin_required
 def update_user(user_id):
     me = current_user()
-    user = _get(user_id)
     payload = UserUpdate.model_validate(request.get_json(silent=True) or {})
+    # Подразделение, руководитель и включение меняют цепочки подчинения — по одной правке структуры за раз
+    org_change = bool({"departmentId", "managerId", "reportsToNone", "isActive"} & payload.model_fields_set)
+    if org_change:
+        from app.services.org import lock_org
+
+        lock_org()
+    user = _get(user_id)
     entity = f"user #{user.id} ({user.name})"
     revoke = False
 
@@ -182,6 +188,10 @@ def update_user(user_id):
         audit.record("Пользователи", "update", entity, attr, old, new)
     if changes:
         user.updated_at = utcnow()
+    if org_change:
+        from app.services.org import assert_consistent
+
+        assert_consistent()
     db.session.commit()
     if revoke:
         revoke_user_sessions(user.id, keep_token=session.token if user.id == me.id else None)

@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app import audit
 from app.extensions import db
-from app.models import AccessRule, DepartmentAccessRule, Direction, Project, User
+from app.models import AccessRule, Department, DepartmentAccessRule, Direction, Project, User
 from app.security import ApiError, admin_required, best_level, cap_level, department_chain
 from app.serializers import iso
 
@@ -183,8 +183,9 @@ def effective():
     by_department = {}
     for rule in db.session.execute(select(DepartmentAccessRule)).scalars():
         by_department.setdefault(rule.department_id, []).append(rule)
+    parents = dict(db.session.execute(select(Department.id, Department.parent_id)).all())
     for user in users:
-        for dep_id in department_chain(user):
+        for dep_id in department_chain(user, parents):
             by_user.setdefault(user.id, []).extend(by_department.get(dep_id, []))
     matrix = {}
     for user in users:

@@ -1,6 +1,7 @@
 """Структура компании (ADR-0008): подразделения, руководители, место сотрудника, вычисление руководителя."""
 
 from tests.conftest import make_user, new_client
+from app.extensions import db
 
 
 def _dep(admin, name, parent=None, kind="department", status=201):
@@ -127,3 +128,51 @@ def test_department_access_covers_the_whole_branch(app, admin):
     rule_id = rules[0]["id"]
     assert admin.patch(f"/api/access/departments/{rule_id}", json={"level": "view"}).get_json()["level"] == "view"
     assert admin.post("/api/access/departments/delete", json={"ids": [rule_id]}).get_json()["deleted"] == 1
+
+
+def test_review_reporting_cycles_are_rejected_on_every_path(app, admin):
+    """Цикл подчинения нельзя получить ни назначением руководителей, ни переносом сотрудника или подразделения."""
+    a_id = make_user(app, "aaa", "editor", name="Аня")
+    b_id = make_user(app, "bbb", "editor", name="Борис")
+    top = _dep(admin, "Компания", kind="company")
+    x = _dep(admin, "Отдел X", top["id"])
+    y = _dep(admin, "Отдел Y", top["id"])
+    admin.patch(f"/api/users/{a_id}", json={"departmentId": x["id"]})
+    admin.put(f"/api/departments/{x['id']}/heads", json={"userIds": [b_id]})      # Аня → Борис
+    # Борис явно подчиняется Ане — цикл
+    assert admin.patch(f"/api/users/{b_id}", json={"managerId": a_id}).status_code == 409
+    # Борис в отделе Y, руководитель которого — Аня: Борис → Аня → Борис
+    admin.put(f"/api/departments/{y['id']}/heads", json={"userIds": [a_id]})
+    res = admin.patch(f"/api/users/{b_id}", json={"departmentId": y["id"]})
+    assert res.status_code == 409 and "Цикл подчинения" in res.get_json()["message"]
+    # Тот же цикл назначением руководителя подразделения
+    admin.patch(f"/api/users/{b_id}", json={"departmentId": x["id"]})  # Борис руководит X и сидит в X → Компания
+    # Нельзя вложить подразделение само в себя через двух потомков
+    z = _dep(admin, "Группа Z", x["id"], kind="group")
+    assert admin.patch(f"/api/departments/{x['id']}", json={"parentId": z["id"]}).status_code == 409
+    tree = admin.get("/api/org/tree").get_json()
+    assert {d["name"] for d in tree["departments"]} >= {"Компания", "Отдел X", "Отдел Y", "Группа Z"}
+
+
+def test_review_subtree_survives_a_cycle_in_data(app, admin):
+    """Даже если в базе оказался цикл подразделений (до проверок), обход структуры не зависает."""
+    from app.models import Department
+    from app.services.org import OrgSnapshot
+
+    a = _dep(admin, "A", kind="company")
+    b = _dep(admin, "B", a["id"])
+    with app.app_context():
+        db.session.get(Department, a["id"]).parent_id = b["id"]
+        db.session.commit()
+        snap = OrgSnapshot()
+        assert set(snap.subtree(a["id"])) == {a["id"], b["id"]}
+        assert snap.department_cycle() == {a["id"], b["id"]}
+        db.session.get(Department, a["id"]).parent_id = None
+        db.session.commit()
+
+
+def test_review_employee_csv_export_neutralises_formulas(app, admin):
+    user_id = make_user(app, "formula", "editor", name="=HYPERLINK(\"http://evil\")")
+    assert user_id
+    text = admin.get("/api/users/export?format=csv").get_data(as_text=True)
+    assert "'=HYPERLINK" in text

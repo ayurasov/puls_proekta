@@ -81,6 +81,7 @@ def jira(monkeypatch):
     fake = FakeJira()
     monkeypatch.setattr(requests.Session, "request", lambda self, method, url, **kw: fake(self, method, url, **kw))
     monkeypatch.setattr(jira_service, "_down_until", 0.0)
+    monkeypatch.setattr(jira_service, "_down_since", 0.0)
     return fake
 
 
@@ -196,6 +197,7 @@ def test_errors_for_staff_hide_jira_address(app, admin, jira):
     from tests.conftest import login
     staff = app.test_client()
     login(staff, "sidorov")
+    jira_service.reset_backoff()
     data = staff.get(f"/api/plans/{plan_id}/jira?refresh=1").get_json()
     assert data["error"] and BASE not in data["error"] and "администратору" in data["error"]
 
@@ -211,19 +213,28 @@ def test_search_by_keys_and_jql(app, admin, jira):
     _connect(admin)
     jira.add("ABC-1")
     jira.add("ABC-2")
-    res = admin.post("/api/jira/search", json={"keys": "abc-2 ABC-1, ABC-404 мусор"}).get_json()
+    project_id, plan_id = create_project(admin)
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "keys": "abc-2 ABC-1, ABC-404 мусор"}).get_json()
     assert [i["key"] for i in res["issues"]] == ["ABC-2", "ABC-1"]
     assert res["missing"] == ["ABC-404"] and res["invalid"] == ["мусор"]
-    res = admin.post("/api/jira/search", json={"jql": "project = ABC"}).get_json()
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "jql": "project = ABC"}).get_json()
     assert [i["key"] for i in res["issues"]] == ["ABC-1", "ABC-2"]
-    viewer = new_client(app, "nablyudatel", "viewer")
-    assert viewer.post("/api/jira/search", json={"keys": "ABC-1"}).status_code == 403
-    assert admin.post("/api/jira/search", json={}).status_code == 400
+    assert admin.post("/api/jira/search", json={"planId": plan_id}).status_code == 400
+    # Задачи Jira видны только тому, кто может править план (ADR-0007)
+    outsider = new_client(app, "outsider", "editor")
+    assert outsider.post("/api/jira/search", json={"planId": plan_id, "keys": "ABC-1"}).status_code == 404
+    viewer_id = make_user(app, "nablyudatel", "viewer")
+    admin.post("/api/access", json={"userIds": [viewer_id], "projectIds": [project_id], "level": "edit"})
+    from tests.conftest import login
+    viewer = app.test_client()
+    login(viewer, "nablyudatel")
+    assert viewer.post("/api/jira/search", json={"planId": plan_id, "keys": "ABC-1"}).status_code == 403
+    assert admin.post("/api/jira/search", json={"keys": "ABC-1"}).status_code == 400
 
 
 def test_search_without_connection(app, admin):
-    assert admin.post("/api/jira/search", json={"keys": "ABC-1"}).status_code == 409
     _, plan_id = create_project(admin)
+    assert admin.post("/api/jira/search", json={"planId": plan_id, "keys": "ABC-1"}).status_code == 409
     assert admin.get(f"/api/plans/{plan_id}/jira").get_json()["connected"] is False
 
 
@@ -238,3 +249,73 @@ def test_changing_jira_address_clears_cache(app, admin, jira):
     _connect(admin, startField="customfield_10015")
     with app.app_context():
         assert db.session.query(JiraIssue).count() == 0
+
+
+def test_review_pasted_token_with_newline_is_trimmed_and_never_logged(app, admin, jira, caplog):
+    """Токен из буфера с переводом строки: сохраняется без него; заголовок с управляющими символами не уходит."""
+    res = admin.put("/api/settings/jira", json={"baseUrl": BASE, "instanceType": "server", "token": "SECRETPAT\n"})
+    assert res.status_code == 200
+    jira.add("ABC-1")
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", jiraUrl=f"{BASE}/browse/ABC-1")])
+    assert admin.get(f"/api/plans/{plan_id}/jira").status_code == 200
+    assert jira.auth == "Bearer SECRETPAT"
+    res = admin.put("/api/settings/jira", json={"baseUrl": BASE, "instanceType": "server", "token": "A\x00B"})
+    assert res.status_code == 400
+    assert "SECRETPAT" not in caplog.text
+
+
+def test_review_allowed_hosts_cannot_be_bypassed(app, admin, jira, monkeypatch):
+    monkeypatch.setenv("JIRA_ALLOWED_HOSTS", ".company.ru")
+    for url in ("https://evil.example\\.company.ru", "https://evil.example%2f.company.ru", "https://evil.example"):
+        res = admin.put("/api/settings/jira", json={"baseUrl": url, "login": "svc", "token": "pw"})
+        assert res.status_code == 400, url
+    assert not jira.calls
+
+
+def test_review_bad_row_links_do_not_break_the_plan(app, admin, jira):
+    _connect(admin)
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", jiraUrl=f"{BASE}:99999/browse/A-1"),
+                            task("t2", jiraUrl=f"{BASE}/browse/{'A' * 120}-1")])
+    res = admin.get(f"/api/plans/{plan_id}/jira")
+    assert res.status_code == 200 and res.get_json()["rows"] == {}
+
+
+def test_review_cloud_rejected_batch_is_split_not_read_one_by_one(app, admin, jira):
+    """Jira Cloud отклоняет весь пакет из-за одного ошибочного ключа: пакет делится пополам, а не читается по одной."""
+    _connect(admin)
+    for i in range(100):
+        jira.add(f"ABC-{i}")
+    original = jira.__call__
+
+    def strict(session, method, url, **kwargs):
+        body = kwargs.get("json") or {}
+        if url.endswith("/search") and "NOPE-1" in body.get("jql", ""):
+            jira.calls.append((method, url, body))
+            return FakeResponse(400, {"errorMessages": ["An issue with key 'NOPE-1' does not exist"]})
+        return original(session, method, url, **kwargs)
+    jira.__call__ = strict
+    import requests as req
+    req.Session.request = lambda self, method, url, **kw: strict(self, method, url, **kw)
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task(f"t{i}", jiraUrl=f"{BASE}/browse/ABC-{i}") for i in range(99)]
+           + [task("bad", jiraUrl=f"{BASE}/browse/NOPE-1")])
+    jira.calls.clear()
+    data = admin.get(f"/api/plans/{plan_id}/jira").get_json()
+    assert data["issues"]["NOPE-1"] is None and data["issues"]["ABC-5"]["key"] == "ABC-5"
+    assert len(jira.calls) < 25, len(jira.calls)
+
+
+def test_review_wrong_password_backs_off(app, admin, jira):
+    _connect(admin)
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", jiraUrl=f"{BASE}/browse/ABC-1")])
+    app.config["JIRA_CACHE_SECONDS"] = 0
+    original = jira.__call__
+    import requests as req
+    req.Session.request = lambda self, method, url, **kw: (jira.calls.append((method, url, None)), FakeResponse(401, {}))[1]
+    for _ in range(5):
+        admin.get(f"/api/plans/{plan_id}/jira")
+    assert len(jira.calls) == 1
+    req.Session.request = lambda self, method, url, **kw: original(self, method, url, **kw)

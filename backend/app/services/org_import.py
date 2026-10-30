@@ -95,12 +95,20 @@ def _header_map(header, aliases):
     return mapping
 
 
+def _guarded(reader, error=None):
+    """Строки CSV; испорченный файл (поле больше 128 КБ, незакрытые кавычки) — понятная ошибка, а не 500."""
+    try:
+        yield from reader
+    except csv.Error as exc:
+        raise (error or ImportFormatError)(f"Не удалось разобрать CSV: {exc}") from None
+
+
 def parse_csv(text):
     """CSV (разделитель «;» или «,», первая строка — заголовки) → список Row."""
     text = (text or "").lstrip("\ufeff")
     if not text.strip():
         raise ImportFormatError("Файл пустой")
-    reader = csv.reader(io.StringIO(text), delimiter=detect_delimiter(text))
+    reader = _guarded(csv.reader(io.StringIO(text), delimiter=detect_delimiter(text)))
     header = next(reader, None) or []
     mapping = _header_map(header, COLUMN_ALIASES)
     if "email" not in mapping and "login" not in mapping:
@@ -120,14 +128,14 @@ def parse_csv(text):
 
         rows.append(Row(
             line=line,
-            email=cell("email").lower(),
+            email=cell("email").lower()[:255],
             name=clean(cell("name"))[:255],
-            login=cell("login"),
+            login=cell("login")[:150],
             department=split_path(cell("department")),
             position=clean(cell("position"))[:500] or None,
-            manager_email=cell("manager_email").lower(),
+            manager_email=cell("manager_email").lower()[:255],
             is_head=cell("is_head").lower() in TRUE_VALUES,
-            external_id=cell("external_id"),
+            external_id=cell("external_id")[:255],
         ))
     return rows
 
@@ -217,18 +225,21 @@ class FutureOrg:
         return self.structure_manager(key)
 
     def cycles(self):
-        """Сотрудники, чья цепочка руководителей замыкается."""
+        """Сотрудники, замыкающие цепочку руководителей, — только участники цикла: их подчинённые к ошибке
+        не относятся и загрузке своих строк не мешают."""
         manager_of = {key: self.direct_manager(key) for key in self.people}
-        result = set()
-        for key in self.people:
-            seen, current = set(), key
-            while current is not None:
-                if current in seen:
-                    result.add(key)
+        members, done = set(), set()
+        for start in self.people:
+            path, position, current = [], {}, start
+            while current is not None and current not in done:
+                if current in position:
+                    members.update(path[position[current]:])
                     break
-                seen.add(current)
+                position[current] = len(path)
+                path.append(current)
                 current = manager_of.get(current)
-        return result
+            done.update(path)
+        return members
 
 
 def unique_login(base, taken):

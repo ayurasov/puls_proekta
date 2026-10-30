@@ -23,7 +23,7 @@ from app import audit
 from app.extensions import db
 from app.ldap_auth import effective_mode, get_ldap_config
 from app.security import ApiError, admin_required, current_user
-from app.services import ad_sync, employee_transfer, org_import, org_transfer
+from app.services import org, ad_sync, employee_transfer, org_import, org_transfer
 from app.sessions import revoke_user_sessions
 
 bp = Blueprint("org_transfer", __name__, url_prefix="/api")
@@ -76,6 +76,7 @@ def import_structure():
         if not payload.get("apply"):
             plan = org_transfer.plan_structure(bundle, apply_settings=apply_settings).as_dict()
             return jsonify({**plan, "settingsApplied": apply_settings})
+        org.lock_org()
         result, applied = org_transfer.apply_structure(bundle, apply_settings=apply_settings)
     except org_transfer.StructureFormatError as error:
         raise _bad(str(error), "bundle")
@@ -83,6 +84,7 @@ def import_structure():
         return _rejected({**result, "settingsApplied": apply_settings}, "Исправьте ошибки в файле")
     audit.record("Структура", "import", "Файл структуры", "", "",
                  f"подразделений: новых {result['summary']['create']}, изменено {result['summary']['update']}")
+    org.assert_consistent()  # итоговая структура без циклов (ADR-0008)
     db.session.commit()
     current_app.logger.info("org structure imported: %s departments", result["summary"]["departments"])
     return jsonify({**result, "applied": True, "settingsApplied": apply_settings})
@@ -104,11 +106,13 @@ def import_csv():
     actor_id = current_user().id
     if not apply:
         return jsonify(org_import.plan_import(rows, source="csv", create_missing=create_missing, actor_id=actor_id).as_dict())
+    org.lock_org()
     result, applied, deactivated = org_import.apply_import(rows, actor_id=actor_id, source="csv",
                                                            create_missing=create_missing)
     if not applied:
         return _rejected(result, "Исправьте ошибки в файле")
     audit.record("Структура", "import", "Быстрый импорт CSV", "", "", _csv_summary(result))
+    org.assert_consistent()  # итоговая структура без циклов (ADR-0008)
     db.session.commit()
     _revoke(deactivated)
     return jsonify({**result, "applied": True})
@@ -194,10 +198,12 @@ def ad_sync_run():
     actor_id = current_user().id
     if not payload.get("apply"):
         return jsonify(org_import.plan_import(rows, actor_id=actor_id, **options).as_dict())
+    org.lock_org()
     result, applied, deactivated = org_import.apply_import(rows, actor_id=actor_id, **options)
     if not applied:
         return _rejected(result, "В данных каталога есть ошибки")
     audit.record("Структура", "import", "Синхронизация с AD", "", "", _csv_summary(result))
+    org.assert_consistent()  # итоговая структура без циклов (ADR-0008)
     db.session.commit()
     _revoke(deactivated)
     return jsonify({**result, "applied": True})
@@ -250,6 +256,7 @@ def import_users():
         plan = employee_transfer.plan_employees(records, actor_id=actor.id, new_users=new_users, decisions=decisions,
                                                 avatars=avatars)
         return jsonify(plan.as_dict())
+    org.lock_org()
     result, applied, ids, upload, deactivated = employee_transfer.apply_employees(
         records, actor_id=actor.id, new_users=new_users, decisions=decisions, avatars=avatars)
     if not applied:
@@ -257,6 +264,7 @@ def import_users():
     s = result["summary"]
     audit.record("Пользователи", "import", "Загрузка сотрудников из файла", "", "",
                  f"записей {s['records']}: новых {s['create']}, обновлено {s['update']}")
+    org.assert_consistent()  # итоговая структура без циклов (ADR-0008)
     db.session.commit()
     _revoke(deactivated)
     return jsonify({**result, "applied": True, "ids": ids, "avatarUploads": upload})

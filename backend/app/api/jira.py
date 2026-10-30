@@ -1,5 +1,6 @@
 """Jira: подключение (администратор) и задачи, привязанные к строкам планов (ADR-0007)."""
 
+import re
 from typing import Literal, Optional
 
 from flask import Blueprint, current_app, jsonify, request, session
@@ -40,6 +41,10 @@ class ConnectionIn(BaseModel):
 def _form(payload):
     data = payload.model_dump()
     data["login"] = data["login"].strip()
+    # Токен вставляют из буфера — с пробелами и переводом строки по краям; управляющие символы внутри — ошибка
+    data["token"] = data["token"].strip()
+    if re.search(r"[\x00-\x1f\x7f]", data["token"] + data["login"]):
+        raise ApiError(400, "validation_error", "Логин или пароль (токен) содержит недопустимые символы")
     try:
         data["baseUrl"] = check_base_url(data["baseUrl"])
     except JiraError as exc:
@@ -73,6 +78,9 @@ def put_connection():
     if not token and existing["baseUrl"] != data["baseUrl"]:
         # сохранённый пароль уходит только на тот адрес Jira, для которого он был введён
         raise ApiError(400, "validation_error", "Адрес Jira изменён — введите пароль или токен заново")
+    if not token and data["acceptInvalidCerts"] and not existing["acceptInvalidCerts"]:
+        # без проверки сертификата сохранённый пароль мог бы уйти подменённому серверу — подтвердите его заново
+        raise ApiError(400, "validation_error", "Без проверки сертификата введите пароль или токен заново")
     data["tokenEncrypted"] = encrypt_token(current_app.secret_key, token) if token else existing["tokenEncrypted"]
     jira_service.save_connection(data)
     old = existing or {}
@@ -80,9 +88,10 @@ def put_connection():
                if old.get(k) != data.get(k)]
     if token:
         changed.append("token")
-    if existing is None or old.get("baseUrl") != data["baseUrl"] or old.get("startField") != data["startField"] \
-            or old.get("endField") != data["endField"]:
+    if existing is None or any(old.get(k) != data.get(k) for k in ("baseUrl", "instanceType", "login", "startField",
+                                                                    "endField")):
         jira_service.clear_cache()
+    jira_service.reset_backoff()
     if changed:
         audit.record("Настройки", "update" if existing else "create", "Jira", ", ".join(changed)[:100],
                      old.get("baseUrl") or "", data["baseUrl"])
@@ -161,6 +170,7 @@ def plan_issues(plan_id):
 
 
 class SearchIn(BaseModel):
+    planId: int
     keys: str = Field(default="", max_length=20000)
     jql: str = Field(default="", max_length=2000)
     limit: Optional[int] = Field(default=SEARCH_MAX, ge=1, le=SEARCH_MAX)
@@ -171,11 +181,12 @@ class SearchIn(BaseModel):
 @login_required
 @limiter.limit("30 per minute", key_func=_user_key)
 def search():
-    """Задачи для «Добавить из Jira»: по ключам или по JQL (не больше 200)."""
+    """Задачи для «Добавить из Jira» и только что привязанных строк: по ключам или по JQL (не больше 200).
+    Только сотруднику, который может править план: задачи читаются учётной записью подключения, и видеть их
+    вне плана нельзя (ADR-0007)."""
     user = current_user()
-    if user.role == "viewer":
-        raise ApiError(403, "forbidden", "Недостаточно прав")
     payload = SearchIn.model_validate(request.get_json(silent=True) or {})
+    _plan_with_access(payload.planId, "edit")
     conn = jira_service.get_connection()
     if not conn:
         raise ApiError(409, "jira_not_configured", jira_service.NOT_CONFIGURED)

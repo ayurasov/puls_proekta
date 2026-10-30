@@ -25,8 +25,9 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 
 INSTANCE_TYPES = ("cloud", "server", "server_basic")
-ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]*-\d+$")
-_KEY_IN_TEXT = r"([A-Za-z][A-Za-z0-9_]*-\d+)"
+# Ключ задачи: проект до 50 символов и номер — так ключ гарантированно помещается в jira_issues.key
+ISSUE_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,49}-\d{1,15}$")
+_KEY_IN_TEXT = r"([A-Za-z][A-Za-z0-9_]{0,49}-\d{1,15})"
 FIELD_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 BASE_FIELDS = ("summary", "status", "assignee", "issuetype", "priority", "duedate", "resolutiondate", "created",
                "updated", "timeoriginalestimate", "timespent", "timeestimate", "progress")
@@ -57,8 +58,16 @@ def check_base_url(base_url):
     except ValueError:
         raise JiraError("Некорректный адрес Jira") from None
     if not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment or "?" in url or "#" in url \
-            or re.search(r"\s", url):
+            or re.search(r"[\s\\%]", url):
         raise JiraError("Адрес Jira — только https://хост[:порт][/путь], без логина, параметров «?» и «#»")
+    # Хост так, как его поймёт библиотека запросов: разное прочтение адреса обходило бы JIRA_ALLOWED_HOSTS
+    try:
+        from urllib3.util import parse_url
+
+        if (parse_url(url).host or "").lower() != parts.hostname.lower():
+            raise JiraError("Некорректный адрес Jira")
+    except ValueError:
+        raise JiraError("Некорректный адрес Jira") from None
     allowed = [h.strip().lower() for h in os.environ.get("JIRA_ALLOWED_HOSTS", "").split(",") if h.strip()]
     host = parts.hostname.lower()
     if allowed and not any(host == h or (h.startswith(".") and (host.endswith(h) or host == h[1:])) for h in allowed):
@@ -109,9 +118,9 @@ def issue_key_from_url(url, base_url):
         return None
     try:
         link, base = urlsplit(url.strip()), urlsplit(base_url)
-    except ValueError:
-        return None
-    if (link.hostname or "").lower() != (base.hostname or "").lower() or link.port != base.port:
+        if (link.hostname or "").lower() != (base.hostname or "").lower() or link.port != base.port:
+            return None
+    except ValueError:  # например, порт вне диапазона в ссылке строки
         return None
     base_path = base.path.rstrip("/")
     if base_path and not (link.path == base_path or link.path.startswith(base_path + "/")):
@@ -205,6 +214,8 @@ class JiraClient:
         if instance_type not in INSTANCE_TYPES:
             raise JiraError("Неизвестный тип подключения к Jira")
         self.base_url = check_base_url(base_url)
+        if re.search(r"[\x00-\x1f\x7f]", f"{login}{token}"):
+            raise JiraError("Логин или пароль (токен) содержит недопустимые символы — введите их заново")
         self.instance_type = instance_type
         self.detailed = detailed
         self.timeout = timeout
@@ -254,6 +265,11 @@ class JiraClient:
             except requests.exceptions.ConnectionError as exc:
                 self.fail(f"Не удалось подключиться к {self.base_url}: проверьте адрес и доступность сети ({exc})",
                           "Не удалось подключиться к Jira")
+            except (requests.RequestException, ValueError):
+                # Прочие ошибки запроса (в том числе неверный заголовок) — без текста исключения: в нём могут
+                # оказаться заголовки с токеном
+                self.fail("Не удалось выполнить запрос к Jira — проверьте адрес и пароль или токен подключения",
+                          "Не удалось выполнить запрос к Jira")
             if resp.is_redirect:
                 target = urlsplit(resp.headers.get("Location") or "")
                 where = f" на {target.scheme}://{target.netloc}{target.path}" if target.netloc else ""
@@ -339,22 +355,36 @@ class JiraClient:
             data = None
         return (data.get("fields") or {}) if isinstance(data, dict) else None
 
-    def issues_by_keys(self, keys, fields):
-        """{ключ: поля} для задач по ключам пакетами; задачи без доступа или удалённые не попадают в ответ.
-        Если Jira отклоняет пакет из-за несуществующего ключа (Cloud), задачи пакета читаются по одной."""
-        out = {}
-        keys = sorted(set(keys))
-        for start in range(0, len(keys), SEARCH_BATCH):
-            batch = keys[start:start + SEARCH_BATCH]
+    def issues_by_keys(self, keys, fields, deadline=None):
+        """({ключ: поля}, проверенные ключи) для задач по ключам пакетами; удалённые и недоступные задачи в ответ не
+        попадают. Если Jira отклоняет пакет из-за несуществующего ключа (Cloud), пакет делится пополам, пока не
+        останется один ключ, — несколько ошибочных ключей стоят десятков запросов, а не сотен. deadline
+        (time.monotonic()) — к этому времени чтение прекращается: остальное прочитается при следующем открытии."""
+        out, checked = {}, set()
+        pending = [sorted(set(keys))[i:i + SEARCH_BATCH] for i in range(0, len(set(keys)), SEARCH_BATCH)]
+        while pending:
+            if deadline is not None and time.monotonic() > deadline:
+                return out, checked
+            batch = pending.pop(0)
             try:
                 found = self.search("key in (%s)" % ", ".join(batch), fields, limit=len(batch))
             except JiraError as exc:
                 if exc.status != 400:
                     raise
-                found = [(key, f) for key in batch if (f := self.issue(key, fields)) is not None]
-            for key, data in found:
-                out[key.upper()] = data
-        return out
+                if len(batch) > 1:
+                    pending[:0] = [batch[:len(batch) // 2], batch[len(batch) // 2:]]
+                    continue
+                found = []
+            returned = {key.upper(): data for key, data in found}
+            out.update({key: data for key, data in returned.items() if key in batch})
+            # Задача перенесена в другой проект: Jira вернула её под новым ключом — читаем по старому
+            if set(returned) - set(batch):
+                for key in [k for k in batch if k not in out][:20]:
+                    data = self.issue(key, fields)
+                    if data is not None:
+                        out[key] = data
+            checked.update(batch)
+        return out, checked
 
     def date_fields(self):
         """Поля Jira с датой — для выбора полей «начало» и «срок» задачи."""

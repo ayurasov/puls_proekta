@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from app import audit
 from app.extensions import db
-from app.models import Department, User, utcnow
+from app.models import Department, DepartmentAccessRule, Direction, Project, User, utcnow
 from app.security import ApiError, admin_required, current_user, login_required
 from app.services import org
 from app.services.org import OrgSnapshot
@@ -159,6 +159,7 @@ def create_department():
     kind = payload.kind or "department"
     if kind not in org.kind_values():
         raise ApiError(400, "validation_error", "Неизвестный тип подразделения")
+    org.lock_org()
     snap = OrgSnapshot()
     _check_placement(snap, None, name, payload.parentId or None)
     siblings = snap.children.get(payload.parentId or None, [])
@@ -176,9 +177,10 @@ def create_department():
 @bp.patch("/departments/<dep_id>")
 @admin_required
 def update_department(dep_id):
-    dep = _dep_or_404(dep_id)
     data = request.get_json(silent=True) or {}
     payload = DepartmentIn.model_validate(data)
+    org.lock_org()
+    dep = _dep_or_404(dep_id)
     snap = OrgSnapshot()
     name = _clean(payload.name) if payload.name is not None else dep.name
     if not name:
@@ -202,6 +204,7 @@ def update_department(dep_id):
     for field, old, new in changes:
         audit.record("Структура", "update", dep.name, field, old, new)
     dep.updated_at = utcnow()
+    org.assert_consistent()
     db.session.commit()
     snap = OrgSnapshot()
     return jsonify(org.department_json(snap.departments[dep.id], snap))
@@ -210,11 +213,20 @@ def update_department(dep_id):
 @bp.delete("/departments/<dep_id>")
 @admin_required
 def delete_department(dep_id):
+    org.lock_org()
     dep = _dep_or_404(dep_id)
     if db.session.execute(select(Department.id).where(Department.parent_id == dep.id)).first():
         raise ApiError(409, "department_has_children", "Сначала перенесите или удалите вложенные подразделения")
     snap = OrgSnapshot()
     path = " / ".join(snap.path(dep.id))
+    # Вместе с подразделением уходят его руководители и доступы — в реестре это видно
+    heads = [snap.users[i].name for i, _p in snap.heads.get(dep.id, []) if i in snap.users]
+    if heads:
+        audit.record("Структура", "update", dep.name, "heads", ", ".join(heads), "")
+    for rule in db.session.execute(select(DepartmentAccessRule).where(DepartmentAccessRule.department_id == dep.id)).scalars():
+        target = db.session.get(Project, rule.project_id).title if rule.project_id else \
+            db.session.get(Direction, rule.direction_id).name
+        audit.record("Доступы", "delete", f"Подразделение «{path}» → {target}", "level", rule.level, "")
     # Сотрудники остаются в системе без подразделения; руководство подразделением снимается
     db.session.query(User).filter(User.department_id == dep.id).update({User.department_id: None})
     db.session.delete(dep)
@@ -231,8 +243,9 @@ class HeadsIn(BaseModel):
 @bp.put("/departments/<dep_id>/heads")
 @admin_required
 def put_heads(dep_id):
-    dep = _dep_or_404(dep_id)
     payload = HeadsIn.model_validate(request.get_json(silent=True) or {})
+    org.lock_org()
+    dep = _dep_or_404(dep_id)
     ids = list(dict.fromkeys(payload.userIds))
     found = set(db.session.execute(select(User.id).where(User.id.in_(ids))).scalars()) if ids else set()
     if set(ids) - found:
@@ -246,6 +259,7 @@ def put_heads(dep_id):
     after = [snap.users[i].name for i in ids]
     if before != after:
         audit.record("Структура", "update", dep.name, "heads", ", ".join(before), ", ".join(after))
+    org.assert_consistent()
     db.session.commit()
     snap = OrgSnapshot()
     return jsonify(org.department_json(snap.departments[dep.id], snap))

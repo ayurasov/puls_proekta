@@ -13,7 +13,7 @@
 
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.extensions import db
 from app.models import AppSetting, Department, DepartmentHead, User
@@ -30,6 +30,7 @@ DEFAULT_UNIT_KINDS = [
 ]
 DEFAULT_MAX_DEPTH = 15
 SETTING_KEY = "org"
+ORG_LOCK_KEY = 820_301  # номер рекомендательной блокировки PostgreSQL для правок структуры
 
 
 def new_id():
@@ -65,15 +66,30 @@ def kind_values():
 
 # ---------- снимок структуры ----------
 
+def lock_org():
+    """Изменения структуры — по одному до конца транзакции: две одновременные правки, каждая допустимая сама
+    по себе (переносы подразделений друг в друга, руководители), не должны вместе замкнуть цикл.
+    PostgreSQL — рекомендательная блокировка транзакции, SQLite — BEGIN IMMEDIATE."""
+    connection = db.session.connection()
+    if connection.dialect.name == "postgresql":
+        db.session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": ORG_LOCK_KEY})
+    elif connection.dialect.name == "sqlite":
+        raw = connection.connection.driver_connection
+        if not raw.in_transaction:
+            raw.execute("BEGIN IMMEDIATE")
+
+
 class OrgSnapshot:
-    """Структура целиком в памяти: подразделения, руководители, сотрудники (2000 сотрудников — мгновенно)."""
+    """Структура целиком в памяти: подразделения, руководители, сотрудники (2000 сотрудников — мгновенно).
+    Читается заново из базы (populate_existing): после lock_org снимок не берёт объекты, загруженные до блокировки."""
 
     def __init__(self, include_inactive=True):
-        self.departments = {d.id: d for d in db.session.execute(select(Department)).scalars()}
+        fresh = {"populate_existing": True}
+        self.departments = {d.id: d for d in db.session.execute(select(Department).execution_options(**fresh)).scalars()}
         users = select(User) if include_inactive else select(User).where(User.is_active.is_(True))
-        self.users = {u.id: u for u in db.session.execute(users).scalars()}
+        self.users = {u.id: u for u in db.session.execute(users.execution_options(**fresh)).scalars()}
         self.heads = {}  # department_id → [(user_id, is_primary)] — основной первым
-        for row in db.session.execute(select(DepartmentHead)).scalars():
+        for row in db.session.execute(select(DepartmentHead).execution_options(**fresh)).scalars():
             self.heads.setdefault(row.department_id, []).append((row.user_id, row.is_primary))
         for heads in self.heads.values():
             heads.sort(key=lambda h: (not h[1], (self.users[h[0]].name if h[0] in self.users else "").casefold()))
@@ -101,12 +117,44 @@ class OrgSnapshot:
         return len(self.path(dep_id))
 
     def subtree(self, dep_id):
-        out, stack = [], [dep_id]
+        out, seen, stack = [], set(), [dep_id]
         while stack:
             current = stack.pop()
+            if current in seen:  # защита от цикла в данных: обход не должен зависнуть
+                continue
+            seen.add(current)
             out.append(current)
             stack.extend(d.id for d in self.children.get(current, []))
         return out
+
+    def department_cycle(self):
+        """Подразделения, которые оказались вложены сами в себя (не должно быть никогда)."""
+        bad = set()
+        for dep_id in self.departments:
+            seen, current = set(), dep_id
+            while current is not None and current in self.departments:
+                if current in seen:
+                    bad.add(dep_id)
+                    break
+                seen.add(current)
+                current = self.departments[current].parent_id
+        return bad
+
+    def reporting_cycle(self):
+        """Сотрудники, замыкающие цепочку подчинения (только участники цикла, не их подчинённые)."""
+        manager_of = {uid: self.direct_manager(user)[0] for uid, user in self.users.items() if user.is_active}
+        members, done = set(), set()
+        for start in manager_of:
+            path, position, current = [], {}, start
+            while current is not None and current not in done and current in manager_of:
+                if current in position:
+                    members.update(path[position[current]:])
+                    break
+                position[current] = len(path)
+                path.append(current)
+                current = manager_of[current]
+            done.update(path)
+        return members
 
     def ordered(self):
         """Подразделения сверху вниз: родитель раньше детей, соседи — по порядку и названию."""
@@ -179,6 +227,22 @@ class OrgSnapshot:
                 return None
             parent = dep.id
         return dep
+
+
+def assert_consistent():
+    """Проверка перед сохранением любой правки структуры: ни подразделение не вложено само в себя, ни цепочка
+    подчинения не замкнута. Иначе 409 и откат — назначение руководителей, перенос сотрудника или подразделения,
+    включение сотрудника и импорт проверяются одинаково."""
+    from app.security import ApiError
+
+    db.session.flush()
+    snap = OrgSnapshot()
+    if snap.department_cycle():
+        raise ApiError(409, "org_cycle", "Подразделение нельзя вложить в само себя")
+    members = snap.reporting_cycle()
+    if members:
+        names = ", ".join(sorted((snap.users[m].name for m in members), key=str.casefold)[:5])
+        raise ApiError(409, "org_cycle", f"Цикл подчинения: {names} — руководители подчиняются друг другу")
 
 
 def would_cycle(user_id, manager_id, snapshot=None):

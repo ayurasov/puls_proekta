@@ -25,8 +25,12 @@ DEFAULT_CONNECTION = {
 }
 NOT_CONFIGURED = "Подключение к Jira не настроено — обратитесь к администратору (раздел «Интеграции»)"
 MAX_PLAN_ISSUES = 1000
-DOWN_SECONDS = 60
+DOWN_SECONDS = 60          # после отказа Jira — минута без запросов к ней при открытии планов
+REFRESH_PAUSE_SECONDS = 15  # «Обновить из Jira» сразу после отказа тоже не идёт к Jira
+FETCH_BUDGET_SECONDS = 15   # дольше одно открытие плана Jira не ждёт: остальное — при следующем
+CACHE_DAYS = 30             # задачи, которые никто не открывал месяц, удаляются из кэша
 _down_until = 0.0
+_down_since = 0.0
 
 
 def get_connection():
@@ -50,6 +54,12 @@ def delete_connection():
     if row is not None:
         db.session.delete(row)
     clear_cache()
+
+
+def reset_backoff():
+    """Подключение сохранено заново — пробуем Jira сразу, не дожидаясь конца паузы после отказа."""
+    global _down_until, _down_since
+    _down_until = _down_since = 0.0
 
 
 def clear_cache():
@@ -131,7 +141,7 @@ def plan_issue_keys(plan_id, base_url):
 def fetch_issues(keys, refresh=False, detailed=False):
     """{ключ: данные или None (нет в Jira или нет прав)} для ключей; error — текст, если Jira не ответила
     (тогда возвращаются данные кэша). Свежие записи кэша Jira не перечитывает, если не refresh."""
-    global _down_until
+    global _down_until, _down_since
     conn = get_connection()
     if not conn:
         raise JiraError(NOT_CONFIGURED)
@@ -140,24 +150,33 @@ def fetch_issues(keys, refresh=False, detailed=False):
     fresh_after = utcnow() - timedelta(seconds=current_app.config.get("JIRA_CACHE_SECONDS", 300))
     stale = keys if refresh else [k for k in keys if k not in cached or cached[k].fetched_at < fresh_after]
     error, fetched_at = None, None
-    if stale and (refresh or time.monotonic() >= _down_until):
+    now_mono = time.monotonic()
+    available = now_mono >= _down_until or (refresh and now_mono - _down_since >= REFRESH_PAUSE_SECONDS)
+    if stale and available:
         try:
             client = make_client(detailed=detailed)
             fmap = field_map(conn)
-            found = client.issues_by_keys(stale, request_fields(fmap))
+            found, checked = client.issues_by_keys(stale, request_fields(fmap),
+                                                   deadline=now_mono + FETCH_BUDGET_SECONDS)
             now = utcnow()
             _store([{"key": key, "found": key in found, "fetched_at": now,
                      "data": normalize_issue(key, found[key], conn["baseUrl"], fmap) if key in found else None}
-                    for key in stale])
+                    for key in stale if key in checked])
+            db.session.query(JiraIssue).filter(JiraIssue.fetched_at < now - timedelta(days=CACHE_DAYS)).delete()
             db.session.commit()
             _down_until = 0.0
+            if len(checked) < len(stale):
+                error = "Jira отвечает медленно — часть задач обновится при следующем открытии плана"
             cached.update({row.key: row for row in db.session.execute(
                 select(JiraIssue).where(JiraIssue.key.in_(stale)).execution_options(populate_existing=True)
             ).scalars()})
         except JiraError as exc:
             db.session.rollback()
-            if exc.status is None or exc.status >= 500:
+            # Отказ (сеть, 5xx, неверный пароль или токен, нет прав): минута без запросов к Jira — иначе каждое
+            # открытие плана ждёт её, а неверный пароль быстро приводит учётную запись к CAPTCHA
+            if exc.status not in (400, 404):
                 _down_until = time.monotonic() + DOWN_SECONDS
+                _down_since = time.monotonic()
             error = str(exc)
     elif stale:
         error = "Jira недавно не ответила — показаны сохранённые данные"

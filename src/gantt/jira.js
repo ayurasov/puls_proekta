@@ -153,7 +153,7 @@ export function createJira(editor, ui) {
     if (!wanted.length) return
     for (const key of wanted) inFlight.add(key)
     try {
-      const res = await api.post('/jira/search', { keys: wanted.join(' '), refresh })
+      const res = await api.post('/jira/search', { planId: editor.state.plan.id, keys: wanted.join(' '), refresh })
       const next = { ...state.issues }
       const failed = { ...state.failed }
       const now = new Date().toISOString()

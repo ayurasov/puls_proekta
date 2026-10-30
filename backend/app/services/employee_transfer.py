@@ -39,7 +39,9 @@ from app.extensions import db
 from app.models import Department, DepartmentHead, User, UserAvatar
 from app.services import org
 from app.services.org import OrgSnapshot, norm
-from app.services.org_import import PATH_SPLIT, TRUE_VALUES, FuturePerson, FutureOrg, clean, detect_delimiter, unique_login
+from app.services.org_import import (
+    PATH_SPLIT, TRUE_VALUES, FuturePerson, FutureOrg, _guarded, clean, detect_delimiter, unique_login,
+)
 from app.version import APP_VERSION
 
 FORMAT = "podelu.employees"
@@ -203,8 +205,8 @@ def _heads(value):
 def _record(line, raw):
     """Словарь (из CSV или JSON) → Record; непонятные значения — в notes."""
     record = Record(line=line)
-    record.email = str(raw.get("email") or "").strip().lower()
-    record.login = str(raw.get("login") or "").strip()
+    record.email = str(raw.get("email") or "").strip().lower()[:255]
+    record.login = str(raw.get("login") or "").strip()[:150]
     record.name = clean(raw.get("name"))[:255]
     record.position = clean(raw.get("position"))[:500] or None
     record.department = _path(raw.get("department"))
@@ -234,7 +236,7 @@ def parse_csv(text):
     text = (text or "").lstrip("\ufeff")
     if not text.strip():
         raise EmployeeFormatError("Файл пустой")
-    reader = csv.reader(io.StringIO(text), delimiter=detect_delimiter(text))
+    reader = _guarded(csv.reader(io.StringIO(text), delimiter=detect_delimiter(text)), EmployeeFormatError)
     header = next(reader, None) or []
     mapping = {}
     for index, title in enumerate(header):
@@ -250,7 +252,8 @@ def parse_csv(text):
             continue
         if len(records) >= MAX_RECORDS:
             raise EmployeeFormatError(f"Не больше {MAX_RECORDS} сотрудников за одну загрузку")
-        raw = {column: (values[index] if index < len(values) else "") for column, index in mapping.items()}
+        raw = {column: _strip_formula_mark(values[index] if index < len(values) else "")
+               for column, index in mapping.items()}
         records.append(_record(line, raw))
     return records
 
@@ -346,12 +349,26 @@ def _csv_value(key, value):
     return value or ""
 
 
+FORMULA_START = re.compile(r"^[=+\-@\t\r]")
+
+
+def _strip_formula_mark(text):
+    """Апостроф, которым выгрузка защищает текст от формул Excel, при загрузке снимается."""
+    return text[1:] if text.startswith("'") and FORMULA_START.match(text[1:]) else text
+
+
+def _no_formula(value):
+    """Текст, который Excel принял бы за формулу, — с апострофом (при загрузке он снимается)."""
+    text = str(value)
+    return "'" + text if FORMULA_START.match(text) and not re.fullmatch(r"-?\d+([.,]\d+)?", text) else text
+
+
 def export_csv(records):
     buffer = io.StringIO()
     writer = csv.writer(buffer, delimiter=";", lineterminator="\r\n")
     writer.writerow([header for _key, header in CSV_COLUMNS])
     for record in records:
-        writer.writerow([_csv_value(key, record.get(key)) for key, _header in CSV_COLUMNS])
+        writer.writerow([_no_formula(_csv_value(key, record.get(key))) for key, _header in CSV_COLUMNS])
     return "\ufeff" + buffer.getvalue()   # BOM — Excel открывает UTF-8 без вопросов
 
 
@@ -686,15 +703,28 @@ def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, avatar_
             if error or not custom:
                 entry.errors.append(error or f"логин «{record.login}» занят — укажите другой")
             login = custom
+        role = record.role if record.role in ROLES else "viewer"
+        if role == "admin":
+            # Права администратора файлом не выдаются: их назначают вручную в «Сотрудниках»
+            role = "viewer"
+            entry.warnings.append("роль «Администратор» из файла новому сотруднику не назначается — создаётся "
+                                  "наблюдателем, роль можно выдать в «Сотрудниках»")
         entry.final = {
             "name": record.name, "email": record.email or None, "login": login, "position": record.position,
             "department": record.department, "manager": record.manager,
             "reportsToNone": bool(record.reports_to_none), "heads": _own(record.heads, record.department),
-            "role": record.role if record.role in ROLES else "viewer", "isActive": active,
+            "role": role, "isActive": active,
             "authSource": record.auth_source or "local", "externalId": record.external_id,
             "_avatar": avatar_in_file is not None,
         }
         entry.touched = set(entry.final)
+        # Права и вход нового сотрудника видны в плане до применения
+        entry.changes.extend([
+            {"field": "role", "label": FIELD_LABELS["role"], "old": "", "new": ROLE_LABELS[role]},
+            {"field": "isActive", "label": FIELD_LABELS["isActive"], "old": "", "new": "да" if active else "нет"},
+            {"field": "authSource", "label": "Вход", "old": "",
+             "new": "домен (LDAP)" if entry.final["authSource"] == "ldap" else "пароль системы"},
+        ])
         entry.action = "create"
         return
 
