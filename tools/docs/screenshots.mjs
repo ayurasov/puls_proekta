@@ -4,10 +4,12 @@
  *   npm run build && node tools/docs/screenshots.mjs [user|admin ...]
  *
  * Стенд: временная база SQLite с демо-данными, Flask на :5077 и собранный клиент (vite preview)
- * на :4177, заглушка Jira на :5098 (задачи проекта «Портал поставщиков»). Снимки 1440×900 при масштабе
+ * на :4177, заглушка Jira на :5098 (задачи проекта «Портал поставщиков») и «По Делу» на :5096 (вход сервисной
+ * учётной записи). Снимки 1440×900 при масштабе
  * 1,5 сохраняются в docs/manuals/images/{user,admin}/ и затем сжимаются
  * `python3 tools/docs/optimize_png.py docs/manuals/images/user docs/manuals/images/admin`.
- * Переменные: PYTHON (по умолчанию python3), SHOTS_API_PORT, SHOTS_WEB_PORT, SHOTS_JIRA_PORT — другие порты.
+ * Переменные: PYTHON (по умолчанию python3), SHOTS_API_PORT, SHOTS_WEB_PORT, SHOTS_JIRA_PORT, SHOTS_PODELU_PORT —
+ * другие порты.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
@@ -26,6 +28,8 @@ const WEB_PORT = process.env.SHOTS_WEB_PORT || '4177'
 const JIRA_PORT = Number(process.env.SHOTS_JIRA_PORT || 5098)
 const BASE = `http://127.0.0.1:${WEB_PORT}`
 const JIRA = `http://127.0.0.1:${JIRA_PORT}`
+const PODELU_PORT = Number(process.env.SHOTS_PODELU_PORT || 5096)
+const PODELU = `http://127.0.0.1:${PODELU_PORT}`
 const PASSWORD = 'demo-password-1'
 const only = process.argv.slice(2)
 const dir = mkdtempSync(join(tmpdir(), 'puls-shots-'))
@@ -65,6 +69,23 @@ const jira = createServer((req, res) => {
   })
 })
 await new Promise((resolveListen) => jira.listen(JIRA_PORT, '127.0.0.1', resolveListen))
+
+// Заглушка «По Делу»: CSRF-токен, вход сервисной учётной записи и /api/auth/me — для проверки подключения
+const podeluAccount = { id: 'svc', name: 'Сервис «Пульса»', login: 'svc-puls', globalRole: 'admin', capabilities: [], isActive: true }
+const podelu = createServer((req, res) => {
+  req.resume()
+  req.on('end', () => {
+    const send = (code, data, headers = {}) => { res.writeHead(code, { 'Content-Type': 'application/json', ...headers }); res.end(JSON.stringify(data)) }
+    const cookie = { 'Set-Cookie': 'todo_planner_session=demo; HttpOnly; Path=/; SameSite=Lax' }
+    const path = req.url.split('?')[0]
+    if (path === '/api/auth/csrf-token') return send(200, { csrfToken: 'demo-csrf' }, cookie)
+    if (path === '/api/auth/login') return send(200, { user: podeluAccount }, cookie)
+    if (path === '/api/auth/logout') return send(200, { message: 'logged_out' })
+    if (path === '/api/auth/me') return send(200, podeluAccount)
+    return send(404, { error: 'not_found' })
+  })
+})
+await new Promise((resolveListen) => podelu.listen(PODELU_PORT, '127.0.0.1', resolveListen))
 
 const seed = spawnSync(python, [join(root, 'tools/demo/seed_demo.py')], { cwd: join(root, 'backend'), env, stdio: 'inherit' })
 if (seed.status !== 0) process.exit(seed.status || 1)
@@ -257,6 +278,12 @@ async function userGuide() {
   await page.locator('[data-testid=org-unit] .person-row', { hasText: 'Лебедев' }).first().click()
   await page.waitForSelector('[data-testid=org-person]')
   await shot(page, '27-org')
+
+  // Оргсхема — вид по умолчанию: подразделения карточками с линиями подчинения
+  await page.goto(BASE + '/org?view=chart')
+  await page.waitForSelector('[data-testid=org-chart]')
+  await page.waitForTimeout(600)
+  await shot(page, '28-org-chart')
 }
 
 async function adminGuide() {
@@ -315,6 +342,14 @@ async function adminGuide() {
   await page.locator('[data-testid=jira-status]', { hasText: 'Соединение установлено' }).waitFor()
   await shot(page, '13-integrations')
 
+  await page.locator('[data-testid=podelu-settings]').scrollIntoViewIfNeeded()
+  await page.fill('[data-testid=podelu-url]', PODELU)
+  await page.fill('[data-testid=podelu-login]', 'svc-puls')
+  await page.fill('[data-testid=podelu-password]', 'пароль-сервиса')
+  await page.click('[data-testid=podelu-test]')
+  await page.locator('[data-testid=podelu-status]', { hasText: 'Соединение установлено' }).waitFor()
+  await page.locator('[data-testid=podelu-settings]').screenshot({ path: join(root, 'docs/manuals/images/admin/15-podelu.png') })
+
   await page.goto(BASE + '/admin/access')
   await page.click('.segmented button:has-text("Правила")')
   await page.waitForSelector('[data-testid=dep-rule]')
@@ -340,5 +375,6 @@ try {
   if (browser) await browser.close()
   for (const child of children) child.kill('SIGTERM')
   jira.close()
+  podelu.close()
 }
 process.exit(code)
