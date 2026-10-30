@@ -20,7 +20,8 @@ let pressStartedOnBackdrop = false
 let previouslyFocused = null
 
 function onKeydown(event) {
-  if (event.key === 'Escape' && props.closable) {
+  // Esc сначала закрывает открытое поверх окна меню (выбор цвета и т. п.), а не само окно
+  if (event.key === 'Escape' && props.closable && !document.querySelector('.menu')) {
     const stack = document.querySelectorAll('.modal-overlay')
     if (stack[stack.length - 1] === dialog.value?.parentElement) {
       event.stopPropagation()
