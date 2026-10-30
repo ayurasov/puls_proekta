@@ -1,0 +1,13 @@
+# HTTPS для «Пульса Проекта» через Caddy на том же сервере.
+# 1) В .env: HTTP_BIND=127.0.0.1 (порт 39663 не виден снаружи) и SESSION_COOKIE_SECURE=true,
+#    затем docker compose up -d.
+# 2) Скопируйте файл в /etc/caddy/Caddyfile, замените адрес и сертификат, sudo systemctl reload caddy.
+#
+# Публичное имя — сертификат Let's Encrypt выпускается автоматически.
+# Внутренняя сеть — укажите сертификат компании: tls /etc/ssl/puls.crt /etc/ssl/puls.key
+
+puls.example.ru {
+	encode gzip
+	header Strict-Transport-Security "max-age=31536000"
+	reverse_proxy 127.0.0.1:39663
+}

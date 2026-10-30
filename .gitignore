@@ -1,0 +1,40 @@
+# Dependencies and builds
+node_modules
+dist
+dist-ssr
+*.local
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Test artifacts
+test-results/
+playwright-report/
+coverage/
+
+# Editors
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.sw?
+
+# Backend
+backend/.venv
+backend/**/__pycache__
+backend/.pytest_cache/
+backend/*.db
+backend/instance/
+*.pyc
+
+# Local data (production database never goes to git from a server)
+/data/
+/backups/
+*.dump
+
+# Temporary HTML of the manuals build (tools/docs/build_manuals.py)
+docs/**/*.build.html
+/import/*
+!/import/README.md
