@@ -262,3 +262,24 @@ test('переименование в «По Делу» меняет подра�
   assert.equal(openSessions(), 0)
   assert.deepEqual(page.errors, [])
 })
+
+test('«Структура компании»: ссылки «Открыть в «По Делу»» у подразделения и сотрудника', async () => {
+  await page.goto(`${BASE}/org?view=tree&unit=${IDS.sales}`)
+  const unitLink = page.locator('[data-testid=org-unit-podelu]')
+  await unitLink.waitFor()
+  assert.equal(await unitLink.getAttribute('href'), `${PODELU}/org?unit=${IDS.sales}`)
+  assert.equal(await unitLink.getAttribute('target'), '_blank')
+  const kozlova = (await api(page, 'GET', '/users')).body.find((u) => u.login === 'kozlova.ii')
+  await page.goto(`${BASE}/org?view=tree&user=${kozlova.id}`)
+  const personLink = page.locator('[data-testid=org-person-podelu]')
+  await personLink.waitFor()
+  assert.equal(await personLink.getAttribute('href'), `${PODELU}/org?user=${IDS.kozlova}`)
+  // Подразделение, созданное в «Пульсе», ссылки не получает
+  const own = (await api(page, 'GET', '/org/tree')).body.departments.find((d) => !d.podeluId)
+  if (own) {
+    await page.goto(`${BASE}/org?view=tree&unit=${own.id}`)
+    await page.locator('[data-testid=org-unit]').waitFor()
+    assert.equal(await page.locator('[data-testid=org-unit-podelu]').count(), 0)
+  }
+  assert.deepEqual(page.errors, [])
+})
