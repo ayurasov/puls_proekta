@@ -39,6 +39,10 @@
 | Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0006](docs/architecture/adr-0006-native-gantt-editor.md) |
 | Release notes | [v0.2.0](docs/release-notes/v0.2.0.md) |
 
+Руководства пользователя и администратора открываются и в самом приложении — пункт «Руководство» в боковом
+меню (`/guide`, `/guide/admin`), значок «?» у инструментов ведёт к нужному разделу. Источник — те же
+`docs/manuals/*.md`, что и для DOCX и PDF.
+
 DOCX и PDF собираются из Markdown командой `python3 tools/docs/build_manuals.py` (pandoc, python-docx, pypdf,
 Chromium из Playwright). Снимки экранов — `node tools/docs/screenshots.mjs` на демонстрационных данных
 вымышленной компании (`tools/demo/seed_demo.py`).

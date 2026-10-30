@@ -3,6 +3,7 @@ import { computed, inject, onMounted, ref } from 'vue'
 import { api } from '../../api/client'
 import BaseModal from '../../components/common/BaseModal.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { formatDateTime, formatRelative } from '../../utils/format'
@@ -112,6 +113,7 @@ async function restore(snap) {
         <button type="button" :class="{ 'is-active': tab === 'events' }" @click="tab = 'events'">Журнал изменений</button>
         <button type="button" :class="{ 'is-active': tab === 'versions' }" @click="tab = 'versions'">Версии · {{ snapshots.length }}</button>
       </div>
+      <HelpLink topic="plan-history" />
     </template>
 
     <div v-if="tab === 'events'">

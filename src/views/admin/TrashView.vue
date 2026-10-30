@@ -6,6 +6,7 @@ import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { formatDateTime } from '../../utils/format'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 
 const ui = useUiStore()
 const projects = useProjectsStore()
@@ -48,6 +49,7 @@ async function purgePlan(p) {
         <h1 class="page-title">Корзина</h1>
         <div class="page-subtitle">Удалённые проекты и планы хранятся здесь, пока их не удалят навсегда.</div>
       </div>
+      <HelpLink topic="admin-trash" />
     </div>
     <section class="card block">
       <h2 class="section-title">Проекты</h2>

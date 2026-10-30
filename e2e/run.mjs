@@ -33,7 +33,8 @@ function start(cmd, args, options) {
   return child
 }
 start(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--host', '127.0.0.1', '--port', apiPort], { cwd: join(root, 'backend'), env })
-start('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port', webPort, '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: `http://127.0.0.1:${apiPort}` } })
+// vite — напрямую, а не через npx: иначе SIGTERM получает npx, а сервер остаётся работать после тестов
+start(process.execPath, [join(root, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', webPort, '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: `http://127.0.0.1:${apiPort}` } })
 
 async function waitFor(url) {
   for (let i = 0; i < 120; i += 1) {

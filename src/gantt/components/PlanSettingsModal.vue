@@ -2,6 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import BaseModal from '../../components/common/BaseModal.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import ColorPicker from './ColorPicker.vue'
 import { addDays, maxDay, minDay } from '../domain/dates'
 import { SCALES } from '../domain/layout'
@@ -72,6 +73,7 @@ function saveDefaultView() {
 
 <template>
   <BaseModal title="Настройки графика" size="wide" @close="emit('close')">
+    <template #header-actions><HelpLink topic="plan-settings" /></template>
     <p v-if="readonly" class="muted small">Только просмотр — изменить настройки может сотрудник с правом редактирования.</p>
     <div class="settings">
       <section>

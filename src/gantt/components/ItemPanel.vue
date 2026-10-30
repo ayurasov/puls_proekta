@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, reactive, ref, watch } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import ColorPicker from './ColorPicker.vue'
 import ItemComments from './ItemComments.vue'
 import ItemHistory from './ItemHistory.vue'
@@ -154,6 +155,7 @@ function duplicate() {
       <span class="spacer" />
       <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm" type="button" title="Дублировать (Ctrl+D)" @click="duplicate"><AppIcon name="copy" :size="15" /></button>
       <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm btn-text-danger" type="button" title="Удалить (Delete)" @click="actions.deleteRows([item.key])"><AppIcon name="trash" :size="15" /></button>
+      <HelpLink :topic="item.type === 'milestone' ? 'milestones' : item.type === 'group' ? 'groups' : 'item-card'" />
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Закрыть (Esc)" @click="emit('close')"><AppIcon name="close" /></button>
     </header>
 

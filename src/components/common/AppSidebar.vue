@@ -107,6 +107,12 @@ async function logout() {
     </div>
 
     <div class="sidebar-bottom">
+      <router-link
+        to="/guide" class="nav-item" :class="{ 'router-link-active': route.path.startsWith('/guide') }"
+        title="Руководство" data-testid="guide-link"
+      >
+        <AppIcon name="book" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Руководство</span>
+      </router-link>
       <button class="user-card" type="button" title="Профиль" @click="profileOpen = true">
         <UserAvatar :user="auth.user" :size="30" />
         <span v-if="!ui.sidebarCollapsed" class="user-text">
