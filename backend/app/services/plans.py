@@ -72,7 +72,36 @@ def duplicate_plan(project, user, source, title):
     plan = create_plan(project, user, title, settings=source.settings, subtitle=source.subtitle)
     plan.next_row_seq = source.next_row_seq
     fill_plan_from_document(plan, user, doc, f"План создан копированием «{source.title}»")
+    copy_comments(source, plan)
     return plan
+
+
+def copy_comments(source, plan):
+    """Комментарии строк копии — с авторами, датами и ответами. Удалённые переносятся пустыми, чтобы ответы
+    на них остались на своих местах в обсуждении, а удалённый текст в копию не попал."""
+    items = {i.key: i for i in db.session.execute(select(PlanItem).where(PlanItem.plan_id == plan.id)).scalars()}
+    originals = db.session.execute(
+        select(ItemComment).where(ItemComment.plan_id == source.id, ItemComment.item_key.in_(list(items)))
+        .order_by(ItemComment.id)
+    ).scalars().all()
+    copies = {}
+    for c in originals:
+        deleted = c.deleted_at is not None
+        copies[c.id] = ItemComment(
+            plan_id=plan.id, item_key=c.item_key, author_id=c.author_id, author_name=c.author_name,
+            text="" if deleted else c.text, created_at=c.created_at, updated_at=c.updated_at,
+            deleted_at=c.deleted_at, deleted_by_id=c.deleted_by_id, extra=c.extra)
+    db.session.add_all(copies.values())
+    db.session.flush()
+    for c in originals:
+        if c.reply_to_id in copies:
+            copies[c.id].reply_to_id = copies[c.reply_to_id].id
+    counts = {}
+    for c in originals:
+        if c.deleted_at is None:
+            counts[c.item_key] = counts.get(c.item_key, 0) + 1
+    for key, item in items.items():
+        item.comment_count = counts.get(key, 0)
 
 
 def import_plan(project, user, payload, title=None):
