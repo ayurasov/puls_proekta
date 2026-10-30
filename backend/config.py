@@ -56,7 +56,12 @@ class BaseConfig:
     RATELIMIT_ENABLED = _bool("RATELIMIT_ENABLED", True)
     RATELIMIT_STORAGE_URI = os.environ.get("RATELIMIT_STORAGE_URI", "memory://")
     RATELIMIT_HEADERS_ENABLED = True
+    # Попытки входа: на одну учётную запись и (с запасом на офис за NAT) с одного адреса
     LOGIN_RATE_LIMIT = os.environ.get("LOGIN_RATE_LIMIT", "10 per minute;50 per hour")
+    LOGIN_IP_RATE_LIMIT = os.environ.get("LOGIN_IP_RATE_LIMIT", "300 per minute")
+    # Сколько обратных прокси перед backend (nginx контейнера frontend — один; плюс HTTPS-прокси сервера — два):
+    # адрес сотрудника берётся из X-Forwarded-For с учётом этого числа
+    TRUSTED_PROXY_HOPS = _int("TRUSTED_PROXY_HOPS", 1)
 
     # Аватар — изображение до 2 МБ (как в 1.0.1); тело запроса ограничено с запасом,
     # импорт плана из JSON — до 20 МБ.

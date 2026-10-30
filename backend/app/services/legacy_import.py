@@ -107,8 +107,11 @@ def _reset_sequences():
         return
     for table in ("users", "directions", "projects", "plans", "plan_items", "plan_notes", "plan_assignees",
                   "item_comments", "plan_events", "plan_snapshots", "access_rules", "audit_log"):
+        # setval не откатывается вместе с транзакцией (репетиция --dry-run): счётчик только растёт,
+        # иначе после отката он оказался бы ниже уже занятых id
         db.session.execute(text(
-            f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, false)"
+            f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), GREATEST("
+            f"COALESCE((SELECT MAX(id) FROM {table}), 0) + 1, nextval(pg_get_serial_sequence('{table}', 'id'))), false)"
         ))
 
 

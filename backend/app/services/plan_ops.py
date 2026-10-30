@@ -24,7 +24,7 @@ from sqlalchemy import select
 
 from app import audit
 from app.extensions import db
-from app.models import Plan, PlanAssignee, PlanEvent, PlanItem, PlanNote, utcnow
+from app.models import Plan, PlanAssignee, PlanEvent, PlanItem, PlanNote, User, utcnow
 from app.security import ApiError
 from app.services.plan_doc import maybe_auto_snapshot
 from app.services.plan_schema import (
@@ -140,6 +140,18 @@ class PlanEditor:
             return fmt_date(value)
         return str(value)
 
+    def _replayed_create(self, collection, key, data, update):
+        """Повтор создания тем же сотрудником — пакет уже применён, но ответ до клиента не дошёл
+        (обрыв связи, 502), и клиент отправил его снова. Ключи случайные, у разных сотрудников не
+        совпадают, поэтому повтор безопасно применить как правку тех же полей (или пропустить, если
+        строку уже удалили следующей правкой). Иначе — True не возвращаем, и создание отклоняется."""
+        existing = collection.get(key)
+        if existing is None or self.user is None or existing.created_by_id != self.user.id:
+            return False
+        if existing.deleted_at is None:
+            update({"key": key, "fields": {k: v for k, v in data.items() if k not in ("key", "type", "extra")}})
+        return True
+
     # ---------- строки ----------
     def _set_item_fields(self, item, fields, creating=False):
         changes = {}
@@ -185,6 +197,8 @@ class PlanEditor:
         key = data.get("key") or new_key("i")
         check_key(key)
         if key in self.items:
+            if self._replayed_create(self.items, key, data, self.op_item_update):
+                return
             existing = self.items[key]
             if existing.deleted_at is not None:
                 raise ApiError(409, "key_exists", "Строка с таким ключом удалена — используйте восстановление")
@@ -228,8 +242,11 @@ class PlanEditor:
         self._touch(item, self.result.items)
         parts = []
         if "start" in changes or "end" in changes:
-            old_s = changes.get("start", [item.start_date.isoformat()] * 2)[0]
-            old_e = changes.get("end", [item.end_date.isoformat()] * 2)[0]
+            def was(name, value):
+                # Прежнее значение: из изменений, иначе текущее (у группы дат может не быть)
+                return changes[name][0] if name in changes else (value.isoformat() if value else None)
+            old_s = was("start", item.start_date)
+            old_e = was("end", item.end_date)
             parts.append(f"Сроки: {fmt_date(old_s)}–{fmt_date(old_e)} → {fmt_date(item.start_date)}–{fmt_date(item.end_date)}")
         for api_name, (old, new) in changes.items():
             if api_name in ("start", "end", "position"):
@@ -296,6 +313,8 @@ class PlanEditor:
         key = data.get("key") or new_key("n")
         check_key(key)
         if key in self.notes:
+            if self._replayed_create(self.notes, key, data, self.op_note_update):
+                return
             raise ApiError(409, "key_exists", "Пометка с таким ключом уже есть")
         note = PlanNote(plan_id=self.plan.id, key=key, date=date.today(), text="", show_date=False,
                         created_at=self.now, created_by_id=self.user.id if self.user else None, color="orange")
@@ -349,7 +368,16 @@ class PlanEditor:
                     raise ApiError(400, "validation_error", "Неверный цвет")
                 new, attr = value, "color"
             elif name == "userId":
-                new, attr = (int(value) if value not in (None, "") else None), "user_id"
+                if value in (None, ""):
+                    new = None
+                else:
+                    try:
+                        new = int(value)
+                    except (TypeError, ValueError):
+                        raise ApiError(400, "validation_error", "Неверный сотрудник исполнителя") from None
+                    if db.session.get(User, new) is None:
+                        raise ApiError(400, "validation_error", "Сотрудник исполнителя не найден")
+                attr = "user_id"
             elif name == "position":
                 if not isinstance(value, (int, float)):
                     raise ApiError(400, "validation_error", "Неверный порядок")
@@ -367,6 +395,8 @@ class PlanEditor:
         key = data.get("key") or new_key("a")
         check_key(key)
         if key in self.assignees:
+            if self._replayed_create(self.assignees, key, data, self.op_assignee_update):
+                return
             raise ApiError(409, "key_exists", "Исполнитель с таким ключом уже есть")
         assignee = PlanAssignee(plan_id=self.plan.id, key=key, name="", role="", color="#2563eb",
                                 created_at=self.now, created_by_id=self.user.id if self.user else None)
@@ -517,10 +547,21 @@ class PlanEditor:
         return self.pending_events
 
 
-def lock_plan(plan_id):
-    plan = db.session.execute(select(Plan).where(Plan.id == plan_id).with_for_update()).scalar_one_or_none()
+def lock_plan(plan_id, allow_archived=False):
+    """Заблокировать строку плана до конца транзакции и перечитать её.
+
+    Объект плана обычно уже загружен в сессию проверкой доступа — до того, как блокировка получена.
+    Без populate_existing сессия вернула бы прежний объект: ревизия, настройки и время снимка остались бы
+    прочитанными до блокировки, два одновременных пакета получили бы одну ревизию, а коллега пропустил
+    бы чужую правку при опросе. Состояние (удалён, в архиве) проверяется уже после блокировки.
+    """
+    plan = db.session.execute(
+        select(Plan).where(Plan.id == plan_id).with_for_update().execution_options(populate_existing=True)
+    ).scalar_one_or_none()
     if plan is None or plan.deleted_at is not None:
         raise ApiError(404, "not_found", "План не найден")
+    if not allow_archived and plan.is_archived:
+        raise ApiError(409, "archived", "План в архиве — сначала верните его из архива")
     return plan
 
 

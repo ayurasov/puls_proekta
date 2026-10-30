@@ -91,7 +91,11 @@ async function restore(snap) {
   })
   if (!ok) return
   try {
-    await editor.flushNow()
+    // Неотправленные правки ушли бы после восстановления и переписали бы восстановленное
+    if (!await editor.flushNow()) {
+      ui.error('Сначала дождитесь отправки изменений', 'Нет связи с сервером — восстановление отложено')
+      return
+    }
     const res = await api.post(`/plans/${props.planId}/snapshots/${snap.id}/restore`)
     editor.state.previewSnapshot = null
     ui.success('План восстановлен', `Изменений: ${res.changes}`)

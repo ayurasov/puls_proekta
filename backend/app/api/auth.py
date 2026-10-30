@@ -55,7 +55,12 @@ def _local_ok(user, password):
 
 
 def _directory_user(result, config):
+    """Сотрудник для успешного входа через каталог; None — учётную запись нельзя связать с каталогом."""
     user = _find_user(result.username)
+    if user is not None and user.auth_source == "local" and user.role == "admin":
+        # Локальный администратор не переводится на вход через каталог: иначе учётная запись каталога
+        # с тем же логином или email получила бы права администратора, а пароль системы был бы стёрт
+        return None
     if user is None:
         user = User(login=result.username, password_hash=None, name=result.name or result.username,
                     email=result.email or "", role=config.get("defaultRole") or "viewer",
@@ -97,7 +102,9 @@ def _authenticate(login_value, password):
     # hybrid
     result = ldap_authenticate(login_value, password, config)
     if result.ok:
-        return _directory_user(result, config), None
+        user = _directory_user(result, config)
+        if user is not None:
+            return user, None
     if _local_ok(local_user, password):
         return local_user, None
     return None, None
@@ -114,8 +121,20 @@ def auth_config():
     return jsonify({"mode": effective_mode(config), "ldapEnabled": bool(config.get("enabled"))})
 
 
+def _login_key():
+    """Попытки входа считаются по логину: подбор пароля к одной учётной записи. Весь офис за одним
+    адресом (NAT, обратный прокси) не блокирует друг друга."""
+    login_value = (request.get_json(silent=True) or {}).get("login")
+    return "login:" + (login_value.strip().lower() if isinstance(login_value, str) else "")
+
+
+def _login_ip_rate_limit():
+    return current_app.config.get("LOGIN_IP_RATE_LIMIT", "300 per minute")
+
+
 @bp.post("/auth/login")
-@limiter.limit(_login_rate_limit)
+@limiter.limit(_login_rate_limit, key_func=_login_key)
+@limiter.limit(_login_ip_rate_limit)
 def login():
     payload = LoginRequest.model_validate(request.get_json(silent=True) or {})
     user, directory_error = _authenticate(payload.login.strip(), payload.password)

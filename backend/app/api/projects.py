@@ -54,7 +54,8 @@ class ProjectUpdate(BaseModel):
 class ReorderEntry(BaseModel):
     id: int
     directionId: Optional[int] = None
-    position: float
+    # NaN и бесконечность ломают JSON списка проектов у всех, кто его видит
+    position: float = Field(allow_inf_nan=False)
 
 
 class ReorderIn(BaseModel):

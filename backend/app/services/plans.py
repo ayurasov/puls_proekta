@@ -83,7 +83,8 @@ def import_plan(project, user, payload, title=None):
         raise ApiError(400, "invalid_import", str(exc)) from None
     plan_doc = doc.get("plan") or {}
     plan_title = unique_plan_title(project, (title or plan_doc.get("title") or "Импорт").strip()[:500] or "Импорт")
-    plan = create_plan(project, user, plan_title, settings=plan_doc.get("settings"), subtitle=plan_doc.get("subtitle", ""))
+    plan = create_plan(project, user, plan_title, settings=plan_doc.get("settings"),
+                       subtitle=str(plan_doc.get("subtitle") or "")[:1000])
     if plan_doc.get("nextRowSeq"):
         plan.next_row_seq = int(plan_doc["nextRowSeq"])
     fill_plan_from_document(plan, user, doc, f"План импортирован из файла ({len(doc.get('items', []))} строк)")

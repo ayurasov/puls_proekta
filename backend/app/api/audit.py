@@ -9,7 +9,7 @@ from sqlalchemy import distinct, func, or_, select
 
 from app.extensions import db
 from app.models import AuditLog
-from app.security import admin_required
+from app.security import ApiError, admin_required
 from app.serializers import iso
 
 bp = Blueprint("audit", __name__, url_prefix="/api/audit")
@@ -18,6 +18,13 @@ ACTION_LABELS = {
     "create": "создание", "update": "изменение", "delete": "удаление", "restore": "восстановление",
     "purge": "удаление навсегда", "archive": "в архив", "unarchive": "из архива", "snapshot": "версия",
 }
+
+
+def _day(value):
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise ApiError(400, "validation_error", "Неверная дата фильтра") from None
 
 
 def _filtered():
@@ -34,9 +41,9 @@ def _filtered():
     if args.get("action"):
         stmt = stmt.where(AuditLog.action == args["action"])
     if args.get("from"):
-        stmt = stmt.where(AuditLog.created_at >= datetime.combine(date.fromisoformat(args["from"]), datetime.min.time()))
+        stmt = stmt.where(AuditLog.created_at >= datetime.combine(_day(args["from"]), datetime.min.time()))
     if args.get("to"):
-        stmt = stmt.where(AuditLog.created_at < datetime.combine(date.fromisoformat(args["to"]) + timedelta(days=1),
+        stmt = stmt.where(AuditLog.created_at < datetime.combine(_day(args["to"]) + timedelta(days=1),
                                                                 datetime.min.time()))
     if args.get("q"):
         like = f"%{args['q'].strip()}%"

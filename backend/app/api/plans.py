@@ -128,7 +128,8 @@ def reorder_plans(project_id):
 @bp.post("/plans/<int:plan_id>/archive")
 @login_required
 def archive_plan(plan_id):
-    plan, project, _ = _plan_with_access(plan_id, "edit")
+    _plan, project, _ = _plan_with_access(plan_id, "edit")
+    plan = lock_plan(plan_id, allow_archived=True)
     if plan.is_archived:
         return jsonify(plan_meta(plan))
     open_count = db.session.execute(select(func.count()).select_from(Plan).where(
@@ -150,7 +151,8 @@ def archive_plan(plan_id):
 @bp.post("/plans/<int:plan_id>/unarchive")
 @login_required
 def unarchive_plan(plan_id):
-    plan, project, _ = _plan_with_access(plan_id, "edit")
+    _plan, project, _ = _plan_with_access(plan_id, "edit")
+    plan = lock_plan(plan_id, allow_archived=True)
     if not plan.is_archived:
         return jsonify(plan_meta(plan))
     plan.is_archived = False

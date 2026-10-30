@@ -25,6 +25,9 @@ from app.extensions import db
 from app.models import UserSession, utcnow
 
 
+
+ANONYMOUS_LIFETIME = timedelta(days=1)
+
 def _hash(token):
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
@@ -101,9 +104,13 @@ class DbSessionInterface(SessionInterface):
         if not (rotate or session.modified or needs_touch):
             return
 
-        expires_at = now + lifetime
         payload = dict(session)
         user_id = payload.get("user_id")
+        if user_id is None:
+            # Сессия без входа нужна только для CSRF-токена страницы входа: живёт сутки, а не месяц,
+            # иначе запросы без cookie копили бы в таблице записи на 30 дней
+            lifetime = ANONYMOUS_LIFETIME
+        expires_at = now + lifetime
         from flask import request
 
         with db.engine.begin() as conn:
@@ -117,6 +124,8 @@ class DbSessionInterface(SessionInterface):
                     user_agent=(request.headers.get("User-Agent") or "")[:300],
                 ))
                 session.token = token
+                if user_id is None:
+                    conn.execute(delete(UserSession).where(UserSession.user_id.is_(None), UserSession.expires_at < now))
             else:
                 values = {"last_seen_at": now, "expires_at": expires_at}
                 if session.modified:

@@ -9,7 +9,7 @@
  * * «Отменить» / «Повторить» — обратные операции, отправляемые как обычные правки:
  *   отмена работает и после сохранения и не затирает чужие изменения других полей.
  */
-import { computed, reactive } from 'vue'
+import { computed, reactive, toRaw } from 'vue'
 import { api, AuthRequiredError, NetworkError } from '../api/client'
 import { applyBatch, touchedKeys } from './domain/ops'
 import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree'
@@ -35,6 +35,22 @@ export function randomKey(prefix) {
   const bytes = new Uint8Array(5)
   crypto.getRandomValues(bytes)
   return prefix + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
+// Редакторы, у которых есть неотправленные правки, — в том числе закрытых планов: закрытый план
+// (переход на другую вкладку, другой проект, страницу входа) досылает очередь в фоне, пока открыта
+// страница. Уход со страницы при неотправленных правках предупреждает (beforeunload).
+const liveEditors = new Set()
+export function hasUnsavedEdits() {
+  for (const editor of liveEditors) if (editor.pending()) return true
+  return false
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', (event) => {
+    if (!hasUnsavedEdits()) return
+    event.preventDefault()
+    event.returnValue = ''
+  })
 }
 
 let calendarCache = null
@@ -65,6 +81,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     queue: [],
     inFlight: null,
     offline: false,
+    authLost: false,
     lastSavedAt: null,
     presence: [],
     undo: [],
@@ -148,19 +165,25 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     state.graveyard[name] = {}
   }
 
-  async function load({ keepView = false } = {}) {
+  function applyDocument(doc) {
+    state.plan = doc.plan
+    state.access = doc.plan.access
+    state.revision = doc.plan.revision
+    state.users = doc.users || {}
+    replaceCollection('items', doc.items)
+    replaceCollection('notes', doc.notes)
+    replaceCollection('assignees', doc.assignees)
+  }
+
+  /** resetHistory — после восстановления версии: прежние «Отменить» относятся к другому состоянию. */
+  async function load({ keepView = false, resetHistory = false } = {}) {
     state.loading = !state.plan
     state.loadError = null
     try {
       const [doc, days] = await Promise.all([api.get(`/plans/${planId}`), loadCalendarDays().catch(() => null)])
       if (days) state.calendarDays = days
-      state.plan = doc.plan
-      state.access = doc.plan.access
-      state.revision = doc.plan.revision
-      state.users = doc.users || {}
-      replaceCollection('items', doc.items)
-      replaceCollection('notes', doc.notes)
-      replaceCollection('assignees', doc.assignees)
+      applyDocument(doc)
+      if (resetHistory) { state.undo = []; state.redo = [] }
       if (!keepView) restoreView()
     } catch (err) {
       state.loadError = err
@@ -171,21 +194,23 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   // ---------- очередь отправки ----------
+  // Каждая правка — отдельная запись очереди { ops, tags, label, undoRef }. В одном запросе уходят
+  // несколько правок подряд (до 1500 операций); если сервер отклонил запрос, правки отправляются по
+  // одной, и отбрасывается только та, что не прошла проверку, — остальные сохраняются.
+  let isolate = false
+  let resyncNeeded = false
+  const tracker = { pending: () => state.queue.length > 0 || Boolean(state.inFlight) }
+
   function pendingTags() {
     const tags = new Set()
-    for (const batch of state.queue) for (const tag of batch.tags) tags.add(tag)
+    for (const entry of state.queue) for (const tag of entry.tags) tags.add(tag)
     if (state.inFlight) for (const tag of state.inFlight.tags) tags.add(tag)
     return tags
   }
 
-  function enqueue(ops) {
-    const last = state.queue[state.queue.length - 1]
-    if (last && last.ops.length + ops.length < 1500) {
-      last.ops.push(...ops)
-      for (const tag of touchedKeys(ops)) last.tags.add(tag)
-    } else {
-      state.queue.push({ ops: [...ops], tags: touchedKeys(ops) })
-    }
+  function enqueue(ops, label, undoRef = null) {
+    state.queue.push({ ops: [...ops], tags: touchedKeys(ops), label, undoRef })
+    liveEditors.add(tracker)
     flushSoon()
   }
 
@@ -200,6 +225,10 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     const changed = []
     for (const entity of list) {
       if (skip.has(`${entityName}:${entity.key}`)) continue
+      // Ответ, пришедший позже более свежего (медленный опрос после собственного сохранения), не
+      // откатывает строку к старому значению
+      const current = state[name][entity.key] || state.graveyard[name][entity.key]
+      if (current && entity.updatedRev != null && current.updatedRev != null && current.updatedRev > entity.updatedRev) continue
       if (entity.deleted) {
         if (state[name][entity.key]) {
           state.graveyard[name][entity.key] = state[name][entity.key]
@@ -218,9 +247,51 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     return changed
   }
 
+  function takeBatch() {
+    const entries = []
+    let count = 0
+    for (const entry of state.queue) {
+      if (entries.length && (isolate || count + entry.ops.length > 1500)) break
+      entries.push(entry)
+      count += entry.ops.length
+    }
+    state.queue.splice(0, entries.length)
+    const tags = new Set()
+    for (const entry of entries) for (const tag of entry.tags) tags.add(tag)
+    return { entries, ops: entries.flatMap((e) => e.ops), tags }
+  }
+
+  // Записи истории сравниваются по исходным объектам: в state они хранятся реактивными обёртками
+  function dropUndo(ref) {
+    if (!ref) return
+    const raw = toRaw(ref)
+    state.undo = state.undo.filter((e) => toRaw(e) !== raw)
+    state.redo = state.redo.filter((e) => toRaw(e) !== raw)
+  }
+
+  function drained() {
+    if (state.queue.length || state.inFlight) return
+    isolate = false
+    if (stopped) { liveEditors.delete(tracker); return }
+    if (resyncNeeded) resync()
+  }
+
+  /** Вернуть на экран состояние сервера после отклонённой правки — когда очередь пуста. */
+  async function resync() {
+    resyncNeeded = false
+    try {
+      const doc = await api.get(`/plans/${planId}`)
+      if (state.queue.length || state.inFlight) { resyncNeeded = true; return }
+      applyDocument(doc)
+    } catch {
+      resyncNeeded = true
+    }
+  }
+
   async function flush() {
-    if (stopped || state.inFlight || !state.queue.length) return
-    const batch = state.queue.shift()
+    if (state.inFlight || !state.queue.length) return
+    clearTimeout(retryTimer)
+    const batch = takeBatch()
     state.inFlight = batch
     try {
       const res = await api.post(`/plans/${planId}/ops`, { baseRevision: state.revision, ops: batch.ops })
@@ -234,8 +305,9 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       }
       state.lastSavedAt = new Date()
       state.offline = false
+      state.authLost = false
       retryStep = 0
-      if (res.conflicts?.length) {
+      if (res.conflicts?.length && !stopped) {
         const names = [...new Set(res.conflicts.map((c) => c.byName).filter(Boolean))]
         const rows = res.conflicts.map((c) => state.items[c.key]?.name).filter(Boolean)
         ui.toast({
@@ -244,31 +316,50 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
           kind: 'info', timeout: 8000,
         })
       }
-      if (res.fixes?.length) {
+      if (res.fixes?.length && !stopped) {
         ui.toast({ title: 'Ссылки исправлены', body: res.fixes.map((f) => f.reason).filter(unique).join('; '), kind: 'info' })
       }
     } catch (err) {
       state.inFlight = null
       if (err instanceof NetworkError || (err.status >= 500 && err.status < 600) || err.status === 429) {
-        state.queue.unshift(batch)
+        // Сервер мог применить пакет, а ответ потерялся: повтор безопасен (сервер распознаёт повтор)
+        state.queue.unshift(...batch.entries)
         state.offline = true
         scheduleRetry()
         return
       }
       if (err instanceof AuthRequiredError) {
-        state.queue.unshift(batch)
+        // Сессия истекла: правки ждут, пока сотрудник снова войдёт, и уходят сами
+        state.queue.unshift(...batch.entries)
+        state.authLost = true
+        scheduleRetry()
         return
       }
-      // Сервер отклонил правку (проверка данных, строку удалили, нет прав): возвращаемся
-      // к состоянию сервера, чтобы на экране не осталось несохранённого.
-      state.queue = []
-      state.undo = []
-      state.redo = []
-      ui.error(err.message || 'Изменение не сохранено', 'План обновлён с сервера')
-      await load({ keepView: true }).catch(() => {})
-      return
+      if (err.status === 403 || err.status === 404 || err.code === 'archived') {
+        // План недоступен для правки целиком: каждая правка будет отклонена
+        for (const entry of [...batch.entries, ...state.queue]) dropUndo(entry.undoRef)
+        const lost = batch.entries.length + state.queue.length
+        state.queue = []
+        if (err.code === 'archived' && state.plan) state.plan.isArchived = true
+        ui.error(err.message || 'Изменения не сохранены', `Не сохранено правок: ${lost}. План обновлён с сервера.`)
+        resyncNeeded = !stopped
+        drained()
+        return
+      }
+      if (batch.entries.length > 1) {
+        // Отклонён пакет из нескольких правок — отправляем их по одной
+        isolate = true
+        state.queue.unshift(...batch.entries)
+        flush()
+        return
+      }
+      const [entry] = batch.entries
+      dropUndo(entry.undoRef)
+      ui.error(`Не сохранено: ${entry.label || 'изменение'}`, err.message || 'Сервер отклонил изменение')
+      resyncNeeded = !stopped
     }
     if (state.queue.length) flush()
+    else drained()
   }
 
   function scheduleRetry() {
@@ -278,22 +369,24 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     retryTimer = setTimeout(flush, delay)
   }
 
-  /** Дождаться отправки очереди (перед уходом со страницы). */
+  /** Дождаться отправки очереди (например, перед восстановлением версии). */
   async function flushNow(timeoutMs = 6000) {
     clearTimeout(flushTimer)
     const startedAt = Date.now()
     flush()
     while ((state.queue.length || state.inFlight) && Date.now() - startedAt < timeoutMs) {
       await new Promise((resolve) => setTimeout(resolve, 100))
-      if (!state.inFlight && state.queue.length && !state.offline) flush()
+      if (!state.inFlight && state.queue.length && !state.offline && !state.authLost) flush()
     }
     return !state.queue.length && !state.inFlight
   }
 
   // ---------- синхронизация ----------
+  let polling = false
   async function poll() {
-    if (stopped || !state.plan) return
+    if (stopped || !state.plan || polling) return
     if (state.inFlight || state.queue.length) return
+    polling = true
     try {
       const editing = canEdit.value && (Boolean(state.view.panelKey) || pendingCount.value > 0)
       const res = await api.get(`/plans/${planId}/changes`, { since: state.revision, editing: editing ? 1 : 0 })
@@ -326,6 +419,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         ui.error('План удалён или доступ закрыт')
         stop()
       }
+    } finally {
+      polling = false
     }
   }
 
@@ -342,53 +437,73 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
 
   function start() {
     stopped = false
+    clearInterval(todayTimer)
     schedulePoll()
     document.addEventListener('visibilitychange', onVisibility)
     window.addEventListener('focus', onVisibility)
     todayTimer = setInterval(() => { state.today = todayLocal() }, 60000)
   }
 
+  /** Закрыть план: опрос и таймеры останавливаются, неотправленные правки досылаются в фоне. */
   function stop() {
     stopped = true
     clearTimeout(pollTimer)
-    clearTimeout(retryTimer)
     clearInterval(todayTimer)
     document.removeEventListener('visibilitychange', onVisibility)
     window.removeEventListener('focus', onVisibility)
     api.delete(`/plans/${planId}/presence`).catch(() => {})
+    if (tracker.pending()) {
+      clearTimeout(flushTimer)
+      flush()
+    } else {
+      clearTimeout(retryTimer)
+      liveEditors.delete(tracker)
+    }
   }
 
   // ---------- правки ----------
   function commit(ops, label, { undoable = true } = {}) {
-    if (!ops.length) return
+    if (!ops.length) return null
     if (!canEdit.value) {
       ui.error(state.plan?.isArchived ? 'План в архиве — изменения недоступны' : 'У вас доступ только для просмотра')
-      return
+      return null
     }
     const inverse = applyBatch(state, ops)
-    enqueue(ops)
+    let entry = null
     if (undoable) {
-      state.undo.push({ label, inverse })
+      entry = { label, inverse }
+      state.undo.push(entry)
       if (state.undo.length > 100) state.undo.shift()
       state.redo = []
     }
+    enqueue(ops, label, entry)
+    return entry
   }
 
-  function undo() {
-    const entry = state.undo.pop()
-    if (!entry || !canEdit.value) return
+  /**
+   * Отменить последнюю правку или конкретную (entry — например, удаление из уведомления
+   * «Отменить», даже если после него была ещё правка).
+   */
+  function undo(target = null) {
+    if (!canEdit.value) return
+    const entry = target ? state.undo.find((e) => toRaw(e) === toRaw(target)) : state.undo[state.undo.length - 1]
+    if (!entry) return
+    state.undo = state.undo.filter((e) => e !== entry)
     const inverse = applyBatch(state, entry.inverse)
-    enqueue(entry.inverse)
-    state.redo.push({ label: entry.label, inverse })
+    const redoEntry = { label: entry.label, inverse }
+    state.redo.push(redoEntry)
+    enqueue(entry.inverse, `Отмена: ${entry.label}`, redoEntry)
     ui.toast({ title: `Отменено: ${entry.label}`, timeout: 2200 })
   }
 
   function redo() {
+    if (!canEdit.value) return
     const entry = state.redo.pop()
-    if (!entry || !canEdit.value) return
+    if (!entry) return
     const inverse = applyBatch(state, entry.inverse)
-    enqueue(entry.inverse)
-    state.undo.push({ label: entry.label, inverse })
+    const undoEntry = { label: entry.label, inverse }
+    state.undo.push(undoEntry)
+    enqueue(entry.inverse, `Повтор: ${entry.label}`, undoEntry)
     ui.toast({ title: `Повторено: ${entry.label}`, timeout: 2200 })
   }
 
@@ -527,9 +642,10 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       if (note.rowKey && toDelete.has(note.rowKey)) ops.push({ op: 'note.delete', key: note.key })
     }
     for (const key of toDelete) ops.push({ op: 'item.delete', key })
-    commit(ops, label)
+    const entry = commit(ops, label)
     if (toDelete.has(state.view.panelKey)) state.view.panelKey = null
     if (toDelete.has(state.view.selectedKey)) state.view.selectedKey = null
+    return entry
   }
 
   /** Переместить строку: в родителя parentKey перед строкой beforeKey (или в конец). */

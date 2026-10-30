@@ -6,6 +6,7 @@
 каждый сотрудник меняет их у себя (в браузере), не мешая коллегам.
 """
 
+import math
 import re
 from copy import deepcopy
 from datetime import date
@@ -209,6 +210,10 @@ STATUS_LABELS = {"new": "Новая", "inwork": "В работе", "blocked": "�
 TYPE_LABELS = {"task": "Задача", "milestone": "Веха", "group": "Группа"}
 
 
+# Короткие текстовые поля строк — по размеру столбца
+SHORT_MAX = {"category": 255, "barText": 500}
+
+
 def convert_field(api_name, value):
     """Проверка и приведение значения поля строки к значению атрибута модели."""
     attr, kind = ITEM_FIELDS[api_name]
@@ -226,13 +231,13 @@ def convert_field(api_name, value):
             return attr, None
         if not isinstance(value, str):
             raise ApiError(400, "validation_error", f"Поле «{label}» должно быть строкой")
-        return attr, value.strip()[:500] or None
+        return attr, value.strip()[:SHORT_MAX.get(api_name, 500)] or None
     if kind == "key":
         if value in (None, ""):
             return attr, None
         return attr, check_key(value, label)
     if kind == "float":
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             raise ApiError(400, "validation_error", f"Поле «{label}» должно быть числом")
         return attr, float(value)
     if kind == "int":
@@ -244,7 +249,7 @@ def convert_field(api_name, value):
     if kind == "progress":
         if value in (None, ""):
             return attr, 0
-        if not isinstance(value, (int, float)) or isinstance(value, bool):
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
             raise ApiError(400, "validation_error", "Прогресс должен быть числом")
         return attr, max(0, min(100, int(round(value))))
     if kind == "date":
@@ -295,6 +300,9 @@ def item_to_api(item):
         "updatedById": item.updated_by_id,
         "updatedRev": item.updated_rev,
     }
+    if item.extra:
+        # Служебные поля переноса из 1.0 (например, группа строк 1.0): копия и версии плана их сохраняют
+        data["extra"] = item.extra
     if item.type == "task":
         data.update({
             "status": item.status or "new",

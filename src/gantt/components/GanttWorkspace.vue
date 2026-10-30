@@ -70,6 +70,7 @@ watch(() => state.plan?.title, (title, old) => { if (old && title !== old) emit(
 
 const saveStatus = computed(() => {
   void savedTick.value
+  if (state.authLost) return { kind: 'offline', text: `Сессия истекла · ${editor.pendingCount} ${editor.pendingCount === 1 ? 'изменение ждёт' : 'изменений ждут'} входа` }
   if (state.offline) return { kind: 'offline', text: `Нет связи · ${editor.pendingCount} ${editor.pendingCount === 1 ? 'изменение ждёт' : 'изменений ждут'} отправки` }
   if (state.inFlight || state.queue.length) return { kind: 'saving', text: 'Сохранение…' }
   if (state.lastSavedAt) return { kind: 'saved', text: `Сохранено ${formatRelative(state.lastSavedAt)}` }
@@ -113,10 +114,12 @@ async function deleteRows(keys) {
     if (!ok) return
   }
   // Одна строка без вложенных удаляется сразу: отмена — кнопкой в уведомлении, Ctrl+Z или из истории плана
-  editor.deleteItems(keys, { withChildren, label: items.length === 1 ? `Удаление «${items[0].name}»` : 'Удаление строк' })
+  const entry = editor.deleteItems(keys, { withChildren, label: items.length === 1 ? `Удаление «${items[0].name}»` : 'Удаление строк' })
+  if (!entry) return
   ui.toast({
     title: items.length === 1 ? `«${items[0].name}» удалена` : 'Строки удалены', kind: 'success', timeout: 8000,
-    action: { label: 'Отменить', handler: () => editor.undo() },
+    // Отменяется именно это удаление, даже если после него были другие правки
+    action: { label: 'Отменить', handler: () => editor.undo(entry) },
   })
 }
 
@@ -254,7 +257,7 @@ provide('ganttActions', actions)
   <PlanSettingsModal v-if="modal?.name === 'settings'" @close="modal = null" />
   <AssigneesModal v-if="modal?.name === 'assignees'" @close="modal = null" />
   <StatsModal v-if="modal?.name === 'stats'" @close="modal = null" />
-  <HistoryModal v-if="modal?.name === 'history'" :plan-id="planId" :initial="modal.payload" @close="modal = null" @restored="editor.load({ keepView: true })" />
+  <HistoryModal v-if="modal?.name === 'history'" :plan-id="planId" :initial="modal.payload" @close="modal = null" @restored="editor.load({ keepView: true, resetHistory: true })" />
   <CompletionDialog v-if="completion" :item="completion.item" :today="state.today" @cancel="completion = null" @confirm="applyCompletion" />
   <NoteEditor v-if="noteEditor" v-bind="noteEditor" @close="noteEditor = null" />
 </template>

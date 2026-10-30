@@ -196,3 +196,80 @@ def test_plan_settings_are_validated(app, admin):
     settings = response.get_json()["settings"]
     assert settings["scale"] == "week" and settings["display"]["showNotes"] is False
     assert settings["display"]["showProgress"] is True
+
+
+def test_replayed_batch_is_idempotent_for_its_author(app, admin):
+    """Ответ на пакет потерялся, клиент повторил его: строки не дублируются, ошибки нет.
+    Чужой сотрудник с тем же ключом получает key_exists."""
+    project_id, plan_id = create_project(admin)
+    batch = [
+        task("t1", "Задача"),
+        {"op": "note.create", "note": {"key": "n1", "date": "2026-11-02", "text": "Пометка"}},
+        {"op": "assignee.create", "assignee": {"key": "a1", "name": "Исполнитель"}},
+        {"op": "item.update", "key": "t1", "fields": {"progress": 30}},
+    ]
+    first = ok_ops(admin, plan_id, batch)
+    again = ok_ops(admin, plan_id, batch)
+    assert again["revision"] >= first["revision"]
+    doc = admin.get(f"/api/plans/{plan_id}").get_json()
+    assert [i["key"] for i in doc["items"]] == ["t1"] and doc["items"][0]["progress"] == 30
+    assert len(doc["notes"]) == 1 and len(doc["assignees"]) == 1
+
+    ok_ops(admin, plan_id, [{"op": "item.delete", "key": "t1"}])
+    ok_ops(admin, plan_id, batch[:1])  # повтор создания уже удалённой строки — без ошибки и без воскрешения
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["items"] == []
+
+    colleague = new_client(app, "colleague2", "editor", name="Коллега")
+    _grant(app, admin, "colleague2", project_id)
+    res = colleague.post(f"/api/plans/{plan_id}/ops", json={"ops": batch[1:2]})
+    assert res.status_code == 409 and res.get_json()["error"] == "key_exists"
+
+
+# ---------- одновременные пакеты: правка коллеги фиксируется между проверкой доступа и блокировкой ----------
+
+def _colleague_commits_before_lock(app, monkeypatch, action):
+    import app.api.plans as plans_api
+    real = plans_api.lock_plan
+    state = {}
+
+    def wrapper(plan_id, **kwargs):
+        if not state:
+            state["done"] = True
+            with app.app_context():
+                state["result"] = action()
+        return real(plan_id, **kwargs)
+
+    monkeypatch.setattr(plans_api, "lock_plan", wrapper)
+    return state
+
+
+def test_concurrent_batches_get_distinct_revisions(app, admin, monkeypatch):
+    project_id, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("a"), task("b")])
+    other = new_client(app, "admin2", "admin")
+    state = _colleague_commits_before_lock(app, monkeypatch, lambda: ok_ops(
+        other, plan_id, [{"op": "item.update", "key": "b", "fields": {"name": "B2"}}]))
+    outer = ok_ops(admin, plan_id, [{"op": "item.update", "key": "a", "fields": {"name": "A2"}}])
+    inner = state["result"]
+    assert outer["revision"] > inner["revision"]
+    seen = other.get(f"/api/plans/{plan_id}/changes?since={inner['revision']}").get_json()
+    assert [i["name"] for i in seen["items"]] == ["A2"]
+
+
+def test_concurrent_settings_are_merged(app, admin, monkeypatch):
+    _, plan_id = create_project(admin)
+    other = new_client(app, "admin2", "admin")
+    _colleague_commits_before_lock(app, monkeypatch, lambda: other.patch(
+        f"/api/plans/{plan_id}", json={"settings": {"scale": "month"}}).get_json())
+    admin.patch(f"/api/plans/{plan_id}", json={"settings": {"rowHeight": 60}})
+    settings = admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]
+    assert settings["scale"] == "month" and settings["rowHeight"] == 60
+
+
+def test_archive_does_not_move_revision_back(app, admin, monkeypatch):
+    project_id, plan_id = create_project(admin)
+    admin.post(f"/api/projects/{project_id}/plans", json={"title": "Второй"})
+    other = new_client(app, "admin2", "admin")
+    state = _colleague_commits_before_lock(app, monkeypatch, lambda: ok_ops(other, plan_id, [task("x1"), task("x2")]))
+    archived = admin.post(f"/api/plans/{plan_id}/archive").get_json()
+    assert archived["revision"] > state["result"]["revision"]

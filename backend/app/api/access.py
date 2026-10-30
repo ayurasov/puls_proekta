@@ -79,6 +79,10 @@ def list_rules():
 def grant():
     """Массовая выдача: каждому из сотрудников — к каждому проекту/направлению. Повторов не создаёт."""
     payload = BulkGrant.model_validate(request.get_json(silent=True) or {})
+    # Повторы в списках не создают второе правило (уникальный индекс) — убираем их
+    payload.userIds = list(dict.fromkeys(payload.userIds))
+    payload.projectIds = list(dict.fromkeys(payload.projectIds))
+    payload.directionIds = list(dict.fromkeys(payload.directionIds))
     if not payload.projectIds and not payload.directionIds:
         raise ApiError(400, "validation_error", "Выберите проекты или направления")
     users, projects, directions = _lookups()

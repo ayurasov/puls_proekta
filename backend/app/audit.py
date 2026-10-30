@@ -13,23 +13,24 @@ from app.security import current_user
 MAX_VALUE = 1000
 
 
-def _text(value):
+def _text(value, limit=MAX_VALUE):
     if value is None:
         return ""
-    return str(value)[:MAX_VALUE]
+    return str(value)[:limit]
 
 
 def record(section, action, entity, field="", old="", new="", project=None, details=None, user=None):
     user = user or current_user()
     db.session.add(AuditLog(
         user_id=user.id if user else None,
-        user_name=(user.login if user else "система"),
+        user_name=_text(user.login if user else "система", 255),
         project_id=project.id if project is not None else None,
-        project_title=project.title if project is not None else "",
-        section=section,
-        action=action,
-        entity=_text(entity),
-        field=field or "",
+        project_title=_text(project.title if project is not None else "", 500),
+        section=_text(section, 100),
+        action=_text(action, 30),
+        # Размеры — по столбцам audit_log: в PostgreSQL длиннее нельзя (SQLite длину не проверяет)
+        entity=_text(entity, 500),
+        field=_text(field, 100),
         old_value=_text(old),
         new_value=_text(new),
         details=details,

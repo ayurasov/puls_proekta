@@ -93,7 +93,9 @@ def create_app(config_name=None, overrides=None):
     app.json.sort_keys = False
 
     if app.config.get("ENV") == "production":
-        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)
+        hops = max(1, app.config.get("TRUSTED_PROXY_HOPS", 1))
+        # nginx перезаписывает X-Forwarded-Proto и Host (одно значение), а X-Forwarded-For дополняет
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=hops, x_proto=1, x_host=1)
         logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
     db.init_app(app)

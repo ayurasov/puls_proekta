@@ -1,22 +1,21 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { onBeforeRouteLeave, useRoute, useRouter } from 'vue-router'
+import { computed, onMounted, ref, watch } from 'vue'
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { api } from '../api/client'
 import { ACCESS_LABELS, useProjectsStore } from '../stores/projects'
 import { localStorageGet, localStorageSet, useUiStore } from '../stores/ui'
 import { useAuthStore } from '../stores/auth'
-import { useDialogs } from '../composables/useDialogs'
 import AppIcon from '../components/common/AppIcon.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PlanTabs from '../gantt/components/PlanTabs.vue'
 import GanttWorkspace from '../gantt/components/GanttWorkspace.vue'
+import { hasUnsavedEdits } from '../gantt/editor'
 
 const route = useRoute()
 const router = useRouter()
 const ui = useUiStore()
 const auth = useAuthStore()
 const projectsStore = useProjectsStore()
-const { confirm } = useDialogs()
 
 const project = ref(null)
 const loadError = ref(null)
@@ -73,27 +72,16 @@ async function saveProject() {
   } catch (err) { ui.error(err) }
 }
 
-async function leaveGuard() {
-  const editor = workspace.value?.editor
-  if (!editor || !editor.pendingCount) return true
-  const sent = await editor.flushNow()
-  if (sent) return true
-  return confirm({
-    title: 'Изменения ещё не сохранены',
-    message: 'Нет связи с сервером, часть изменений не отправлена. Если уйти сейчас, они пропадут.',
-    confirmText: 'Уйти без сохранения', cancelText: 'Остаться',
-  })
+// Уход с плана не теряет правок: закрытый план досылает их в фоне, а закрыть страницу при
+// неотправленных правках не даёт предупреждение браузера (gantt/editor.js, hasUnsavedEdits).
+function leaveGuard() {
+  if (hasUnsavedEdits() && workspace.value?.editor?.state.offline) {
+    ui.toast({ title: 'Изменения отправятся, когда появится связь', body: 'Не закрывайте вкладку до отправки.', kind: 'info', timeout: 6000 })
+  }
+  return true
 }
 onBeforeRouteLeave(leaveGuard)
-
-function beforeUnload(event) {
-  if (workspace.value?.editor?.pendingCount) {
-    event.preventDefault()
-    event.returnValue = ''
-  }
-}
-onMounted(() => window.addEventListener('beforeunload', beforeUnload))
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload))
+onBeforeRouteUpdate(leaveGuard)
 </script>
 
 <template>
