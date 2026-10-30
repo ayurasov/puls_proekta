@@ -5,7 +5,7 @@ import { ROLE_LABELS, useAuthStore } from '../../stores/auth'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { resizeImage } from '../../utils/images'
-import { formatDateTime } from '../../utils/format'
+import { countLabel, formatDateTime } from '../../utils/format'
 import AppIcon from '../../components/common/AppIcon.vue'
 import BaseModal from '../../components/common/BaseModal.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
@@ -147,7 +147,7 @@ async function removePhoto() {
     <div class="page-header">
       <div>
         <h1 class="page-title">Сотрудники</h1>
-        <div class="page-subtitle">{{ counts.total }} всего<span v-if="counts.inactive"> · {{ counts.inactive }} отключено</span></div>
+        <div class="page-subtitle">{{ countLabel(counts.total, 'сотрудник', 'сотрудника', 'сотрудников') }}<span v-if="counts.inactive"> · {{ countLabel(counts.inactive, 'отключён', 'отключены', 'отключено') }}</span></div>
       </div>
       <div class="spacer" />
       <input v-model="search" class="input search" type="search" placeholder="Поиск по ФИО, логину, должности" />
@@ -263,4 +263,8 @@ tr.inactive td { opacity: 0.55; }
 .actions { text-align: right; width: 50px; }
 .photo-row { display: flex; align-items: center; gap: 10px; }
 .table .select { width: 150px; }
+@media (max-width: 768px) {
+  .search { width: auto; flex: 1 1 100%; }
+  .role-filter { width: auto; flex: 1 1 140px; }
+}
 </style>

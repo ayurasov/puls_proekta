@@ -348,6 +348,11 @@ function onDragEnd() {
 .skeleton-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
 .skeleton { height: 150px; background: linear-gradient(90deg, #fff 0%, #f3f5fa 50%, #fff 100%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (max-width: 768px) {
+  .search { width: auto; flex: 1 1 200px; }
+  .grid, .skeleton-grid { grid-template-columns: 1fr; }
+}
+@media (hover: none) { .add-here { opacity: 1; } }
 .c-blue { background: #3b82f6; } .c-teal { background: #14b8a6; } .c-green { background: #22c55e; } .c-orange { background: #f97316; }
 .c-red { background: #ef4444; } .c-purple { background: #8b5cf6; } .c-amber { background: #f59e0b; } .c-pink { background: #ec4899; }
 .c-slate { background: #64748b; } .c-indigo { background: #6366f1; } .c-cyan { background: #06b6d4; } .c-lime { background: #84cc16; }

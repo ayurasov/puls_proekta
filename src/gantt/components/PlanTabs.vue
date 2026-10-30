@@ -280,5 +280,11 @@ async function onDrop() {
 .archive-btn.is-active { color: var(--color-primary-dark); }
 .archived-row { display: flex; align-items: center; gap: 2px; }
 .archived-row .menu-item { flex: 1; min-width: 0; }
+@media (max-width: 768px) {
+  .plan-tabs { padding: 0 6px; gap: 4px; }
+  .tab-button { padding: 11px 10px 10px; }
+  .tab-menu { min-width: 32px; min-height: 32px; }
+  .archive-btn { padding: 0 8px; }
+}
 .archived-row .menu-item.is-current { background: var(--color-primary-soft); color: var(--color-primary-dark); font-weight: 600; }
 </style>

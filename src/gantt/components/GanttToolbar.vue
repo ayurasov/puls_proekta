@@ -114,6 +114,15 @@ function toggleColumn(column) {
 
 <template>
   <div class="toolbar-wrap">
+  <div class="mobile-search">
+    <label class="search">
+      <AppIcon name="search" :size="14" class="search-icon" />
+      <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" />
+    </label>
+    <button class="btn btn-sm" :class="{ 'is-active': activeFilterCount }" type="button" @click="open('filters', $event)">
+      <AppIcon name="filter" :size="14" /> Фильтры<span v-if="activeFilterCount" class="count">{{ activeFilterCount }}</span>
+    </button>
+  </div>
   <div class="toolbar">
     <div class="group">
       <div v-if="editor.canEdit" class="split">
@@ -163,7 +172,7 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="История и сохранённые версии" data-testid="history" @click="emit('open-modal', 'history')"><AppIcon name="history" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Настройки графика" @click="emit('open-modal', 'settings')"><AppIcon name="settings" /></button>
       <button class="btn btn-sm" type="button" :disabled="exporting" title="Экспорт" @click="open('export', $event)">
-        <AppIcon name="download" :size="14" /> {{ exporting ? 'Готовим…' : 'Экспорт' }}
+        <AppIcon name="download" :size="14" /> <span class="export-label">{{ exporting ? 'Готовим…' : 'Экспорт' }}</span>
       </button>
     </Teleport>
 
@@ -251,7 +260,21 @@ function toggleColumn(column) {
 .filter-option .ellipsis { flex: 1; }
 .filters-foot { display: flex; align-items: center; gap: 8px; padding: 4px 8px; justify-content: space-between; }
 label.menu-item { cursor: pointer; }
+@media (max-width: 768px) { .export-label { display: none; } }
 /* Узкая рабочая область: «Сегодня» — только значком, чтобы панель оставалась в одну строку */
 @container (max-width: 1000px) { .today-label { display: none; } }
 @media (max-width: 900px) { .filters { grid-template-columns: 1fr; } }
+/* Телефон: поиск и фильтры — первой строкой, остальные кнопки — одной прокручиваемой строкой */
+@media (max-width: 768px) {
+  .toolbar { gap: 6px 8px; padding: 6px 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .group { flex-wrap: nowrap; flex-shrink: 0; }
+  .group.grow { display: none; }
+  .mobile-search { display: flex; gap: 6px; padding: 6px 10px 0; }
+  .mobile-search .search { flex: 1 1 auto; }
+  .zoom-input { min-height: 40px; }
+  .split-caret { padding: 3px 10px; }
+  .filter-option { min-height: 40px; }
+}
+@media (min-width: 769px) { .mobile-search { display: none; } }
 </style>

@@ -64,7 +64,7 @@ async function removeDay(day) {
 </script>
 
 <template>
-  <div class="page narrow">
+  <div class="page">
     <div class="page-header">
       <h1 class="page-title">Настройки</h1>
       <div class="spacer" />
@@ -140,7 +140,6 @@ async function removeDay(day) {
 </template>
 
 <style scoped>
-.narrow { max-width: 900px; }
 .block { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 .three { grid-template-columns: 1fr 1fr 1fr; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }

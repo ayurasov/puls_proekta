@@ -210,7 +210,7 @@ provide('ganttActions', actions)
       </span>
       <span v-if="state.presence.length > 5" class="badge">+{{ state.presence.length - 5 }}</span>
     </div>
-    <div v-if="saveStatus.text" class="save-status small" :class="`is-${saveStatus.kind}`" data-testid="save-status">
+    <div v-if="saveStatus.text" class="save-status small" :class="`is-${saveStatus.kind}`" :title="saveStatus.text" data-testid="save-status">
       <AppIcon :name="saveStatus.kind === 'offline' ? 'wifiOff' : saveStatus.kind === 'saving' ? 'refresh' : 'cloudCheck'" :size="15" />
       <span>{{ saveStatus.text }}</span>
     </div>
@@ -281,5 +281,10 @@ provide('ganttActions', actions)
 .save-status.is-offline { color: var(--color-danger); font-weight: 600; }
 .save-status.is-saving svg { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 900px) { .presence-label { display: none; } }
+@media (max-width: 1100px) { .presence-label { display: none; } }
+/* Узкий экран: статус сохранения — значком (полный текст в подсказке), «сейчас на плане» — до 3 лиц */
+@media (max-width: 900px) {
+  .save-status span { display: none; }
+  .presence-avatar:nth-of-type(n+4) { display: none; }
+}
 </style>

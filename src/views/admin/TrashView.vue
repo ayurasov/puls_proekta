@@ -46,7 +46,7 @@ async function purgePlan(p) {
 </script>
 
 <template>
-  <div class="page narrow">
+  <div class="page">
     <div class="page-header">
       <div>
         <h1 class="page-title">Корзина</h1>
@@ -79,7 +79,6 @@ async function purgePlan(p) {
 </template>
 
 <style scoped>
-.narrow { max-width: 900px; }
 .block { padding: 14px 16px; margin-bottom: 14px; display: flex; flex-direction: column; gap: 6px; }
 .row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--color-border); color: var(--color-text-secondary); }
 .who { flex: 1; min-width: 0; color: var(--color-text); }

@@ -11,7 +11,10 @@ export const useUiStore = defineStore('ui', {
     toasts: [],
     dialogs: [],
     sidebarCollapsed: localStorageGet('puls.sidebarCollapsed') === '1',
+    // Телефон: меню — выдвижная панель поверх страницы (как в «По Делу»). На время показа свёрнутое
+    // меню разворачивается, после закрытия возвращается как было на компьютере.
     mobileNavOpen: false,
+    collapsedBeforeMobile: null,
   }),
   actions: {
     toast(input) {
@@ -45,6 +48,18 @@ export const useUiStore = defineStore('ui', {
     toggleSidebar() {
       this.sidebarCollapsed = !this.sidebarCollapsed
       localStorageSet('puls.sidebarCollapsed', this.sidebarCollapsed ? '1' : '0')
+    },
+    openMobileNav() {
+      if (this.mobileNavOpen) return
+      this.collapsedBeforeMobile = this.sidebarCollapsed
+      this.sidebarCollapsed = false
+      this.mobileNavOpen = true
+    },
+    closeMobileNav() {
+      if (!this.mobileNavOpen) return
+      this.mobileNavOpen = false
+      if (this.collapsedBeforeMobile !== null) this.sidebarCollapsed = this.collapsedBeforeMobile
+      this.collapsedBeforeMobile = null
     },
   },
 })

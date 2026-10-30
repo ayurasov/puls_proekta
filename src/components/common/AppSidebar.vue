@@ -53,7 +53,7 @@ async function logout() {
 </script>
 
 <template>
-  <aside class="sidebar scroll-thin" :class="{ collapsed: ui.sidebarCollapsed }">
+  <aside class="sidebar scroll-thin" :class="{ collapsed: ui.sidebarCollapsed }" aria-label="Меню">
     <div class="sidebar-top">
       <router-link to="/" class="brand" title="Пульс Проекта">
         <span class="brand-mark"><AppIcon name="pulse" :size="18" :stroke-width="2.2" /></span>
@@ -105,7 +105,7 @@ async function logout() {
     </div>
 
     <div class="sidebar-bottom">
-      <button class="user-card" type="button" title="Профиль" @click="profileOpen = true">
+      <button class="user-card" type="button" :title="`${auth.user?.name || ''} · ${auth.roleLabel}\nПрофиль: фото, пароль`" @click="profileOpen = true">
         <UserAvatar :user="auth.user" :size="30" />
         <span v-if="!ui.sidebarCollapsed" class="user-text">
           <span class="user-name ellipsis">{{ auth.user?.name }}</span>
@@ -125,7 +125,7 @@ async function logout() {
 </template>
 
 <style scoped>
-.sidebar { width: 248px; background: var(--color-surface); border-right: 1px solid var(--color-border); display: flex; flex-direction: column; padding: 14px 10px; overflow-y: auto; overflow-x: hidden; transition: width 0.18s ease; flex-shrink: 0; }
+.sidebar { width: 232px; background: var(--color-surface); border-right: 1px solid var(--color-border); display: flex; flex-direction: column; padding: 14px 10px; overflow-y: auto; overflow-x: hidden; transition: width 0.18s ease; flex-shrink: 0; }
 .sidebar.collapsed { width: 60px; padding: 14px 8px; }
 .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 14px; }
 .sidebar.collapsed .sidebar-top { flex-direction: column; gap: 10px; }

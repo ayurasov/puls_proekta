@@ -67,7 +67,7 @@ async function drop(target) {
 </script>
 
 <template>
-  <div class="page narrow">
+  <div class="page">
     <div class="page-header">
       <div>
         <h1 class="page-title">Направления</h1>
@@ -109,7 +109,6 @@ async function drop(target) {
 </template>
 
 <style scoped>
-.narrow { max-width: 820px; }
 .add { display: flex; gap: 8px; padding: 12px; margin-bottom: 14px; }
 .list { padding: 6px; }
 .row { display: flex; align-items: center; gap: 10px; padding: 10px; border-radius: var(--radius-sm); }

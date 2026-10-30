@@ -397,7 +397,15 @@ function duplicate() {
 .early { color: var(--color-success); }
 .with-action { display: flex; gap: 6px; }
 .updated { margin: 6px 0 0; }
-@media (max-width: 900px) {
-  .panel { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); }
+/* Ноутбук и планшет: карточка открывается поверх диаграммы, а не сжимает её */
+@media (max-width: 1279px) {
+  .panel { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); box-shadow: -12px 0 32px rgba(20, 25, 40, 0.18); }
+}
+/* Телефон: карточка — на весь экран поверх панели инструментов */
+@media (max-width: 768px) {
+  .panel { position: fixed; inset: 0; z-index: 150; width: 100%; border-left: 0; padding-top: env(safe-area-inset-top); }
+  .panel-head { padding: 6px 8px 4px 16px; }
+  .tabs { align-self: stretch; overflow-x: auto; }
+  .tabs button { flex: 1; white-space: nowrap; }
 }
 </style>
