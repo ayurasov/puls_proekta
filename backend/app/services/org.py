@@ -271,7 +271,7 @@ def person_json(user, snap):
         "departmentId": user.department_id if user.department_id in snap.departments else None,
         "managerId": user.manager_id, "directManagerId": manager_id, "managerSource": source,
         "reportsToNone": bool(user.reports_to_none), "isActive": bool(user.is_active),
-        "headOf": snap.head_of.get(user.id, []),
+        "headOf": snap.head_of.get(user.id, []), "podeluId": user.podelu_id,
         "avatarUrl": f"/api/users/{user.id}/avatar?v={user.avatar_version}" if user.avatar_version else None,
     }
 
@@ -280,7 +280,7 @@ def department_json(dep, snap, counts=None):
     heads = snap.heads.get(dep.id, [])
     data = {
         "id": dep.id, "name": dep.name, "parentId": dep.parent_id, "kind": dep.kind, "sortOrder": dep.sort_order or 0,
-        "orgSource": dep.org_source, "externalId": dep.external_id,
+        "orgSource": dep.org_source, "externalId": dep.external_id, "podeluId": dep.podelu_id,
         "headIds": [h[0] for h in heads], "primaryHeadId": next((h[0] for h in heads if h[1]), None),
         "level": snap.depth(dep.id), "childCount": len(snap.children.get(dep.id, [])),
     }

@@ -29,6 +29,7 @@ from sqlalchemy import select
 from app import audit
 from app.extensions import db
 from app.models import Department, DepartmentHead, User
+from app.podelu_client import is_uuid
 from app.services import org
 from app.services.org import OrgSnapshot, norm
 from app.services.org_import import clean
@@ -323,23 +324,33 @@ def plan_structure(bundle, *, apply_settings=True):
     return plan
 
 
-def apply_structure(bundle, *, apply_settings=True):
-    """(план, применён ли). При ошибках ничего не меняется."""
+def apply_structure(bundle, *, apply_settings=True, podelu=False):
+    """(план, применён ли). При ошибках ничего не меняется.
+
+    podelu=True — структура получена из подключённой «По Делу» (ADR-0009): ключ подразделения в файле — его UUID
+    в «По Делу». Он записывается в podelu_id сопоставленного подразделения, а новое подразделение получает его же
+    как id, если такой id в «Пульсе» свободен."""
     plan = plan_structure(bundle, apply_settings=apply_settings)
     if plan.errors:
         return plan.as_dict(), False
-    ids = {}
+    ids, used = {}, set()
     for item in plan.items:
         target = plan.targets.get(item.key)
         if target is None:
-            row = Department(id=org.new_id(), name=item.name, parent_id=ids.get(item.parent) if item.parent else None,
-                             kind=item.kind, sort_order=item.sort_order, org_source="transfer",
+            dep_id = org.new_id()
+            if podelu and is_uuid(item.key) and item.key not in used and db.session.get(Department, item.key) is None:
+                dep_id = item.key
+            used.add(dep_id)
+            row = Department(id=dep_id, name=item.name, parent_id=ids.get(item.parent) if item.parent else None,
+                             kind=item.kind, sort_order=item.sort_order, org_source="podelu" if podelu else "transfer",
                              external_id=item.external_id)
             db.session.add(row)
             ids[item.key] = row.id
-            audit.record("Структура", "create", item.name, "", "", "загрузка структуры из файла")
+            audit.record("Структура", "create", item.name, "", "",
+                         "загрузка структуры из «По Делу»" if podelu else "загрузка структуры из файла")
             continue
         ids[item.key] = target
+        used.add(target)
         row = db.session.get(Department, target)
         if (row.kind or "department") != item.kind:
             audit.record("Структура", "update", row.name, "kind", row.kind, item.kind)
@@ -349,6 +360,8 @@ def apply_structure(bundle, *, apply_settings=True):
         if item.external_id and not row.external_id:
             row.external_id = item.external_id
     db.session.flush()
+    if podelu:
+        link_departments({ids[item.key]: item.key for item in plan.items if is_uuid(item.key)})
     primaries = set(db.session.execute(
         select(DepartmentHead.department_id).where(DepartmentHead.is_primary.is_(True))).scalars())
     names = {user.id: user.name for user in db.session.execute(select(User)).scalars()}
@@ -368,3 +381,21 @@ def apply_structure(bundle, *, apply_settings=True):
                      f"из файла: типов {len(settings['unitKinds'])}, уровней {settings['maxDepth']}")
     db.session.flush()
     return plan.as_dict(), True
+
+
+def link_departments(links):
+    """{id подразделения «Пульса»: UUID в «По Делу»} → podelu_id. Ссылка, которая была у другого подразделения
+    (например, переименованного в «Пульсе»), переходит к сопоставленному сейчас. Возвращает число новых ссылок."""
+    wanted = set(links.values())
+    for row in db.session.execute(select(Department).where(Department.podelu_id.is_not(None))).scalars():
+        if row.podelu_id in wanted and links.get(row.id) != row.podelu_id:
+            row.podelu_id = None
+    db.session.flush()
+    changed = 0
+    for dep_id, key in links.items():
+        row = db.session.get(Department, dep_id)
+        if row is not None and row.podelu_id != key:
+            row.podelu_id = key
+            changed += 1
+    db.session.flush()
+    return changed

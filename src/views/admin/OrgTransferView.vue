@@ -7,15 +7,17 @@ import StructureTransfer from '../../components/org-transfer/StructureTransfer.v
 import EmployeesTransfer from '../../components/org-transfer/EmployeesTransfer.vue'
 import QuickCsvImport from '../../components/org-transfer/QuickCsvImport.vue'
 import AdSync from '../../components/org-transfer/AdSync.vue'
+import PodeluSync from '../../components/org-transfer/PodeluSync.vue'
 
 /**
  * Структура компании → Импорт и экспорт (ADR-0008): перенос структуры и сотрудников файлами,
- * общими с todo-planner «По Делу», быстрая загрузка из кадровой системы и синхронизация с Active
- * Directory. Везде сначала — проверка без записи, затем применение одной транзакцией.
+ * общими с todo-planner «По Делу», загрузка напрямую из «По Делу» (ADR-0009), быстрая загрузка из кадровой
+ * системы и синхронизация с Active Directory. Везде сначала — проверка без записи, затем применение одной транзакцией.
  */
 const TABS = [
   { key: 'structure', label: 'Структура (JSON)', icon: 'hierarchy' },
   { key: 'employees', label: 'Сотрудники (CSV, JSON, ZIP)', icon: 'users' },
+  { key: 'podelu', label: 'Из «По Делу»', icon: 'checklist' },
   { key: 'csv', label: 'Быстрый импорт CSV', icon: 'file' },
   { key: 'ad', label: 'Active Directory', icon: 'link' },
 ]
@@ -32,7 +34,7 @@ function selectTab(key) {
     <div class="page-header">
       <div>
         <h1 class="page-title">Импорт и экспорт структуры <HelpLink topic="admin-org-transfer" /></h1>
-        <div class="page-subtitle">Структура компании и сотрудники: перенос файлами в формате «По Делу», загрузка из кадровой системы, синхронизация с Active Directory</div>
+        <div class="page-subtitle">Структура компании и сотрудники: перенос файлами в формате «По Делу» и напрямую из «По Делу», загрузка из кадровой системы, синхронизация с Active Directory</div>
       </div>
     </div>
 
@@ -44,6 +46,7 @@ function selectTab(key) {
 
     <StructureTransfer v-if="tab === 'structure'" />
     <EmployeesTransfer v-else-if="tab === 'employees'" />
+    <PodeluSync v-else-if="tab === 'podelu'" />
     <QuickCsvImport v-else-if="tab === 'csv'" />
     <AdSync v-else-if="tab === 'ad'" />
   </div>

@@ -54,6 +54,8 @@ class User(db.Model):
     reports_to_none = db.Column(db.Boolean, nullable=False, default=False)
     org_source = db.Column(db.String(20), nullable=True)
     external_id = db.Column(db.String(255), nullable=True, index=True)
+    # Идентификатор сотрудника в «По Делу» (ADR-0009): ссылка на его карточку и сопоставление при синхронизации
+    podelu_id = db.Column(db.String(36), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)
@@ -104,6 +106,8 @@ class Department(db.Model):
     sort_order = db.Column(db.Integer, nullable=False, default=0)
     org_source = db.Column(db.String(20), nullable=False, default="manual")
     external_id = db.Column(db.String(255), nullable=True, index=True)
+    # UUID подразделения в «По Делу» (ADR-0009): ссылка на него; созданные синхронизацией получают его же как id
+    podelu_id = db.Column(db.String(36), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
