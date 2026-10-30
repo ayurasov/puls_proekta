@@ -377,7 +377,8 @@ function duplicate() {
 .status-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--color-border); background: var(--color-surface); border-radius: 999px; padding: 4px 10px; font-size: 12.5px; color: var(--color-text-secondary); }
 .status-chip:hover:not(:disabled) { border-color: var(--c); }
 .status-chip.active { border-color: var(--c); background: color-mix(in srgb, var(--c) 12%, white); color: var(--color-text); font-weight: 650; }
-.status-chip:disabled { cursor: default; }
+.status-chip:disabled { cursor: not-allowed; color: var(--color-text-muted); }
+.status-chip.active:disabled { background: #f1f3f8; border-color: var(--color-border-strong); color: var(--color-text-secondary); }
 .segmented.mini { align-self: flex-start; }
 .segmented.mini button { padding: 4px 8px; }
 .readout { font-size: 12.5px; color: var(--color-text-secondary); min-height: 32px; display: flex; align-items: center; }
