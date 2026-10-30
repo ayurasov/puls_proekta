@@ -1,9 +1,9 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ACCESS_LABELS, useProjectsStore } from '../stores/projects'
 import { useAuthStore } from '../stores/auth'
-import { useUiStore } from '../stores/ui'
+import { localStorageGet, localStorageSet, useUiStore } from '../stores/ui'
 import { useDialogs } from '../composables/useDialogs'
 import { api } from '../api/client'
 import AppIcon from '../components/common/AppIcon.vue'
@@ -11,6 +11,13 @@ import HelpLink from '../components/common/HelpLink.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PopupMenu from '../components/common/PopupMenu.vue'
 import { countLabel, formatDate, formatDateTime } from '../utils/format'
+import {
+  PROJECT_SORTS, PROJECT_STATES, DEFAULT_PROJECT_FILTERS, directionMatches, matchesProjectFilters, normalizeProjectFilters,
+  projectFiltersActive, projectProgress, projectState, sortProjects,
+} from '../utils/projectFilters'
+
+// Статистика проекта с главной — то же окно, что в проекте; загружается, только когда его открывают
+const StatsModal = defineAsyncComponent(() => import('../gantt/components/StatsModal.vue'))
 
 const projects = useProjectsStore()
 const auth = useAuthStore()
@@ -27,23 +34,58 @@ const dropTarget = ref(null)
 
 onMounted(() => projects.load().catch((err) => ui.error(err)))
 
+// ---------- фильтры и сортировка (запоминаются в браузере у каждого сотрудника) ----------
+const filtersKey = `puls.dashboard.${auth.user?.id || 0}`
+const filters = ref(readFilters())
+function readFilters() {
+  try { return normalizeProjectFilters(JSON.parse(localStorageGet(filtersKey) || 'null')) } catch { return { ...DEFAULT_PROJECT_FILTERS } }
+}
+watch(filters, (value) => localStorageSet(filtersKey, JSON.stringify(value)), { deep: true })
+// Направление, которого больше нет (удалено или закрыт доступ), список не сужает
+const directionFilter = computed(() => {
+  const d = filters.value.direction
+  return d && d !== 'none' && projects.loaded && !projects.directions.some((x) => String(x.id) === d) ? '' : d
+})
+const filtersActive = computed(() => projectFiltersActive({ ...filters.value, direction: directionFilter.value }))
+function resetFilters() {
+  filters.value = { ...DEFAULT_PROJECT_FILTERS, sort: filters.value.sort }
+}
+const stateCounts = computed(() => {
+  const counts = {}
+  for (const p of projects.projects) counts[projectState(p)] = (counts[projectState(p)] || 0) + 1
+  return counts
+})
+
 const groups = computed(() => {
   const q = search.value.trim().toLowerCase()
+  const f = { ...filters.value, direction: directionFilter.value }
+  const narrowed = Boolean(q || f.state || f.mine)
   return projects.grouped
-    .map((g) => ({ ...g, projects: q ? g.projects.filter((p) => p.title.toLowerCase().includes(q)) : g.projects }))
+    .filter((g) => directionMatches(g.direction?.id ?? null, f.direction))
+    .map((g) => ({
+      ...g,
+      projects: sortProjects(g.projects.filter((p) => (!q || p.title.toLowerCase().includes(q)) && matchesProjectFilters(p, f, auth.user)), f.sort),
+    }))
     // Пустое направление видно только администратору: остальным направление без их проектов ни к чему
-    .filter((g) => g.projects.length || (!q && g.direction && auth.isAdmin))
+    .filter((g) => g.projects.length || (!narrowed && g.direction && auth.isAdmin))
 })
 const total = computed(() => projects.projects.length)
 const query = computed(() => search.value.trim())
 const found = computed(() => groups.value.reduce((n, g) => n + g.projects.length, 0))
-const canReorder = computed(() => ['admin', 'manager'].includes(auth.user?.role) && !search.value)
+// Перетаскивание — только в порядке по умолчанию, без поиска и фильтров: иначе место карточки неочевидно
+const canReorder = computed(() => ['admin', 'manager'].includes(auth.user?.role) && !search.value && !filtersActive.value && filters.value.sort === 'order')
 
 // Тот же показатель, что «Средний прогресс» в окне «Статистика» основного плана (первой вкладки)
-function progress(project) {
-  const s = project.stats
-  if (!s || !s.total) return 0
-  return s.progress ?? Math.round((s.done / s.total) * 100)
+const progress = projectProgress
+
+// ---------- статистика основного плана, не входя в проект ----------
+const statsPlanId = ref(null)
+function mainPlanId(project) {
+  return project.stats?.planId || project.plans[0]?.id || null
+}
+function openStats(project) {
+  menu.value = null
+  statsPlanId.value = mainPlanId(project)
 }
 function progressTitle(project) {
   const s = project.stats
@@ -191,7 +233,7 @@ function onDragEnd() {
       <div>
         <h1 class="page-title">Проекты</h1>
         <div class="page-subtitle">
-          <template v-if="query">Найдено {{ found }} из {{ countLabel(total, 'проекта', 'проектов', 'проектов') }}</template>
+          <template v-if="query || filtersActive">Найдено {{ found }} из {{ countLabel(total, 'проекта', 'проектов', 'проектов') }}</template>
           <template v-else>{{ countLabel(total, 'проект', 'проекта', 'проектов') }}</template>
         </div>
       </div>
@@ -206,6 +248,32 @@ function onDragEnd() {
       </button>
     </div>
 
+    <div v-if="total" class="dash-filters" data-testid="dashboard-filters">
+      <select v-model="filters.direction" class="select" :class="{ 'is-set': directionFilter }" aria-label="Направление" data-testid="filter-direction">
+        <option value="">Все направления</option>
+        <option v-for="d in projects.directions" :key="d.id" :value="String(d.id)">{{ d.name }}</option>
+        <option value="none">Без направления</option>
+      </select>
+      <select v-model="filters.state" class="select" :class="{ 'is-set': filters.state }" aria-label="Состояние" data-testid="filter-state">
+        <option value="">Любое состояние</option>
+        <option v-for="s in PROJECT_STATES" :key="s.value" :value="s.value" :title="s.hint">{{ s.label }} · {{ stateCounts[s.value] || 0 }}</option>
+      </select>
+      <button
+        class="btn" :class="{ 'is-active': filters.mine }" type="button" :aria-pressed="filters.mine"
+        title="Проекты, которые вы создали или можете редактировать" data-testid="filter-mine-projects" @click="filters.mine = !filters.mine"
+      >
+        <AppIcon name="users" :size="15" /> Мои
+      </button>
+      <button v-if="filtersActive" class="btn btn-ghost" type="button" data-testid="dashboard-reset" @click="resetFilters">Сбросить</button>
+      <span class="spacer" />
+      <label class="sort">
+        <AppIcon name="sort" :size="15" class="muted" />
+        <select v-model="filters.sort" class="select" aria-label="Сортировка" data-testid="projects-sort">
+          <option v-for="s in PROJECT_SORTS" :key="s.value" :value="s.value" :title="s.hint">{{ s.label }}</option>
+        </select>
+      </label>
+    </div>
+
     <div v-if="projects.loading && !projects.loaded" class="skeleton-grid">
       <div v-for="n in 6" :key="n" class="card skeleton" />
     </div>
@@ -217,10 +285,14 @@ function onDragEnd() {
       <button v-if="auth.canCreateProjects" class="btn btn-primary" type="button" @click="openCreate()">Новый проект</button>
     </div>
 
-    <div v-else-if="query && !found" class="card empty-state" data-testid="projects-not-found">
+    <div v-else-if="(query || filtersActive) && !found" class="card empty-state" data-testid="projects-not-found">
       <h3>Ничего не найдено</h3>
-      <p>Нет проектов, в названии которых есть «{{ query }}».</p>
-      <button class="btn" type="button" @click="search = ''">Сбросить поиск</button>
+      <p v-if="query">Нет проектов, в названии которых есть «{{ query }}»{{ filtersActive ? ', с выбранными фильтрами' : '' }}.</p>
+      <p v-else>Нет проектов с выбранными фильтрами.</p>
+      <div class="empty-actions">
+        <button v-if="query" class="btn" type="button" @click="search = ''">Сбросить поиск</button>
+        <button v-if="filtersActive" class="btn" type="button" @click="resetFilters">Сбросить фильтры</button>
+      </div>
     </div>
 
     <section
@@ -250,6 +322,12 @@ function onDragEnd() {
           <router-link :to="`/projects/${project.id}`" class="card-link" :aria-label="project.title" draggable="false" />
           <div class="card-top">
             <h3 class="card-title">{{ project.title }}</h3>
+            <button
+              v-if="mainPlanId(project)" class="btn btn-ghost btn-icon btn-sm card-action" type="button" title="Статистика проекта"
+              aria-label="Статистика проекта" :data-testid="`project-stats-${project.id}`" @click.stop="openStats(project)"
+            >
+              <AppIcon name="chart" />
+            </button>
             <button v-if="project.access === 'manage'" class="btn btn-ghost btn-icon btn-sm card-menu" type="button" title="Действия" @click.stop="openMenu($event, project)">
               <AppIcon name="more" />
             </button>
@@ -282,9 +360,12 @@ function onDragEnd() {
     </section>
 
     <PopupMenu v-if="menu" :anchor="menu.anchor" align="end" @close="menu = null">
+      <button v-if="mainPlanId(menu.project)" class="menu-item" type="button" @click="openStats(menu.project)"><AppIcon name="chart" /> Статистика</button>
       <button class="menu-item" type="button" @click="openEdit(menu.project)"><AppIcon name="edit" /> Изменить</button>
       <button v-if="auth.isAdmin" class="menu-item is-danger" type="button" @click="removeProject(menu.project)"><AppIcon name="trash" /> Удалить</button>
     </PopupMenu>
+
+    <StatsModal v-if="statsPlanId" :key="statsPlanId" :plan-id="statsPlanId" @close="statsPlanId = null" />
 
     <BaseModal v-if="editor" :title="editor.mode === 'create' ? 'Новый проект' : 'Проект'" @close="editor = null">
       <form class="form-stack" @submit.prevent="saveEditor">
@@ -336,6 +417,14 @@ function onDragEnd() {
 .card-top { display: flex; align-items: flex-start; gap: 8px; }
 .card-title { font-size: 14.5px; font-weight: 650; line-height: 1.3; flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .card-menu { position: relative; z-index: 1; margin: -4px -6px 0 0; }
+.card-action { position: relative; z-index: 1; margin: -4px 0 0; color: var(--color-text-muted); }
+.card-action:hover { color: var(--color-primary-dark); }
+.dash-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: -6px 0 18px; }
+.dash-filters .select { width: auto; max-width: 240px; }
+.dash-filters .btn.is-active:hover:not(:disabled) { background: var(--color-primary-soft); border-color: #a9bdff; }
+.dash-filters .select.is-set { border-color: #c9d6ff; background-color: var(--color-primary-soft); color: var(--color-primary-dark); }
+.sort { display: inline-flex; align-items: center; gap: 6px; }
+.empty-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
 .card-subtitle { margin: -4px 0 0; color: var(--color-text-muted); font-size: 12.5px; }
 .progress { display: flex; align-items: center; gap: 8px; }
 .progress-bar { flex: 1; height: 6px; border-radius: 999px; background: #eef1f7; overflow: hidden; }
@@ -354,6 +443,12 @@ function onDragEnd() {
 @media (max-width: 768px) {
   .search { width: auto; flex: 1 1 200px; }
   .grid, .skeleton-grid { grid-template-columns: 1fr; }
+  .dash-filters { gap: 6px; }
+  .dash-filters .select { flex: 1 1 150px; min-width: 0; max-width: none; min-height: 40px; }
+  .dash-filters .btn { min-height: 40px; }
+  .dash-filters .spacer { display: none; }
+  .sort { flex: 1 1 150px; }
+  .sort .select { flex: 1; }
 }
 @media (hover: none) { .add-here { opacity: 1; } }
 .c-blue { background: #3b82f6; } .c-teal { background: #14b8a6; } .c-green { background: #22c55e; } .c-orange { background: #f97316; }
