@@ -46,11 +46,13 @@ case "${1:-loop}" in
     echo "[backup] $(date '+%F %T') база восстановлена из $src. Запустите приложение: docker compose start backend"
     ;;
   loop)
-    echo "[backup] ежедневная копия в ${BACKUP_HOUR:-03}:00, хранение ${BACKUP_RETENTION_DAYS:-30} дней"
+    # BACKUP_HOUR=3 и BACKUP_HOUR=03 — одно и то же; date +%H всегда с ведущим нулём
+    hour=$(printf '%02d' "$(echo "${BACKUP_HOUR:-03}" | sed 's/^0*//; s/^$/0/')")
+    echo "[backup] ежедневная копия в ${hour}:00, хранение ${BACKUP_RETENTION_DAYS:-30} дней"
     last=""
     while true; do
       today=$(date +%F)
-      if [ "$(date +%H)" = "${BACKUP_HOUR:-03}" ] && [ "$last" != "$today" ]; then
+      if [ "$(date +%H)" = "$hour" ] && [ "$last" != "$today" ]; then
         dump daily && last="$today"
         find "$DIR" -name 'puls_*_daily.dump' -mtime +"${BACKUP_RETENTION_DAYS:-30}" -delete
       fi
