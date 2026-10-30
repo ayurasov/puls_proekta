@@ -6,6 +6,7 @@ import { ROLE_LABELS } from '../../stores/auth'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
+import { countLabel } from '../../utils/format'
 
 const ui = useUiStore()
 const projects = useProjectsStore()
@@ -85,7 +86,7 @@ async function changeLevel(rule, value) {
   } catch (err) { ui.error(err) }
 }
 async function removeRules(ids) {
-  const ok = await confirm({ title: ids.length === 1 ? 'Отозвать доступ?' : `Отозвать доступы (${ids.length})?`, message: 'Сотрудники перестанут видеть эти проекты.', confirmText: 'Отозвать' })
+  const ok = await confirm({ title: ids.length === 1 ? 'Отозвать доступ?' : `Отозвать ${countLabel(ids.length, 'доступ', 'доступа', 'доступов')}?`, message: 'Сотрудники перестанут видеть эти проекты.', confirmText: 'Отозвать' })
   if (!ok) return
   try {
     await api.post('/access/delete', { ids })
@@ -162,7 +163,7 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
         <button class="btn btn-primary" type="button" :disabled="!grantCount || busy" @click="grant">
           Выдать доступ ({{ selected.users.size }} × {{ selected.projects.size + selected.directions.size }})
         </button>
-        <p class="muted small">Повторная выдача не создаёт дублей (в 1.0 одинаковые правила копились).</p>
+        <p class="muted small">Повторная выдача не создаёт дублей.</p>
       </section>
     </div>
 
@@ -215,7 +216,7 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
 </template>
 
 <style scoped>
-.grant { display: grid; grid-template-columns: 1fr 1.3fr 0.9fr; gap: 12px; align-items: start; }
+.grant { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) minmax(0, 0.9fr); gap: 12px; align-items: start; }
 .pane { padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .pane header { display: flex; align-items: center; justify-content: space-between; }
 .options { max-height: 58vh; overflow: auto; display: flex; flex-direction: column; }
@@ -239,5 +240,5 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
 .cell.edit { background: #e3f6ec; color: #1f7a4c; }
 .cell.manage { background: #fdf1dd; color: #a8670f; }
 .legend { padding: 8px 12px; }
-@media (max-width: 1100px) { .grant { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) { .grant { grid-template-columns: minmax(0, 1fr); } }
 </style>

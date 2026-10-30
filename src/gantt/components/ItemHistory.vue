@@ -32,7 +32,7 @@ watch(() => props.item.updatedRev, () => load())
         <div class="summary">{{ event.summary }}</div>
         <div class="muted small">
           {{ event.userName || 'система' }} · <span :title="formatDateTime(event.createdAt)">{{ formatRelative(event.createdAt) }}</span>
-          <span v-if="event.action === 'legacy'" class="badge">из 1.0</span>
+          <span v-if="event.action === 'legacy'" class="badge" title="Запись перенесена из прежней версии «Пульса Проекта»">до переноса</span>
         </div>
       </div>
     </div>

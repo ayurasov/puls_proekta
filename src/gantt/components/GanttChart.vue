@@ -5,9 +5,10 @@ import PopupMenu from '../../components/common/PopupMenu.vue'
 import { createChartContext, dependencyPaths, legendEntries, rowModel } from '../chartModel'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { dayX, fitZoom, nextZoom } from '../domain/layout'
-import { STATUSES, STATUS_BY_KEY, resolveColor } from '../domain/colors'
+import { EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, resolveColor, textColorOnWhite } from '../domain/colors'
 import { descendantKeys, parentOf } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
+import { countLabel } from '../../utils/format'
 
 const editor = inject('gantt')
 const actions = inject('ganttActions')
@@ -30,7 +31,8 @@ const resizing = ref(false)
 
 const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progress: 52 }
 const columns = computed(() => Object.entries(COLUMN_WIDTHS).filter(([key]) => view.columns[key]).map(([key, width]) => ({ key, width })))
-const nameWidth = computed(() => Math.max(180, view.gridWidth))
+const MIN_NAME_WIDTH = 140
+const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
 const gridWidth = computed(() => nameWidth.value + columns.value.reduce((s, c) => s + c.width, 0))
 const rowHeight = computed(() => editor.settings.rowHeight || 44)
 const display = computed(() => editor.settings.display)
@@ -59,7 +61,28 @@ const arrows = computed(() => {
   const all = rows.value.map((row, i) => (i >= windowRange.value.start - 60 && i < windowRange.value.end + 60 ? rowModel(row, i, ctx.value, preview.value) : null)).filter(Boolean)
   return dependencyPaths(all, ctx.value)
 })
-const legend = computed(() => (display.value.legendEnabled ? legendEntries(editor.itemList, display.value) : []))
+const legend = computed(() => (display.value.legendEnabled ? legendEntries(editor.itemList, display.value, editor.settings.categories || []) : []))
+// Легенда — в одну строку: что не помещается, открывается кнопкой «+N»
+const legendMenu = ref(null)
+let legendCanvas = null
+const legendFit = computed(() => {
+  const entries = legend.value
+  if (!entries.length) return { shown: [], hidden: [] }
+  legendCanvas = legendCanvas || document.createElement('canvas')
+  const g = legendCanvas.getContext('2d')
+  g.font = `11.5px ${getComputedStyle(document.body).fontFamily}`
+  const available = viewport.width - 28
+  let used = 0
+  let count = 0
+  for (const [i, entry] of entries.entries()) {
+    const w = Math.min(220, g.measureText(entry.label).width) + 22 + (i ? 14 : 0)
+    const reserve = i < entries.length - 1 ? 52 : 0
+    if (used + w + reserve > available && count) break
+    used += w
+    count += 1
+  }
+  return { shown: entries.slice(0, count), hidden: entries.slice(count) }
+})
 const selectedKey = computed(() => view.selectedKey)
 const todayColor = computed(() => resolveColor(editor.settings.today?.color || 'red', 'red').color)
 const assigneeName = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
@@ -152,7 +175,7 @@ function startResize(event) {
   const startX = event.clientX
   const startWidth = nameWidth.value
   resizing.value = true
-  const move = (e) => { view.gridWidth = Math.max(180, Math.min(900, startWidth + e.clientX - startX)) }
+  const move = (e) => { view.gridWidth = Math.max(MIN_NAME_WIDTH, Math.min(900, startWidth + e.clientX - startX)) }
   const up = () => {
     resizing.value = false
     window.removeEventListener('pointermove', move)
@@ -165,20 +188,33 @@ function startResize(event) {
   window.addEventListener('pointerup', up)
 }
 
+/** Двойной щелчок по краю колонки — ширина по самому длинному названию среди показанных строк. */
+let measureCanvas = null
+function autoFitNameColumn() {
+  measureCanvas = measureCanvas || document.createElement('canvas')
+  const g = measureCanvas.getContext('2d')
+  g.font = `700 12.5px ${getComputedStyle(document.body).fontFamily}`
+  let widest = 0
+  for (const row of rows.value) widest = Math.max(widest, g.measureText(row.item.name || '').width + row.depth * 16)
+  // ручка, стрелка, значок, промежутки и кнопка карточки
+  view.gridWidth = Math.round(Math.max(160, Math.min(640, widest + 112)))
+  editor.saveView()
+}
+
 // ---------- строки слева ----------
 function metaLine(item) {
   const parts = []
   if (item.type === 'task') {
     const st = STATUS_BY_KEY[item.status || 'new']
-    parts.push({ text: st.label, color: st.color })
+    parts.push({ text: st.label, color: st.text })
     if (item.assigneeKey) parts.push({ text: assigneeName(item.assigneeKey) })
     if (item.category) parts.push({ text: item.category })
-    if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? '#e5484d' : '#2fa96b' })
+    if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? LATE_TEXT : EARLY_TEXT })
     if (item.dependencyLag) parts.push({ text: `лаг ${item.dependencyLag > 0 ? '+' : ''}${item.dependencyLag} д` })
     if (item.commentCount) parts.push({ text: `💬 ${item.commentCount}` })
   } else if (item.type === 'group') {
     const model = rows.value.find((r) => r.item.key === item.key)
-    if (model?.childCount) parts.push({ text: `${model.childCount} ${model.childCount === 1 ? 'элемент' : 'эл.'}` })
+    if (model?.childCount) parts.push({ text: countLabel(model.childCount, 'элемент', 'элемента', 'элементов') })
   } else if (item.type === 'milestone') {
     parts.push({ text: formatDay(item.date) })
     if (item.assigneeKey) parts.push({ text: assigneeName(item.assigneeKey) })
@@ -223,14 +259,13 @@ function finishRename(save = true) {
   editor.updateItem(key, { name }, 'Переименование')
 }
 
+// Строка быстрого добавления — под последней строкой плана, поэтому задача добавляется в конец плана
+// (на верхний уровень), а не после выбранной строки, которая может быть в свёрнутой группе.
+// «+ Задача» и Insert по-прежнему добавляют после выбранной строки.
 function quickAdd() {
   const name = quickName.value.trim()
   if (!name) return
-  const selected = view.selectedKey && state.items[view.selectedKey]
-  let options = {}
-  if (selected?.type === 'group') options = { parentKey: selected.key }
-  else if (selected) options = { afterKey: selected.key }
-  const key = editor.createItem('task', { name }, options)
+  const key = editor.createItem('task', { name }, { parentKey: null })
   editor.revealItem(key)
   editor.select(key)
   quickName.value = ''
@@ -404,7 +439,7 @@ function onBarUp(event) {
   } else if (d.kind === 'milestone') {
     editor.updateItem(d.key, finalPreview[d.key], `Сдвиг вехи «${item.name}»`)
   } else if (d.kind === 'group') {
-    editor.updateItems(Object.entries(finalPreview).map(([key, fields]) => ({ key, fields })), `Сдвиг группы «${item.name}» на ${d.delta > 0 ? '+' : ''}${d.delta} д`)
+    editor.updateItems(Object.entries(finalPreview).map(([key, fields]) => ({ key, fields })), `Сдвиг группы «${item.name}» на ${d.delta > 0 ? '+' : ''}${d.delta} дн.`)
   }
 }
 
@@ -430,28 +465,28 @@ const tooltipData = computed(() => {
   const fields = display.value.tooltipFields || []
   const rowsOut = []
   if (item.type === 'task') {
-    if (fields.includes('status')) rowsOut.push(['Статус', STATUS_BY_KEY[item.status || 'new'].label, STATUS_BY_KEY[item.status || 'new'].color])
+    if (fields.includes('status')) rowsOut.push(['Статус', STATUS_BY_KEY[item.status || 'new'].label, STATUS_BY_KEY[item.status || 'new'].text])
     if (fields.includes('dates')) {
-      rowsOut.push(['Срок', `${formatDay(item.start)} — ${formatDay(item.end)} (${diffDays(item.start, item.end) + 1} д)`])
-      if (item.offset) rowsOut.push(['Сдвиг', `${item.offset > 0 ? '+' : ''}${item.offset} д, до ${formatDay(addDays(item.end, item.offset))}`])
+      rowsOut.push(['Срок', `${formatDay(item.start)} — ${formatDay(item.end)} (${diffDays(item.start, item.end) + 1} дн.)`])
+      if (item.offset) rowsOut.push(['Сдвиг', `${item.offset > 0 ? '+' : ''}${item.offset} дн., до ${formatDay(addDays(item.end, item.offset))}`])
       if (item.completedDate) rowsOut.push(['Завершена', formatDay(item.completedDate)])
     }
     if (fields.includes('progress') && item.progress) rowsOut.push(['Прогресс', `${item.progress}%`])
     if (fields.includes('dependency') && item.dependencyKey && editor.source.items[item.dependencyKey]) {
       rowsOut.push(['Зависит от', editor.source.items[item.dependencyKey].name])
     }
-    if (fields.includes('assignee') && item.assigneeKey) rowsOut.push(['Ответственный', assigneeName(item.assigneeKey)])
+    if (fields.includes('assignee') && item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
     if (item.category) rowsOut.push(['Категория', item.category])
   } else if (item.type === 'milestone') {
     rowsOut.push(['Дата', formatDay(item.date)])
     if (item.comment) rowsOut.push(['Комментарий', item.comment])
-    if (item.assigneeKey) rowsOut.push(['Ответственный', assigneeName(item.assigneeKey)])
+    if (item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
   } else {
     const model = models.value.find((m) => m.key === item.key)
     if (model?.group) {
       rowsOut.push(['Сроки', model.group.label])
       rowsOut.push(['Задач', `${model.group.count}, завершено ${model.group.done}`])
-      if (model.group.offset) rowsOut.push(['Сдвиг', `${model.group.offset > 0 ? '+' : ''}${model.group.offset} д`])
+      if (model.group.offset) rowsOut.push(['Сдвиг', `${model.group.offset > 0 ? '+' : ''}${model.group.offset} дн.`])
     }
   }
   if (fields.includes('lastChange') && item.updatedAt) {
@@ -532,9 +567,6 @@ function noteLabel(note) {
 
 <template>
   <div class="gantt" :class="{ 'is-resizing': resizing, 'is-dragging': drag?.moved || rowDrag?.active }">
-    <div v-if="legend.length && display.legendPosition === 'top'" class="legend">
-      <span v-for="entry in legend" :key="entry.label" class="legend-item"><span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" />{{ entry.label }}</span>
-    </div>
     <div ref="scroller" class="scroller scroll-thin" @scroll="onScroll" @wheel="onWheel">
       <div class="canvas" :style="{ width: gridWidth + ctx.width + 'px', height: ctx.headerHeight + bodyHeight + 'px' }">
         <!-- Заголовок -->
@@ -543,13 +575,13 @@ function noteLabel(note) {
             <div class="corner-cols" :style="{ height: ctx.headerHeight + 'px' }">
               <div class="col-head col-name" :style="{ width: nameWidth + 'px' }">
                 <span>Задача</span>
-                <span class="muted small">{{ rows.length }} {{ rows.length === 1 ? 'строка' : 'строк' }}</span>
+                <span class="muted small">{{ countLabel(rows.length, 'строка', 'строки', 'строк') }}</span>
               </div>
               <div v-for="col in columns" :key="col.key" class="col-head" :style="{ width: col.width + 'px' }">
-                {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Ответственный', progress: '%' }[col.key] }}
+                {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Исполнитель', progress: '%' }[col.key] }}
               </div>
             </div>
-            <div class="resizer" title="Ширина колонки" @pointerdown="startResize" />
+            <div class="resizer" title="Ширина колонки: перетащите; двойной щелчок — по самому длинному названию" @pointerdown="startResize" @dblclick="autoFitNameColumn" />
           </div>
           <svg class="header-svg" :width="ctx.width" :height="ctx.headerHeight">
             <g class="top-row">
@@ -572,7 +604,7 @@ function noteLabel(note) {
                  @click="label.kind === 'milestone' ? openPanel(state.items[label.key]) : actions.openNoteEditor({ noteKey: label.key })"
                  @pointermove="updateTooltip" @pointerleave="tooltip = null">
                 <path v-if="label.kind === 'note'" :d="`M${label.x - 4} ${6 + label.level * 15} l4 9 l4 -9 a4 4 0 1 0 -8 0 Z`" :fill="label.color" />
-                <text :x="label.x + (label.kind === 'note' ? 7 : 0)" :y="16 + label.level * 15" :fill="label.color" :text-anchor="label.kind === 'note' ? 'start' : 'middle'" class="lane-text">
+                <text :x="label.x + (label.kind === 'note' ? 7 : 0)" :y="16 + label.level * 15" :fill="label.textColor || label.color" :text-anchor="label.kind === 'note' ? 'start' : 'middle'" class="lane-text">
                   {{ label.kind === 'note' ? noteLabel(label) : label.text }}
                 </text>
               </g>
@@ -599,13 +631,13 @@ function noteLabel(note) {
               <div class="cell-name" :style="{ width: nameWidth + 'px' }">
                 <span v-if="editor.canEdit" class="handle" title="Перетащить" @pointerdown.stop="onHandleDown($event, row.item)"><AppIcon name="grip" :size="14" /></span>
                 <span class="indent" :style="{ width: row.depth * 16 + 'px' }" />
-                <button v-if="row.hasChildren" class="caret" type="button" :title="view.collapsed.has(row.item.key) && !editor.filtersActive ? 'Развернуть' : 'Свернуть'" @click.stop="editor.toggleCollapse(row.item.key)" @dblclick.stop>
+                <button v-if="row.hasChildren" class="caret" type="button" :title="view.collapsed.has(row.item.key) && !editor.filtersActive ? 'Развернуть' : 'Свернуть'" @mousedown.prevent @click.stop="editor.toggleCollapse(row.item.key)" @dblclick.stop>
                   <AppIcon :name="view.collapsed.has(row.item.key) && !editor.filtersActive ? 'chevronRight' : 'chevronDown'" :size="13" />
                 </button>
                 <span v-else class="caret-space" />
                 <span class="mark">
                   <AppIcon v-if="row.item.type === 'group'" name="folder" :size="14" />
-                  <AppIcon v-else-if="row.item.type === 'milestone'" name="diamond" :size="13" />
+                  <AppIcon v-else-if="row.item.type === 'milestone'" name="diamond" :size="13" :style="{ color: textColorOnWhite(resolveColor(row.item.lineColor || row.item.color, 'teal').color) }" />
                   <span v-else class="status-dot" :style="{ background: STATUS_BY_KEY[row.item.status || 'new'].color }" />
                 </span>
                 <div class="name-block">
@@ -622,14 +654,14 @@ function noteLabel(note) {
                     </div>
                   </template>
                 </div>
-                <button class="open-btn" type="button" title="Открыть карточку" @click.stop="openPanel(row.item)"><AppIcon name="detail" :size="14" /></button>
+                <button class="open-btn" type="button" title="Открыть карточку (Enter)" @mousedown.prevent @click.stop="openPanel(row.item)"><AppIcon name="detail" :size="14" /></button>
               </div>
               <div v-for="col in columns" :key="col.key" class="cell" :style="{ width: col.width + 'px' }">{{ columnValue(row.item, col.key) }}</div>
             </div>
             <form v-if="extraRows" class="grid-row quick-add" :style="{ top: rows.length * rowHeight + 'px', height: rowHeight + 'px' }" @submit.prevent="quickAdd">
               <div class="cell-name" :style="{ width: nameWidth + 'px' }">
                 <AppIcon name="plus" :size="14" class="muted" />
-                <input v-model="quickName" class="quick-input" placeholder="Новая задача — введите название и Enter" maxlength="5000" data-testid="quick-add" />
+                <input v-model="quickName" class="quick-input" placeholder="Новая задача…" title="Название новой задачи и Enter — задача добавится в конец плана" aria-label="Новая задача в конец плана" maxlength="5000" data-testid="quick-add" />
               </div>
             </form>
             <div v-if="!rows.length" class="grid-empty muted">
@@ -663,17 +695,17 @@ function noteLabel(note) {
                 <g v-if="m.bar" class="task" :class="[`st-${m.bar.status}`, { selected: m.key === selectedKey, editable: editor.canEdit }]" :data-key="m.key" data-kind="task" :data-tip="m.key">
                   <rect v-if="m.bar.tail?.kind === 'late'" class="tail late" :x="m.bar.tail.x - 3" :y="m.bar.y + 3" :width="m.bar.tail.w + 3" :height="m.bar.h - 6" rx="4" />
                   <rect class="bar" :x="m.bar.x" :y="m.bar.y" :width="m.bar.w" :height="m.bar.h" rx="6" :fill="m.bar.fill" />
-                  <rect v-if="m.bar.progress" class="progress" :x="m.bar.x" :y="m.bar.y" :width="m.bar.w * m.bar.progress / 100" :height="m.bar.h" rx="6" />
+                  <rect v-if="m.bar.progress" class="progress" :x="m.bar.x + 2" :y="m.bar.y + m.bar.h - 6" :width="Math.max(0, (m.bar.w - 4) * m.bar.progress / 100)" height="4" rx="2" />
                   <rect v-if="m.bar.tail?.kind === 'early'" class="tail early" :x="m.bar.tail.x" :y="m.bar.y" :width="m.bar.tail.w" :height="m.bar.h" rx="6" />
                   <rect v-if="m.bar.tail" class="tail-hatch" :x="m.bar.tail.kind === 'late' ? m.bar.tail.x : m.bar.tail.x" :y="m.bar.tail.kind === 'late' ? m.bar.y + 3 : m.bar.y" :width="m.bar.tail.w" :height="m.bar.tail.kind === 'late' ? m.bar.h - 6 : m.bar.h" fill="url(#hatch-late)" />
-                  <text class="bar-text" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + 16" :fill="m.bar.text">{{ m.bar.label }}</text>
-                  <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + 16">{{ m.bar.tailLabel }}</text>
-                  <path v-if="m.bar.status === 'done' && m.bar.w > 26" class="done-check" :d="`M${m.bar.x + m.bar.w - 15} ${m.bar.y + 12} l3 3 l6 -6`" />
+                  <text class="bar-text" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + m.bar.h / 2 + 3.5" :fill="m.bar.text">{{ m.bar.label }}</text>
+                  <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + m.bar.h / 2 + 3.5">{{ m.bar.tailLabel }}</text>
+                  <path v-if="m.bar.status === 'done' && m.bar.w > 26" class="done-check" :d="`M${m.bar.x + m.bar.w - 15} ${m.bar.y + m.bar.h / 2} l3 3 l6 -6`" />
                   <rect v-if="m.bar.status === 'done' || m.bar.status === 'blocked' || m.key === selectedKey" class="outline" :x="m.bar.x + 1" :y="m.bar.y + 1" :width="m.bar.w - 2" :height="m.bar.h - 2" rx="5" />
                   <a v-if="m.bar.jira && m.bar.w > 36" :href="m.bar.jira" target="_blank" rel="noopener noreferrer" class="jira" @pointerdown.stop @click.stop>
                     <title>Открыть в Jira</title>
-                    <rect :x="m.bar.x + m.bar.w - 19" :y="m.bar.y + 4" width="15" height="15" rx="4" />
-                    <path :d="`M${m.bar.x + m.bar.w - 14} ${m.bar.y + 8} h5 v5 M${m.bar.x + m.bar.w - 9} ${m.bar.y + 8} l-5 5`" />
+                    <rect :x="m.bar.x + m.bar.w - 19" :y="m.bar.y + m.bar.h / 2 - 7.5" width="15" height="15" rx="4" />
+                    <path :d="`M${m.bar.x + m.bar.w - 14} ${m.bar.y + m.bar.h / 2 - 3.5} h5 v5 M${m.bar.x + m.bar.w - 9} ${m.bar.y + m.bar.h / 2 - 3.5} l-5 5`" />
                   </a>
                   <template v-if="editor.canEdit">
                     <rect class="handle-zone" data-handle="left" :x="m.bar.x - 2" :y="m.bar.y" width="8" :height="m.bar.h" />
@@ -693,7 +725,7 @@ function noteLabel(note) {
                 <g v-for="note in m.notes" :key="note.key" class="note" :data-tip="note.key" data-tip-kind="note" @click.stop="actions.openNoteEditor({ noteKey: note.key })" @pointerdown.stop>
                   <path :d="`M${note.x - 5} ${note.y + 5} a5 5 0 1 1 10 0 c0 3 -5 9 -5 9 c0 0 -5 -6 -5 -9 Z`" :fill="note.color" />
                   <circle :cx="note.x" :cy="note.y + 5" r="1.8" fill="#fff" />
-                  <text :x="note.x + 8" :y="note.y + 9" :fill="note.color" class="note-text">{{ noteLabel(note).length > 40 ? noteLabel(note).slice(0, 39) + '…' : noteLabel(note) }}</text>
+                  <text :x="note.x + 8" :y="note.y + 9" :fill="note.textColor || note.color" class="note-text">{{ noteLabel(note).length > 40 ? noteLabel(note).slice(0, 39) + '…' : noteLabel(note) }}</text>
                 </g>
               </g>
             </g>
@@ -713,9 +745,20 @@ function noteLabel(note) {
         </div>
       </div>
     </div>
-    <div v-if="legend.length && display.legendPosition !== 'top'" class="legend">
-      <span v-for="entry in legend" :key="entry.label" class="legend-item"><span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" />{{ entry.label }}</span>
+    <div v-if="legend.length" class="legend" :class="{ 'is-top': display.legendPosition === 'top' }" data-testid="legend">
+      <span v-for="entry in legendFit.shown" :key="entry.kind + entry.label + entry.color" class="legend-item" :title="entry.title || entry.label">
+        <span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" /><span class="legend-label">{{ entry.label }}</span>
+      </span>
+      <button v-if="legendFit.hidden.length" class="legend-more" type="button" :title="`Ещё ${legendFit.hidden.length} в легенде`" @click="legendMenu = legendMenu ? null : $event.currentTarget">
+        +{{ legendFit.hidden.length }}
+      </button>
     </div>
+    <PopupMenu v-if="legendMenu" :anchor="legendMenu" align="end" :min-width="220" @close="legendMenu = null">
+      <div class="menu-label">Легенда</div>
+      <div v-for="entry in legendFit.hidden" :key="'more' + entry.kind + entry.label + entry.color" class="legend-item legend-menu-item" :title="entry.title || entry.label">
+        <span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" /><span class="legend-label">{{ entry.label }}</span>
+      </div>
+    </PopupMenu>
 
     <Teleport to="body">
       <div v-if="tooltipData && !drag" class="tooltip gantt-tooltip" :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }">
@@ -817,7 +860,7 @@ function noteLabel(note) {
 .caret:hover { background: #e6eaf3; color: var(--color-text); }
 .caret-space { width: 18px; flex-shrink: 0; }
 .mark { width: 16px; display: flex; align-items: center; justify-content: center; color: var(--color-text-muted); flex-shrink: 0; }
-.type-milestone .mark { color: #0f9b8e; }
+.type-milestone .mark { color: #0f766e; }
 .name-block { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
 .name { font-size: 12.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .type-group .name { font-weight: 700; }
@@ -830,6 +873,7 @@ function noteLabel(note) {
 .rename-input { width: 100%; }
 .quick-add { background: transparent; border-bottom: 0; }
 .quick-add .cell-name { padding-left: 30px; gap: 8px; }
+.quick-input { min-width: 0; text-overflow: ellipsis; }
 .quick-input { flex: 1; border: 0; background: transparent; font-size: 12.5px; padding: 6px 4px; outline: none; color: var(--color-text); }
 .quick-input:focus { background: var(--color-surface-2); border-radius: 6px; }
 .grid-empty { position: absolute; top: 60px; left: 0; right: 0; text-align: center; font-size: 13px; }
@@ -845,12 +889,12 @@ function noteLabel(note) {
 .gantt.is-dragging .task.editable { cursor: grabbing; }
 .bar { transition: filter 0.12s; }
 .task:hover .bar { filter: brightness(1.06) drop-shadow(0 2px 4px rgba(20, 25, 40, 0.18)); }
-.progress { fill: rgba(0, 0, 0, 0.22); pointer-events: none; }
+.progress { fill: rgba(0, 0, 0, 0.3); pointer-events: none; }
 .bar-text { font-size: 10px; font-weight: 700; text-anchor: middle; pointer-events: none; }
 .tail.late { fill: #ef4444; opacity: 0.6; }
 .tail.early { fill: #22c55e; opacity: 0.7; }
 .tail-hatch { pointer-events: none; }
-.tail-text { font-size: 9.5px; font-weight: 700; fill: #c53030; pointer-events: none; }
+.tail-text { font-size: 9.5px; font-weight: 700; fill: #b91c1c; pointer-events: none; }
 .st-done .bar { opacity: 0.78; }
 .st-done .outline { fill: none; stroke: #22c55e; stroke-width: 2.5; }
 .st-blocked .bar { opacity: 0.7; }
@@ -879,10 +923,21 @@ function noteLabel(note) {
 .copy-ghost rect { fill: rgba(79, 124, 255, 0.25); stroke: var(--color-primary); stroke-dasharray: 4 3; pointer-events: none; }
 .flash .bar { animation: flash-bar 2.4s ease; }
 @keyframes flash-bar { 0%, 30% { filter: drop-shadow(0 0 6px #facc15); } 100% { filter: none; } }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 14px; border-top: 1px solid var(--color-border); font-size: 11.5px; color: var(--color-text-secondary); flex-shrink: 0; }
-.legend-item { display: inline-flex; align-items: center; gap: 6px; }
-.legend-bar { width: 16px; height: 8px; border-radius: 2px; }
-.legend-diamond { width: 8px; height: 8px; transform: rotate(45deg); }
+/* Сенсорный экран: ручки перетаскивания не занимают места, кнопка карточки видна всегда */
+@media (hover: none) {
+  .handle { display: none; }
+  .open-btn { display: none; }
+  .grid-row.selected .open-btn { display: flex; opacity: 1; width: 32px; height: 32px; }
+}
+.legend { display: flex; flex-wrap: nowrap; align-items: center; gap: 14px; padding: 5px 14px; border-top: 1px solid var(--color-border); font-size: 11.5px; color: var(--color-text-secondary); flex-shrink: 0; overflow: hidden; min-height: 28px; }
+.legend.is-top { order: -1; border-top: 0; border-bottom: 1px solid var(--color-border); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 0; }
+.legend-label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend-bar { width: 16px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.legend-diamond { width: 8px; height: 8px; transform: rotate(45deg); flex-shrink: 0; }
+.legend-more { border: 1px solid var(--color-border); background: var(--color-surface); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; color: var(--color-text-secondary); flex-shrink: 0; }
+.legend-more:hover { border-color: var(--color-border-strong); color: var(--color-text); }
+.legend-menu-item { display: flex; padding: 6px 10px; font-size: 12.5px; }
 </style>
 
 <style>

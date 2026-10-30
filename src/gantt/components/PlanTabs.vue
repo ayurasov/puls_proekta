@@ -1,5 +1,5 @@
 <script setup>
-import { nextTick, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { api, saveBlob } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
@@ -28,6 +28,7 @@ const renameValue = ref('')
 const fileInput = ref(null)
 const dragId = ref(null)
 const dropBefore = ref(null)
+const activeArchived = computed(() => props.archivedPlans.find((p) => p.id === props.activePlanId) || null)
 
 function openMenu(type, event, plan = null) {
   menu.value = { type, plan, anchor: event.currentTarget, x: event.clientX, y: event.clientY, point: event.type === 'contextmenu' }
@@ -138,14 +139,30 @@ async function removePlan(plan) {
   menu.value = null
   const ok = await confirm({
     title: `Удалить план «${plan.title}»?`,
-    message: 'План переместится в корзину. Администратор сможет вернуть его или удалить навсегда.',
+    message: 'План переместится в корзину. Вернуть его можно кнопкой «Отменить» в уведомлении или из корзины.',
     confirmText: 'В корзину',
   })
   if (!ok) return
   try {
     await api.delete(`/plans/${plan.id}`)
+    if (plan.id === props.activePlanId) {
+      const next = props.openPlans.find((p) => p.id !== plan.id)
+      if (next) emit('open', next.id)
+    }
     emit('changed')
-    ui.success('План в корзине')
+    ui.toast({
+      title: `План «${plan.title}» в корзине`, kind: 'success', timeout: 8000,
+      action: { label: 'Отменить', handler: () => restorePlan(plan) },
+    })
+  } catch (err) { ui.error(err) }
+}
+
+async function restorePlan(plan) {
+  try {
+    await api.post(`/plans/${plan.id}/restore`)
+    emit('changed')
+    if (!plan.isArchived) emit('open', plan.id)
+    ui.success('План восстановлен', plan.title)
   } catch (err) { ui.error(err) }
 }
 
@@ -203,7 +220,10 @@ async function onDrop() {
         <AppIcon name="plus" :size="14" />
       </button>
     </div>
-    <button v-if="archivedPlans.length" class="btn btn-ghost btn-sm archive-btn" type="button" @click="openMenu('archive', $event)">
+    <button
+      v-if="archivedPlans.length" class="btn btn-ghost btn-sm archive-btn" :class="{ 'is-active': activeArchived }" type="button"
+      :title="activeArchived ? `Открыт архивный план «${activeArchived.title}»` : 'Архивные планы'" @click="openMenu('archive', $event)"
+    >
       <AppIcon name="archive" :size="14" /> Архив · {{ archivedPlans.length }}
     </button>
     <div id="plan-actions-slot" class="plan-actions" />
@@ -223,13 +243,14 @@ async function onDrop() {
       <template v-if="canEdit && openPlans.length > 1">
         <div class="menu-separator" />
         <button class="menu-item" type="button" @click="archive(menu.plan)"><AppIcon name="archive" /> Убрать в архив</button>
+        <button v-if="canManage" class="menu-item is-danger" type="button" data-testid="plan-delete" @click="removePlan(menu.plan)"><AppIcon name="trash" /> Удалить</button>
       </template>
     </PopupMenu>
 
     <PopupMenu v-if="menu?.type === 'archive'" :anchor="menu.anchor" align="end" :min-width="300" @close="menu = null">
       <div class="menu-label">Архивные планы</div>
       <div v-for="plan in archivedPlans" :key="plan.id" class="archived-row">
-        <button class="menu-item" type="button" @click="emit('open', plan.id); menu = null">
+        <button class="menu-item" :class="{ 'is-current': plan.id === activePlanId }" type="button" @click="emit('open', plan.id); menu = null">
           <AppIcon name="archive" /> <span class="ellipsis">{{ plan.title }}</span>
         </button>
         <button v-if="canEdit" class="btn btn-ghost btn-sm" type="button" title="Вернуть во вкладки" @click="unarchive(plan)"><AppIcon name="unarchive" :size="14" /></button>
@@ -256,6 +277,14 @@ async function onDrop() {
 .plan-tab .input { margin: 4px 0 6px; width: 220px; }
 .tab-add { margin-bottom: 4px; }
 .archive-btn { align-self: center; flex-shrink: 0; color: var(--color-text-secondary); }
+.archive-btn.is-active { color: var(--color-primary-dark); }
 .archived-row { display: flex; align-items: center; gap: 2px; }
 .archived-row .menu-item { flex: 1; min-width: 0; }
+@media (max-width: 768px) {
+  .plan-tabs { padding: 0 6px; gap: 4px; }
+  .tab-button { padding: 11px 10px 10px; }
+  .tab-menu { min-width: 32px; min-height: 32px; }
+  .archive-btn { padding: 0 8px; }
+}
+.archived-row .menu-item.is-current { background: var(--color-primary-soft); color: var(--color-primary-dark); font-weight: 600; }
 </style>

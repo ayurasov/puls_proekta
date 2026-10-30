@@ -5,6 +5,8 @@ const props = defineProps({
   user: { type: Object, default: null },
   size: { type: Number, default: 28 },
   title: { type: String, default: '' },
+  // Свой цвет фона (например, цвет исполнителя плана) вместо цвета по имени
+  color: { type: String, default: null },
 })
 
 const PALETTE = ['#4f7cff', '#2fa96b', '#e8a13a', '#8b5cf6', '#ec4899', '#0ea5a4', '#ef6c3a', '#64748b']
@@ -13,6 +15,7 @@ const initials = computed(() => {
   return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?'
 })
 const color = computed(() => {
+  if (props.color) return props.color
   const name = props.user?.name || ''
   let hash = 0
   for (const ch of name) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0
@@ -21,7 +24,7 @@ const color = computed(() => {
 </script>
 
 <template>
-  <span class="avatar" :style="{ width: size + 'px', height: size + 'px', fontSize: Math.round(size * 0.4) + 'px', background: user?.avatarUrl ? 'transparent' : color }" :title="title || user?.name">
+  <span class="avatar" :style="{ width: size + 'px', height: size + 'px', fontSize: Math.round(size * 0.4) + 'px', background: user?.avatarUrl ? 'transparent' : color, boxShadow: user?.avatarUrl && props.color ? `0 0 0 2px ${props.color}` : null }" :title="title || user?.name">
     <img v-if="user?.avatarUrl" :src="user.avatarUrl" alt="" loading="lazy" />
     <span v-else>{{ initials }}</span>
   </span>

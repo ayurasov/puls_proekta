@@ -29,10 +29,17 @@ async function place(initial = false) {
     left = props.align === 'end' ? rect.right - el.offsetWidth : rect.left
     top = rect.bottom + 4
   }
+  // Меню не шире и не выше окна (.menu: max-height и прокрутка) и целиком в его пределах
   const maxLeft = window.innerWidth - el.offsetWidth - 8
   const maxTop = window.innerHeight - el.offsetHeight - 8
-  if (top > maxTop && props.anchor) top = props.anchor.getBoundingClientRect().top - el.offsetHeight - 4
-  style.value = { left: Math.max(8, Math.min(left, maxLeft)) + 'px', top: Math.max(8, Math.min(top, maxTop)) + 'px', minWidth: props.minWidth + 'px' }
+  if (top > maxTop && props.anchor) {
+    const above = props.anchor.getBoundingClientRect().top - el.offsetHeight - 4
+    if (above >= 8) top = above
+  }
+  style.value = {
+    left: Math.max(8, Math.min(left, maxLeft)) + 'px', top: Math.max(8, Math.min(top, maxTop)) + 'px',
+    minWidth: `min(${props.minWidth}px, calc(100vw - 16px))`,
+  }
   if (initial === true) el.querySelector('.menu-item:not(:disabled)')?.focus({ preventScroll: true })
 }
 
@@ -41,11 +48,16 @@ function onPointer(event) {
 }
 function onKey(event) {
   if (event.key === 'Escape') { event.stopPropagation(); emit('close'); return }
-  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+  // Стрелки, Home и End ходят по пунктам меню и дальше не уходят: строки диаграммы под меню не переключаются
+  if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
     event.preventDefault()
+    event.stopPropagation()
     const items = [...(menu.value?.querySelectorAll('.menu-item:not(:disabled)') || [])]
+    if (!items.length) return
     const index = items.indexOf(document.activeElement)
-    const next = event.key === 'ArrowDown' ? (index + 1) % items.length : (index - 1 + items.length) % items.length
+    let next = event.key === 'ArrowDown' ? (index + 1) % items.length : (index - 1 + items.length) % items.length
+    if (event.key === 'Home') next = 0
+    if (event.key === 'End') next = items.length - 1
     items[next]?.focus()
   }
 }

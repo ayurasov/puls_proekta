@@ -22,7 +22,13 @@ const form = ref({
   showDate: existing.value?.showDate || false,
 })
 const readonly = computed(() => !editor.canEdit)
-const rows = computed(() => editor.itemList.map((i) => ({ key: i.key, name: i.name })))
+const rows = computed(() => editor.visibleRows.map((r) => ({ key: r.item.key, name: r.item.name })))
+// Длинный план — над списком строк поле поиска (выбранная строка остаётся в списке)
+const rowQuery = ref('')
+const shownRows = computed(() => {
+  const q = rowQuery.value.trim().toLowerCase()
+  return q ? rows.value.filter((r) => r.key === form.value.rowKey || r.name.toLowerCase().includes(q)) : rows.value
+})
 
 function save() {
   if (!form.value.date || !form.value.text.trim()) return
@@ -43,13 +49,14 @@ async function remove() {
     <form class="form-stack" @submit.prevent="save">
       <div class="form-grid">
         <label class="field"><span class="field-label">Дата</span><input v-model="form.date" class="input" type="date" :disabled="readonly" /></label>
-        <label class="field">
+        <div class="field">
           <span class="field-label">Привязка</span>
-          <select v-model="form.rowKey" class="select" :disabled="readonly">
+          <input v-if="!readonly && rows.length > 25" v-model="rowQuery" class="input input-sm" type="search" placeholder="Найти строку…" aria-label="Поиск строки" />
+          <select v-model="form.rowKey" class="select" :disabled="readonly" aria-label="Привязка">
             <option :value="null">Ко всему графику (над шкалой)</option>
-            <option v-for="row in rows" :key="row.key" :value="row.key">{{ row.name }}</option>
+            <option v-for="row in shownRows" :key="row.key" :value="row.key">{{ row.name }}</option>
           </select>
-        </label>
+        </div>
       </div>
       <label class="field"><span class="field-label">Текст</span><textarea v-model="form.text" class="textarea" rows="3" maxlength="5000" :readonly="readonly" /></label>
       <div class="field"><span class="field-label">Цвет</span><ColorPicker v-model="form.color" :disabled="readonly" /></div>

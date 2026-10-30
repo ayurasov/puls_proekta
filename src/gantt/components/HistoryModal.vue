@@ -5,7 +5,7 @@ import BaseModal from '../../components/common/BaseModal.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
-import { formatDateTime, formatRelative } from '../../utils/format'
+import { countLabel, formatDateTime, formatRelative } from '../../utils/format'
 
 /**
  * История плана: журнал изменений (кто, когда, что было → стало) и сохранённые версии
@@ -23,14 +23,22 @@ const snapshots = ref([])
 const loading = ref(false)
 const userFilter = ref('')
 
-const REASONS = { auto: 'Автосохранение', manual: 'Сохранённая версия', before_restore: 'Перед восстановлением', legacy_import: 'Перенос из 1.0.1', before_import: 'Перед импортом' }
+const REASONS = { auto: 'Автосохранение', manual: 'Сохранённая версия', before_restore: 'Перед восстановлением', legacy_import: 'При переносе из прежней версии', before_import: 'Перед импортом' }
 const ACTION_ICONS = { create: 'plus', update: 'edit', delete: 'trash', restore: 'undo', comment: 'message', legacy: 'history', archive: 'archive', unarchive: 'unarchive', import: 'upload', restore_snapshot: 'history' }
 const users = computed(() => [...new Set(events.value.map((e) => e.userName).filter(Boolean))].sort())
 const filtered = computed(() => (userFilter.value ? events.value.filter((e) => e.userName === userFilter.value) : events.value))
+// Заголовок дня: «30 октября», в другом году — «30 октября 2025» (без «г.», который в верхнем регистре читался как «Г.»)
+function dayTitle(value) {
+  const date = new Date(value)
+  const sameYear = date.getFullYear() === new Date().getFullYear()
+  return date.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', ...(sameYear ? {} : { year: 'numeric' }) }).replace(/\s*г\.?$/, '')
+}
+// Пустые снимки (план ещё без строк) восстанавливать незачем — показываются только сохранённые вручную
+const visibleSnapshots = computed(() => snapshots.value.filter((s) => s.itemsCount > 0 || s.reason === 'manual'))
 const grouped = computed(() => {
   const groups = []
   for (const event of filtered.value) {
-    const day = new Date(event.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' })
+    const day = dayTitle(event.createdAt)
     if (!groups.length || groups[groups.length - 1].day !== day) groups.push({ day, events: [] })
     groups[groups.length - 1].events.push(event)
   }
@@ -75,7 +83,7 @@ async function preview(snap) {
     const res = await api.get(`/plans/${props.planId}/snapshots/${snap.id}`)
     const toMap = (list) => Object.fromEntries((list || []).map((e) => [e.key, e]))
     editor.state.previewSnapshot = {
-      id: snap.id, label: formatDateTime(snap.createdAt),
+      id: snap.id, label: formatDateTime(snap.createdAt), title: snap.label || REASONS[snap.reason] || 'Сохранённая версия',
       items: toMap(res.data.items), notes: toMap(res.data.notes), assignees: toMap(res.data.assignees),
     }
     editor.state.view.panelKey = null
@@ -86,7 +94,7 @@ async function preview(snap) {
 async function restore(snap) {
   const ok = await confirm({
     title: 'Восстановить это состояние плана?',
-    message: `План станет таким, каким был ${formatDateTime(snap.createdAt)} (${snap.itemsCount} строк). Текущее состояние сохранится отдельной версией — восстановление тоже можно отменить.`,
+    message: `План станет таким, каким был ${formatDateTime(snap.createdAt)} (${countLabel(snap.itemsCount, 'строка', 'строки', 'строк')}). Текущее состояние сохранится отдельной версией — восстановление тоже можно отменить.`,
     confirmText: 'Восстановить', danger: false,
   })
   if (!ok) return
@@ -98,7 +106,7 @@ async function restore(snap) {
     }
     const res = await api.post(`/plans/${props.planId}/snapshots/${snap.id}/restore`)
     editor.state.previewSnapshot = null
-    ui.success('План восстановлен', `Изменений: ${res.changes}`)
+    ui.success('План восстановлен', countLabel(res.changes, 'изменение', 'изменения', 'изменений'))
     emit('restored')
     emit('close')
   } catch (err) { ui.error(err) }
@@ -110,11 +118,11 @@ async function restore(snap) {
     <template #header-actions>
       <div class="segmented">
         <button type="button" :class="{ 'is-active': tab === 'events' }" @click="tab = 'events'">Журнал изменений</button>
-        <button type="button" :class="{ 'is-active': tab === 'versions' }" @click="tab = 'versions'">Версии · {{ snapshots.length }}</button>
+        <button type="button" :class="{ 'is-active': tab === 'versions' }" @click="tab = 'versions'">Версии · {{ visibleSnapshots.length }}</button>
       </div>
     </template>
 
-    <div v-if="tab === 'events'">
+    <div v-if="tab === 'events'" class="pane">
       <div class="toolbar">
         <select v-model="userFilter" class="select input-sm" style="max-width: 260px">
           <option value="">Все сотрудники</option>
@@ -129,7 +137,7 @@ async function restore(snap) {
           <div class="event-main">
             <div v-if="event.action === 'legacy' && rowName(event)" class="target">{{ rowName(event) }}</div>
             <div class="summary">{{ event.summary }}</div>
-            <div class="muted small">{{ event.userName || 'система' }} · {{ formatDateTime(event.createdAt) }}<span v-if="event.action === 'legacy'"> · из 1.0</span></div>
+            <div class="muted small">{{ event.userName || 'система' }} · {{ formatDateTime(event.createdAt) }}<span v-if="event.action === 'legacy'" title="Запись перенесена из прежней версии «Пульса Проекта»"> · до переноса</span></div>
           </div>
         </div>
       </div>
@@ -137,30 +145,32 @@ async function restore(snap) {
       <button v-if="eventsMore" class="btn btn-sm" type="button" :disabled="loading" @click="loadEvents(true)">Показать ещё</button>
     </div>
 
-    <div v-else>
+    <div v-else class="pane">
       <div class="toolbar">
         <button v-if="editor.canEdit" class="btn btn-sm btn-primary" type="button" @click="saveVersion"><AppIcon name="save" :size="14" /> Сохранить текущую версию</button>
         <span class="muted small">Автоснимки делаются перед правками не чаще раза в 30 минут: все за двое суток, затем по одному в день (60 дней) и в неделю.</span>
       </div>
-      <div v-for="snap in snapshots" :key="snap.id" class="snapshot">
+      <div v-for="snap in visibleSnapshots" :key="snap.id" class="snapshot">
         <div class="snap-main">
           <div class="snap-title">{{ snap.label || REASONS[snap.reason] || snap.reason }}</div>
           <div class="muted small">
-            <span :title="formatDateTime(snap.createdAt)">{{ formatRelative(snap.createdAt) }}</span> · {{ REASONS[snap.reason] || snap.reason }} · {{ snap.itemsCount }} строк<span v-if="snap.userName"> · {{ snap.userName }}</span>
+            <span :title="formatDateTime(snap.createdAt)">{{ formatRelative(snap.createdAt) }}</span><template v-if="snap.label"> · {{ REASONS[snap.reason] || snap.reason }}</template> · {{ countLabel(snap.itemsCount, 'строка', 'строки', 'строк') }}<span v-if="snap.userName"> · {{ snap.userName }}</span>
           </div>
         </div>
         <button class="btn btn-sm" type="button" @click="preview(snap)"><AppIcon name="eye" :size="14" /> Просмотреть</button>
         <button v-if="editor.canEdit" class="btn btn-sm" type="button" @click="restore(snap)"><AppIcon name="history" :size="14" /> Восстановить</button>
       </div>
-      <p v-if="!snapshots.length" class="muted">Сохранённых версий пока нет.</p>
+      <p v-if="!visibleSnapshots.length" class="muted">Сохранённых версий пока нет.</p>
     </div>
   </BaseModal>
 </template>
 
 <style scoped>
 .toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Окно не прыгает по высоте при переключении вкладок и подгрузке */
+.pane { min-height: min(62vh, 560px); }
 .day { margin-bottom: 12px; }
-.day-title { font-size: 12px; font-weight: 700; color: var(--color-text-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 6px; position: sticky; top: -16px; background: #fff; padding: 4px 0; }
+.day-title { font-size: 12.5px; font-weight: 700; color: var(--color-text-secondary); margin-bottom: 6px; position: sticky; top: -16px; background: #fff; padding: 4px 0; }
 .event { display: flex; gap: 10px; padding: 5px 0; }
 .icon { width: 24px; height: 24px; border-radius: 50%; background: #eef1f7; color: var(--color-text-muted); display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
 .event-main { min-width: 0; }

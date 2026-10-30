@@ -5,10 +5,11 @@ import { ACCESS_LABELS, useProjectsStore } from '../stores/projects'
 import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { useDialogs } from '../composables/useDialogs'
+import { api } from '../api/client'
 import AppIcon from '../components/common/AppIcon.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PopupMenu from '../components/common/PopupMenu.vue'
-import { formatDate, formatDateTime, pluralize } from '../utils/format'
+import { countLabel, formatDate, formatDateTime } from '../utils/format'
 
 const projects = useProjectsStore()
 const auth = useAuthStore()
@@ -32,12 +33,21 @@ const groups = computed(() => {
     .filter((g) => g.projects.length || (!q && g.direction))
 })
 const total = computed(() => projects.projects.length)
+const query = computed(() => search.value.trim())
+const found = computed(() => groups.value.reduce((n, g) => n + g.projects.length, 0))
 const canReorder = computed(() => ['admin', 'manager'].includes(auth.user?.role) && !search.value)
 
+// Тот же показатель, что «Средний прогресс» в окне «Статистика» основного плана (первой вкладки)
 function progress(project) {
   const s = project.stats
   if (!s || !s.total) return 0
-  return Math.round((s.done / s.total) * 100)
+  return s.progress ?? Math.round((s.done / s.total) * 100)
+}
+function progressTitle(project) {
+  const s = project.stats
+  if (!s?.total) return 'Задач пока нет'
+  const plan = s.planTitle && project.plans.length > 1 ? ` плана «${s.planTitle}»` : ''
+  return `Средний прогресс задач${plan}: ${progress(project)}% · завершено ${s.done} из ${s.total}`
 }
 
 // Менеджер создаёт направления прямо из окна проекта (страница «Направления» — только администратору)
@@ -101,7 +111,18 @@ async function removeProject(project) {
   if (!ok) return
   try {
     await projects.remove(project.id)
-    ui.toast({ title: 'Проект в корзине', kind: 'success', action: { label: 'Открыть корзину', handler: () => router.push('/admin/trash') } })
+    ui.toast({
+      title: `Проект «${project.title}» в корзине`, kind: 'success', timeout: 8000,
+      action: { label: 'Отменить', handler: () => restoreProject(project) },
+    })
+  } catch (err) { ui.error(err) }
+}
+
+async function restoreProject(project) {
+  try {
+    await api.post(`/projects/${project.id}/restore`)
+    await projects.load()
+    ui.success('Проект восстановлен', project.title)
   } catch (err) { ui.error(err) }
 }
 
@@ -167,7 +188,10 @@ function onDragEnd() {
     <div class="page-header">
       <div>
         <h1 class="page-title">Проекты</h1>
-        <div class="page-subtitle">{{ total }} {{ pluralize(total, 'проект', 'проекта', 'проектов') }}</div>
+        <div class="page-subtitle">
+          <template v-if="query">Найдено {{ found }} из {{ countLabel(total, 'проекта', 'проектов', 'проектов') }}</template>
+          <template v-else>{{ countLabel(total, 'проект', 'проекта', 'проектов') }}</template>
+        </div>
       </div>
       <div class="spacer" />
       <label class="search">
@@ -188,6 +212,12 @@ function onDragEnd() {
       <p v-if="auth.canCreateProjects">Создайте первый проект — в нём появится план-диаграмма.</p>
       <p v-else>Администратор ещё не открыл вам доступ ни к одному проекту.</p>
       <button v-if="auth.canCreateProjects" class="btn btn-primary" type="button" @click="openCreate()">Новый проект</button>
+    </div>
+
+    <div v-else-if="query && !found" class="card empty-state" data-testid="projects-not-found">
+      <h3>Ничего не найдено</h3>
+      <p>Нет проектов, в названии которых есть «{{ query }}».</p>
+      <button class="btn" type="button" @click="search = ''">Сбросить поиск</button>
     </div>
 
     <section
@@ -222,24 +252,24 @@ function onDragEnd() {
             </button>
           </div>
           <p v-if="project.subtitle" class="card-subtitle ellipsis">{{ project.subtitle }}</p>
-          <div class="progress" :title="project.stats?.total ? `Завершено ${project.stats.done} из ${project.stats.total}` : 'Задач пока нет'">
+          <div class="progress" :title="progressTitle(project)">
             <div class="progress-bar"><span :style="{ width: progress(project) + '%' }" /></div>
             <span class="progress-value">{{ project.stats?.total ? progress(project) + '%' : '—' }}</span>
           </div>
           <div class="card-stats">
-            <span>{{ project.stats?.total || 0 }} {{ pluralize(project.stats?.total || 0, 'задача', 'задачи', 'задач') }}</span>
+            <span>{{ countLabel(project.stats?.total || 0, 'задача', 'задачи', 'задач') }}</span>
             <span v-if="project.stats?.inwork" class="stat stat-inwork">{{ project.stats.inwork }} в работе</span>
-            <span v-if="project.stats?.overdue" class="stat stat-overdue">{{ project.stats.overdue }} просрочено</span>
-            <span v-if="project.stats?.blocked" class="stat stat-blocked">{{ project.stats.blocked }} заблокировано</span>
+            <span v-if="project.stats?.overdue" class="stat stat-overdue">{{ countLabel(project.stats.overdue, 'просрочена', 'просрочены', 'просрочено') }}</span>
+            <span v-if="project.stats?.blocked" class="stat stat-blocked">{{ countLabel(project.stats.blocked, 'заблокирована', 'заблокированы', 'заблокировано') }}</span>
           </div>
           <div v-if="project.stats?.nextMilestone" class="milestone" :title="project.stats.nextMilestone.name">
             <AppIcon name="diamond" :size="12" /> <span class="ellipsis">{{ formatDate(project.stats.nextMilestone.date) }} · {{ project.stats.nextMilestone.name }}</span>
           </div>
           <footer class="card-footer">
             <span class="badge" :class="project.access === 'view' ? '' : 'badge-primary'">{{ ACCESS_LABELS[project.access] }}</span>
-            <span v-if="project.plans.length > 1" class="muted small">{{ project.plans.length }} {{ pluralize(project.plans.length, 'план', 'плана', 'планов') }}</span>
+            <span v-if="project.plans.length > 1" class="muted small">{{ countLabel(project.plans.length, 'план', 'плана', 'планов') }}</span>
             <span class="spacer" />
-            <span class="muted small" :title="'Изменён ' + formatDateTime(project.updatedAt)">{{ formatDate(project.updatedAt) }}</span>
+            <span class="muted small" :title="'Изменён ' + formatDateTime(project.updatedAt)">Изменён {{ formatDate(project.updatedAt) }}</span>
           </footer>
         </article>
         <div v-if="!group.projects.length" class="empty-drop muted small">
@@ -310,7 +340,7 @@ function onDragEnd() {
 .progress-value { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); min-width: 32px; text-align: right; }
 .card-stats { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--color-text-secondary); }
 .stat-inwork { color: #a8670f; }
-.stat-overdue { color: var(--color-danger); font-weight: 600; }
+.stat-overdue { color: #c62933; font-weight: 600; }
 .stat-blocked { color: #c62933; }
 .milestone { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #0f766e; }
 .card-footer { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
@@ -318,6 +348,11 @@ function onDragEnd() {
 .skeleton-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
 .skeleton { height: 150px; background: linear-gradient(90deg, #fff 0%, #f3f5fa 50%, #fff 100%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }
 @keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (max-width: 768px) {
+  .search { width: auto; flex: 1 1 200px; }
+  .grid, .skeleton-grid { grid-template-columns: 1fr; }
+}
+@media (hover: none) { .add-here { opacity: 1; } }
 .c-blue { background: #3b82f6; } .c-teal { background: #14b8a6; } .c-green { background: #22c55e; } .c-orange { background: #f97316; }
 .c-red { background: #ef4444; } .c-purple { background: #8b5cf6; } .c-amber { background: #f59e0b; } .c-pink { background: #ec4899; }
 .c-slate { background: #64748b; } .c-indigo { background: #6366f1; } .c-cyan { background: #06b6d4; } .c-lime { background: #84cc16; }

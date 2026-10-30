@@ -153,3 +153,15 @@ describe('очередь отправки редактора', () => {
     expect(editor.state.items.b.start).toBe('2026-11-14')
   })
 })
+
+describe('ширина колонки названий', () => {
+  it('по умолчанию зависит от ширины экрана', async () => {
+    const { defaultGridWidth, fitGridWidth } = await import('../editor')
+    expect(defaultGridWidth(390)).toBe(160)
+    expect(defaultGridWidth(1366)).toBe(301)
+    expect(defaultGridWidth(1920)).toBe(380)
+    // сохранённая широкая колонка на телефоне не занимает больше половины экрана
+    expect(fitGridWidth(420, 390)).toBe(176)
+    expect(fitGridWidth(420, 1920)).toBe(420)
+  })
+})

@@ -19,6 +19,7 @@ import { createCalendar } from './domain/calendar'
 import { insertPosition } from './domain/positions'
 import { addDays, diffDays, todayLocal } from './domain/dates'
 import { localStorageGet, localStorageSet } from '../stores/ui'
+import { countLabel } from '../utils/format'
 
 const POLL_VISIBLE_MS = 4000
 const POLL_HIDDEN_MS = 30000
@@ -54,6 +55,15 @@ if (typeof window !== 'undefined') {
     event.preventDefault()
     event.returnValue = ''
   })
+}
+
+/** Ширина колонки названий по умолчанию — от ширины экрана: 160 px на телефоне, до 380 px на большом мониторе. */
+export function defaultGridWidth(screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1366) {
+  return Math.round(Math.min(380, Math.max(160, screenWidth * 0.22)))
+}
+/** Сохранённая ширина не занимает на узком экране больше половины ширины. */
+export function fitGridWidth(width, screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1366) {
+  return Math.round(Math.min(width, Math.max(160, screenWidth * 0.45)))
 }
 
 let calendarCache = null
@@ -149,7 +159,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     try { saved = JSON.parse(localStorageGet(viewKey()) || 'null') } catch { saved = null }
     state.view.scale = saved?.scale || s.scale || 'day'
     state.view.zoom = saved?.zoom || s.zoom || 1
-    state.view.gridWidth = saved?.gridWidth || Math.max(s.gridWidth || 0, 300)
+    state.view.gridWidth = fitGridWidth(saved?.gridWidth || Math.max(s.gridWidth || 0, defaultGridWidth()))
     state.view.collapsed = new Set(saved?.collapsed || s.defaultCollapsed || [])
     if (saved?.columns) state.view.columns = { ...state.view.columns, ...saved.columns }
   }
@@ -344,7 +354,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         const lost = batch.entries.length + state.queue.length
         state.queue = []
         if (err.code === 'archived' && state.plan) state.plan.isArchived = true
-        ui.error(err.message || 'Изменения не сохранены', `Не сохранено правок: ${lost}. План обновлён с сервера.`)
+        ui.error(err.message || 'Изменения не сохранены', `Не сохранено: ${countLabel(lost, 'правка', 'правки', 'правок')}. План обновлён с сервера.`)
         resyncNeeded = !stopped
         drained()
         return
@@ -398,6 +408,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       if (state.plan && res.isArchived !== undefined) state.plan.isArchived = res.isArchived
       if (res.unchanged || state.inFlight || state.queue.length) return
       const skip = pendingTags()
+      const openKey = state.view.panelKey
+      const openName = openKey ? state.items[openKey]?.name : null
       const changed = [
         ...mergeEntities('items', 'item', res.items, skip),
         ...mergeEntities('notes', 'note', res.notes, skip).map((k) => `note:${k}`),
@@ -406,6 +418,18 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       if (res.plan && !skip.has('plan')) state.plan = { ...res.plan, access: state.access }
       state.revision = res.revision
       const remoteEvents = res.events || []
+      if (state.view.selectedKey && !state.items[state.view.selectedKey]) state.view.selectedKey = null
+      if (openKey && !state.items[openKey]) {
+        // Открытую карточку удалил коллега: карточка закрывается не молча
+        const event = remoteEvents.find((e) => e.entityKey === openKey && e.action === 'delete')
+        const deleted = state.graveyard.items[openKey]
+        const who = event?.userName || (deleted?.updatedById && state.users[String(deleted.updatedById)]?.name) || 'Коллега'
+        state.view.panelKey = null
+        ui.toast({
+          title: `Строку «${openName || 'без названия'}» удалил(а) ${who}`,
+          body: 'Карточка закрыта. Вернуть строку можно из истории плана.', kind: 'info', timeout: 9000,
+        })
+      }
       if (remoteEvents.length) {
         const flashUntil = Date.now() + 2500
         for (const key of changed) state.remoteFlash[key] = flashUntil

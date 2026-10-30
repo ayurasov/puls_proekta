@@ -63,3 +63,53 @@ def test_avatar_upload_and_cached_download(app, admin):
     assert admin.get(url, headers={"If-None-Match": f'"{etag}"'}).status_code == 304
     bad = admin.put("/api/profile/avatar", json={"dataUrl": "data:text/html;base64,PHNjcmlwdD4="})
     assert bad.status_code == 400
+
+
+def test_audit_is_shown_in_plain_language_for_new_and_legacy_rows(app, admin):
+    """Реестр показывает ФИО, подписи разделов/полей и значения по-русски; записи 1.0.x не переписываются."""
+    from app.models import Project
+
+    make_user(app, "karl", "viewer", name="Карлов Карл")
+    uid = _id(app, "karl")
+    admin.patch(f"/api/users/{uid}", json={"role": "editor"})
+    admin.put("/api/calendar/2026-05-04", json={"kind": "holiday", "title": "Перенос"})
+    with app.app_context():
+        project = Project(title="Старый проект", position=1)
+        db.session.add(project)
+        db.session.flush()
+        legacy = [
+            AuditLog(user_id=None, user_name="karl", section="Гант", action="update", entity=f"project #{project.id}",
+                     field="data", old_value="", new_value="(данные обновлены)"),
+            AuditLog(user_id=uid, user_name="admin", section="Пользователи", action="update",
+                     entity=f"user #{uid} (Карлов Карл)", field="active", old_value="", new_value="true"),
+            AuditLog(user_id=uid, user_name="admin", section="Пользователи", action="update",
+                     entity=f"user #{uid} (Карлов Карл)", field="avatar", old_value="",
+                     new_value="data:image/jpeg;base64,AAAA"),
+            AuditLog(user_id=uid, user_name="admin", section="Пользователи", action="update",
+                     entity=f"user #{uid} (Карлов Карл)", field="role", old_value="", new_value="viewer"),
+        ]
+        db.session.add_all(legacy)
+        db.session.commit()
+        legacy_ids = [row.id for row in legacy]
+    rows = {r["id"]: r for r in admin.get("/api/audit?limit=500").get_json()["rows"]}
+    data_row, active_row, avatar_row, role_row = (rows[i] for i in legacy_ids)
+    assert data_row["sectionLabel"] == "Планы" and data_row["section"] == "Гант"
+    assert data_row["entityLabel"] == "Проект «Старый проект»" and data_row["userName"] == "Карлов Карл"
+    assert data_row["userLogin"] == "karl" and data_row["fieldLabel"] == "Данные плана"
+    assert active_row["sectionLabel"] == "Сотрудники" and active_row["entityLabel"] == "Сотрудник Карлов Карл"
+    assert active_row["fieldLabel"] == "Активен" and active_row["newLabel"] == "активен"
+    assert avatar_row["fieldLabel"] == "Фото" and avatar_row["newLabel"] == "фото обновлено"
+    assert role_row["newLabel"] == "Наблюдатель"
+    calendar = next(r for r in rows.values() if r["entity"].startswith("Календарь"))
+    assert calendar["entityLabel"] == "Производственный календарь, 04.05.2026"
+    assert calendar["fieldLabel"] == "Тип дня" and calendar["newLabel"] == "Нерабочий день: Перенос"
+    role_change = next(r for r in rows.values() if r["field"] == "role" and r["oldValue"] == "Наблюдатель")
+    assert role_change["userName"] == "Администратор" and role_change["fieldLabel"] == "Роль"
+    # Хранимые значения не тронуты — фильтр по логину и разделу 1.0.x работает как раньше
+    with app.app_context():
+        assert db.session.get(AuditLog, legacy_ids[1]).new_value == "true"
+    facets = admin.get("/api/audit/facets").get_json()
+    assert facets["sectionLabels"]["Гант"] == "Планы" and facets["userLabels"]["karl"] == "Карлов Карл"
+    assert admin.get("/api/audit?section=Гант").get_json()["total"] == 1
+    csv_text = admin.get("/api/audit/export.csv").get_data(as_text=True)
+    assert "Проект «Старый проект»" in csv_text and "фото обновлено" in csv_text

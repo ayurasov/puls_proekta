@@ -30,7 +30,10 @@ const isCustom = computed(() => Boolean(props.modelValue && props.modelValue.sta
 .color-picker { display: flex; flex-wrap: wrap; gap: 6px; }
 .swatch { width: 22px; height: 22px; border-radius: 6px; border: 2px solid transparent; padding: 0; box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); position: relative; }
 .swatch.on { border-color: #1c2331; box-shadow: 0 0 0 2px #fff inset; }
-.swatch:disabled { cursor: default; opacity: 0.7; }
+.swatch:disabled { cursor: not-allowed; opacity: 0.45; }
+.swatch.on:disabled { opacity: 0.8; }
+.custom:has(input:disabled) { cursor: not-allowed; opacity: 0.45; }
+.custom input:disabled { cursor: not-allowed; }
 .custom { display: flex; align-items: center; justify-content: center; background: conic-gradient(#ef4444, #f59e0b, #22c55e, #06b6d4, #3b82f6, #8b5cf6, #ec4899, #ef4444); color: #fff; font-weight: 800; font-size: 14px; cursor: pointer; overflow: hidden; }
 .custom input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
 .custom span { text-shadow: 0 1px 2px rgba(0,0,0,.4); pointer-events: none; }

@@ -7,6 +7,7 @@ import { localStorageGet, localStorageSet, useUiStore } from '../../stores/ui'
 import AppIcon from './AppIcon.vue'
 import UserAvatar from './UserAvatar.vue'
 import ProfileModal from './ProfileModal.vue'
+import ReleaseNotesModal from './ReleaseNotesModal.vue'
 import packageJson from '../../../package.json'
 
 const auth = useAuthStore()
@@ -16,6 +17,7 @@ const route = useRoute()
 const router = useRouter()
 const appVersion = packageJson.version
 const profileOpen = ref(false)
+const releaseNotesOpen = ref(false)
 const expanded = ref(readExpanded())
 
 function readExpanded() {
@@ -53,7 +55,7 @@ async function logout() {
 </script>
 
 <template>
-  <aside class="sidebar scroll-thin" :class="{ collapsed: ui.sidebarCollapsed }">
+  <aside class="sidebar scroll-thin" :class="{ collapsed: ui.sidebarCollapsed }" aria-label="Меню">
     <div class="sidebar-top">
       <router-link to="/" class="brand" title="Пульс Проекта">
         <span class="brand-mark"><AppIcon name="pulse" :size="18" :stroke-width="2.2" /></span>
@@ -70,6 +72,9 @@ async function logout() {
     <nav class="sidebar-nav" aria-label="Основная навигация">
       <router-link to="/" class="nav-item" :class="{ 'router-link-active': route.name === 'projects' }" exact-active-class="" title="Проекты">
         <AppIcon name="home" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Проекты</span>
+      </router-link>
+      <router-link v-if="auth.user?.role === 'manager'" to="/admin/trash" class="nav-item" title="Корзина — удалённые планы ваших проектов">
+        <AppIcon name="trash" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Корзина</span>
       </router-link>
     </nav>
 
@@ -102,7 +107,7 @@ async function logout() {
     </div>
 
     <div class="sidebar-bottom">
-      <button class="user-card" type="button" title="Профиль" @click="profileOpen = true">
+      <button class="user-card" type="button" :title="`${auth.user?.name || ''} · ${auth.roleLabel}\nПрофиль: фото, пароль`" @click="profileOpen = true">
         <UserAvatar :user="auth.user" :size="30" />
         <span v-if="!ui.sidebarCollapsed" class="user-text">
           <span class="user-name ellipsis">{{ auth.user?.name }}</span>
@@ -114,15 +119,16 @@ async function logout() {
       </button>
       <div v-if="!ui.sidebarCollapsed" class="sidebar-meta">
         <span class="author">© Alexander Yurasov <router-link to="/about" class="about-mark" title="О программе">?</router-link></span>
-        <router-link to="/about" class="version">Версия {{ appVersion }}</router-link>
+        <button class="version" type="button" title="Что нового в этой версии" data-testid="release-notes" @click="releaseNotesOpen = true">Версия {{ appVersion }} · Что нового</button>
       </div>
     </div>
     <ProfileModal v-if="profileOpen" @close="profileOpen = false" />
+    <ReleaseNotesModal v-if="releaseNotesOpen" @close="releaseNotesOpen = false" />
   </aside>
 </template>
 
 <style scoped>
-.sidebar { width: 248px; background: var(--color-surface); border-right: 1px solid var(--color-border); display: flex; flex-direction: column; padding: 14px 10px; overflow-y: auto; overflow-x: hidden; transition: width 0.18s ease; flex-shrink: 0; }
+.sidebar { width: 232px; background: var(--color-surface); border-right: 1px solid var(--color-border); display: flex; flex-direction: column; padding: 14px 10px; overflow-y: auto; overflow-x: hidden; transition: width 0.18s ease; flex-shrink: 0; }
 .sidebar.collapsed { width: 60px; padding: 14px 8px; }
 .sidebar-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 4px 14px; }
 .sidebar.collapsed .sidebar-top { flex-direction: column; gap: 10px; }
@@ -158,6 +164,6 @@ async function logout() {
 .author { display: flex; align-items: center; gap: 6px; }
 .about-mark { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; border: 1px solid currentColor; color: inherit; font-size: 10px; font-weight: 700; text-decoration: none; }
 .about-mark:hover { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
-.version { color: inherit; text-decoration: none; }
+.version { color: inherit; text-decoration: none; border: 0; background: none; padding: 0; font: inherit; text-align: left; }
 .version:hover { color: var(--color-primary); text-decoration: underline; }
 </style>

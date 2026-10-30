@@ -169,10 +169,15 @@ def unarchive_plan(plan_id):
 @bp.delete("/plans/<int:plan_id>")
 @login_required
 def delete_plan(plan_id):
-    """В корзину; удалить можно только архивный план, право — «полное управление»."""
-    plan, project, _ = _plan_with_access(plan_id, "manage")
+    """В корзину; право — «полное управление». Открытый план можно удалить, если в проекте
+    остаётся другой открытый план (как и с архивом: проект не остаётся без вкладок)."""
+    _plan, project, _ = _plan_with_access(plan_id, "manage")
+    plan = lock_plan(plan_id, allow_archived=True)
     if not plan.is_archived:
-        raise ApiError(409, "not_archived", "Сначала уберите план в архив")
+        open_count = db.session.execute(select(func.count()).select_from(Plan).where(
+            Plan.project_id == project.id, Plan.deleted_at.is_(None), Plan.is_archived.is_(False))).scalar_one()
+        if open_count <= 1:
+            raise ApiError(400, "last_plan", "Нельзя удалить единственный открытый план проекта")
     plan.deleted_at = utcnow()
     plan.deleted_by_id = current_user().id
     _audit_plan(project, plan, "delete", old=plan.title, new="в корзину")
@@ -360,7 +365,7 @@ def add_comment(plan_id, item_key):
                           text=text, reply_to_id=payload.replyToId)
     db.session.add(comment)
     db.session.flush()
-    _bump_comment_count(plan, item_key, user, f"Комментарий к «{item.name}»: {text[:200]}")
+    _bump_comment_count(plan, item_key, user, f"Комментарий к задаче «{item.name}»: {text[:200]}")
     db.session.commit()
     return jsonify({"comment": _comment(comment, {user.id: user_public(user)}), "revision": plan.revision,
                     "commentCount": item.comment_count}), 201

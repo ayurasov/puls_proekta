@@ -21,8 +21,8 @@ jobs:
     name: 'Клиент: eslint + vitest + сборка'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -41,8 +41,8 @@ jobs:
       run:
         working-directory: backend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -86,8 +86,8 @@ jobs:
     env:
       FLASK_ENV: development
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
@@ -109,14 +109,14 @@ jobs:
     name: 'E2E: Playwright на перенесённых данных 1.0.1'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: backend/requirements-dev.txt
       - run: pip install -r backend/requirements-dev.txt
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: npm
@@ -133,7 +133,7 @@ jobs:
         run: npm run e2e
       - name: Снимки экранов
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: e2e-screenshots
           path: ${{ runner.temp }}/e2e-shots
@@ -148,7 +148,7 @@ jobs:
       POSTGRES_PASSWORD: ci-only-password
       HTTP_PORT: '8080'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Сборка образов
         run: docker compose build
       - name: База и перенос снимка 1.0.1
