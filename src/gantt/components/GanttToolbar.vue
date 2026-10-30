@@ -243,7 +243,7 @@ function toggleColumn(column) {
       <button class="menu-item" type="button" @click="editor.collapseAll(true); menu = null"><AppIcon name="collapseAll" /> Свернуть все группы</button>
     </PopupMenu>
 
-    <PopupMenu v-if="menu?.type === 'keys'" :anchor="menu.anchor" align="end" :min-width="330" @close="menu = null">
+    <PopupMenu v-if="menu?.type === 'keys'" :anchor="menu.anchor" align="end" :min-width="440" @close="menu = null">
       <div class="menu-label">Клавиши и мышь</div>
       <dl class="shortcuts">
         <template v-for="[keys, text] in SHORTCUTS" :key="keys">
