@@ -66,12 +66,26 @@ class Snapshot:
                 "source": self.source}
 
     def fingerprint(self):
-        """Отпечаток данных «По Делу» (без времени выгрузки): изменилось ли что-то между проверкой и применением."""
-        structure = {k: v for k, v in self.structure.items() if k != "exportedAt"}
-        employees = {k: v for k, v in self.employees.items() if k != "exportedAt"}
-        raw = json.dumps({"structure": structure, "employees": employees, "ids": self.ids, "avatars": self.avatars},
-                         ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+        """Отпечаток данных «По Делу»: изменилось ли что-то между проверкой и применением. Не зависит от порядка
+        выгрузки и времени: «По Делу» сортирует сотрудников по имени без второго ключа, и тёзки в PostgreSQL меняются
+        местами после любого обновления строки, а с ними — номера фото в архиве (avatars/<номер>). Поэтому
+        сотрудники, подразделения и руководители упорядочиваются здесь, а фото сравнивается по SHA-256."""
+        departments = [{**item, "heads": sorted(item.get("heads") or [], key=_canonical)}
+                       for item in self.structure.get("departments") or [] if isinstance(item, dict)]
+        employees = [{k: v for k, v in item.items() if k != "avatar"}
+                     for item in self.employees.get("employees") or [] if isinstance(item, dict)]
+        data = {
+            "structure": {k: v for k, v in self.structure.items() if k not in ("exportedAt", "departments")},
+            "departments": sorted(departments, key=lambda item: (str(item.get("key")), _canonical(item))),
+            "employees": sorted(employees, key=lambda item: (item_key(item) or "", _canonical(item))),
+            "document": {k: v for k, v in self.employees.items() if k not in ("exportedAt", "employees")},
+            "ids": self.ids, "avatars": self.avatars,
+        }
+        return hashlib.sha256(_canonical(data).encode("utf-8")).hexdigest()
+
+
+def _canonical(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _now_iso():
@@ -205,9 +219,10 @@ def link_users(links):
     return changed
 
 
-def apply(snapshot, *, actor_id, options, decisions=None):
+def apply(snapshot, *, actor_id, options, decisions=None, entity="Загрузка из «По Делу»"):
     """(результат, применено ли, [id отключённых]). Всё — в текущей транзакции; при ошибках в плане ничего не
-    меняется (вызывающий откатывает). Фиксирует транзакцию вызывающий — после org.assert_consistent()."""
+    меняется (вызывающий откатывает). Фиксирует транзакцию вызывающий — после org.assert_consistent().
+    entity — запись в реестре изменений об этой загрузке (одна; если ничего не изменилось — ни одной)."""
     records = _records(snapshot)
     org.lock_org()
     structure, applied = org_transfer.apply_structure(copy.deepcopy(snapshot.structure),
@@ -228,9 +243,10 @@ def apply(snapshot, *, actor_id, options, decisions=None):
     errors, saved = employee_transfer.set_avatars(photos, max_bytes=current_app.config["AVATAR_MAX_BYTES"]) \
         if photos else ({}, 0)
     s, e = structure["summary"], employees["summary"]
-    audit.record("Структура", "import", "Загрузка из «По Делу»", "", "",
-                 f"{snapshot.source.get('baseUrl', '')}: подразделений новых {s['create']}, изменено {s['update']}; "
-                 f"сотрудников новых {e['create']}, обновлено {e['update']}, пропущено {e['skip']}; фото {saved}")
+    if any((s["create"], s["update"], s["settings"], s["addHeads"], e["create"], e["update"], linked, saved)):
+        audit.record("Структура", "import", entity, "", "",
+                     f"{snapshot.source.get('baseUrl', '')}: подразделений новых {s['create']}, изменено {s['update']}; "
+                     f"сотрудников новых {e['create']}, обновлено {e['update']}, пропущено {e['skip']}; фото {saved}")
     result.update({"applied": True, "ids": mapping, "linkedUsers": linked,
                    "photos": {"saved": saved, "errors": sorted(set(errors.values()))}})
     return result, True, deactivated

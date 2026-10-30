@@ -75,6 +75,8 @@ class BaseConfig:
 
     # Задачи Jira (ADR-0007): сколько секунд данные задачи считаются свежими при открытии плана
     JIRA_CACHE_SECONDS = _int("JIRA_CACHE_SECONDS", 300)
+    # «По Делу» (ADR-0009): вход, выгрузки и выход в одном запросе — не дольше, чем ждёт gunicorn (GUNICORN_TIMEOUT)
+    PODELU_TOTAL_TIMEOUT = _int("PODELU_TOTAL_TIMEOUT", 50)
 
     # Часовой пояс площадки: в нём выражены даты прежней версии (комментарии, история)
     # и «сегодня» в журналах.

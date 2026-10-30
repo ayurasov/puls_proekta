@@ -308,10 +308,11 @@ def plan_structure(bundle, *, apply_settings=True, podelu=False):
         plan.targets[item.key] = row.id
         matched_ids.add(row.id)
         changes = []
+        # «По Делу» ведёт название: и у связанного, и у совпавшего по пути без учёта регистра и пробелов
+        if podelu and row.name != item.name:
+            changes.append({"field": "name", "old": row.name, "new": item.name})
         if row.id in claimed:
-            # Переименование и перенос в «По Делу» — то же подразделение «Пульса»
-            if row.name != item.name:
-                changes.append({"field": "name", "old": row.name, "new": item.name})
+            # Перенос в «По Делу» — то же подразделение «Пульса»
             # parent_target None при родителе из файла — родитель новый: перенос в него
             moved = row.parent_id is not None if item.parent is None \
                 else parent_target is None or parent_target != row.parent_id

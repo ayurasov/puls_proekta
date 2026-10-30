@@ -99,6 +99,7 @@ def jira(monkeypatch):
     monkeypatch.setattr(requests.Session, "request", lambda self, method, url, **kw: fake(self, method, url, **kw))
     monkeypatch.setattr(jira_service, "_down_until", 0.0)
     monkeypatch.setattr(jira_service, "_down_since", 0.0)
+    monkeypatch.setattr(jira_service, "_epic_fields", {})
     return fake
 
 
@@ -478,3 +479,27 @@ def test_v040_review_milestone_and_group_return_jira_link(app, admin, jira):
     ])
     items = {i["key"]: i for i in admin.get(f"/api/plans/{plan_id}").get_json()["items"]}
     assert items["m1"]["jiraUrl"] == f"{BASE}/browse/ABC-9" and items["g1"]["jiraUrl"] == f"{BASE}/browse/ABC-8"
+
+
+def test_review_epic_link_field_is_cached_per_connection(app, admin, jira):
+    """Поле «Epic Link» — не GET /field при каждом поиске с эпиками: запоминается на 10 минут, сохранение
+    подключения сбрасывает его."""
+    _connect(admin)
+    jira.add("ABC-100", summary="Эпик", issuetype={"name": "Epic"})
+    jira.add("ABC-1", customfield_10008="ABC-100")
+    _, plan_id = create_project(admin)
+
+    def search():
+        res = admin.post("/api/jira/search", json={"planId": plan_id, "keys": "ABC-1", "epics": True})
+        assert res.status_code == 200, res.get_json()
+        assert res.get_json()["issues"][0]["epic"] == "ABC-100"
+
+    def field_requests():
+        return sum(1 for call in jira.calls if call[1].endswith("/rest/api/2/field"))
+
+    for _ in range(3):
+        search()
+    assert field_requests() == 1
+    _connect(admin, token="новый-секрет")
+    search()
+    assert field_requests() == 2

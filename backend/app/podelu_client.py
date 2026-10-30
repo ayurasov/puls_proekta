@@ -3,7 +3,8 @@
 Подключение устроено так же, как к Jira (ADR-0007): одно на систему, его настраивает администратор
 («Администрирование → Интеграции»), пароль хранится зашифрованным (Fernet, ключ выводится из SECRET_KEY) и в
 интерфейс не возвращается; сохранённый пароль уходит только на тот адрес, для которого он был введён. Запросы —
-без перенаправлений, с таймаутами и повтором при 429/503; прокси — из переменных окружения сервера.
+без перенаправлений, с таймаутами и повтором чтения при 429/5xx; вся операция (вход, выгрузки, выход) укладывается в
+общий предел (PODELU_TOTAL_TIMEOUT, меньше таймаута gunicorn); прокси — из переменных окружения сервера.
 
 API-токенов в «По Делу» нет: вход — как у браузера. ``GET /api/auth/csrf-token`` → ``POST /api/auth/login``
 с заголовком ``X-CSRF-Token`` → cookie сессии ``todo_planner_session`` → запросы → ``POST /api/auth/logout``.
@@ -31,10 +32,13 @@ from cryptography.fernet import Fernet, InvalidToken
 
 TIMEOUT = (5, 20)
 EXPORT_TIMEOUT = (5, 120)      # выгрузка сотрудников с фото у большой компании собирается не мгновенно
+LOGOUT_TIMEOUT = (3, 5)        # выход — и после истечения общего предела
+TOTAL_TIMEOUT = 50             # вся операция в запросе к «Пульсу» — меньше таймаута gunicorn (60 с)
 MAX_ATTEMPTS = 3
 MAX_JSON_BYTES = 20 * 1024 * 1024
 MAX_ZIP_BYTES = 200 * 1024 * 1024
 MAX_PHOTO_BYTES = 5 * 1024 * 1024   # предел фото в «По Делу»; больше — архив повреждён или не тот
+MAX_PHOTOS_TOTAL = MAX_ZIP_BYTES    # всех фото после распаковки — не больше, чем самого архива
 MAX_ARCHIVE_ENTRIES = 20000
 SESSION_COOKIE = "todo_planner_session"
 UUID_RE = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
@@ -45,6 +49,9 @@ NO_STRUCTURE_RIGHTS = ("У учётной записи нет прав на вы
                        "или полномочие «Ведёт структуру компании»")
 NO_USERS_RIGHTS = ("У учётной записи нет прав на выгрузку сотрудников в «По Делу» — нужна роль «Администратор» "
                    "или полномочие «Ведёт учётные записи»")
+
+
+_clock = time.monotonic
 
 
 class PodeluError(Exception):
@@ -121,7 +128,9 @@ def rights(user):
 class PodeluClient:
     """Сессия «По Делу»: login() → запросы → logout(). Как контекстный менеджер выходит из «По Делу» сам."""
 
-    def __init__(self, base_url, login, password, accept_invalid_certs=False, timeout=TIMEOUT):
+    def __init__(self, base_url, login, password, accept_invalid_certs=False, timeout=TIMEOUT,
+                 total_timeout=TOTAL_TIMEOUT):
+        """total_timeout — предел всей операции в секундах (вход, запросы; выход — сверх него); None — без предела."""
         self.base_url = check_base_url(base_url)
         if not login or not password:
             raise PodeluError("Укажите логин и пароль учётной записи «По Делу»")
@@ -130,6 +139,8 @@ class PodeluClient:
         self._login = login
         self._password = password
         self.timeout = timeout
+        self.total_timeout = total_timeout
+        self.deadline = _clock() + total_timeout if total_timeout else None
         self.csrf_token = None
         self.user = None
         parts = urlsplit(self.base_url)
@@ -160,23 +171,46 @@ class PodeluClient:
 
     # ---------- запросы ----------
 
-    def request(self, method, path, *, json_body=None, params=None, timeout=None, max_bytes=MAX_JSON_BYTES):
-        """(ответ, тело) — с повтором при 429/503 и понятными сообщениями об ошибках. Тело читается не больше
-        max_bytes: ответ больше — ошибка, а не память сервера."""
+    def _too_long(self):
+        return PodeluError(f"«По Делу» отвечает слишком долго: вход и выгрузки не уложились в {self.total_timeout} с "
+                           "(PODELU_TOTAL_TIMEOUT — он должен быть меньше GUNICORN_TIMEOUT). Попробуйте ещё раз, без фото "
+                           "или командой sync-podelu (scripts/org_transfer.py)", 504)
+
+    def _remaining(self, final):
+        if self.deadline is None or final:
+            return None
+        remaining = self.deadline - _clock()
+        if remaining <= 0:
+            raise self._too_long()
+        return remaining
+
+    def request(self, method, path, *, json_body=None, params=None, timeout=None, max_bytes=MAX_JSON_BYTES,
+                final=False):
+        """(ответ, тело) — с повтором чтения при 429/5xx и понятными сообщениями об ошибках. Тело читается не больше
+        max_bytes: ответ больше — ошибка, а не память сервера. Каждый запрос укладывается в общий предел операции
+        (final=True — выход: после предела тоже)."""
         url = self.url(path)
         headers = {"X-CSRF-Token": self.csrf_token} if method != "GET" and self.csrf_token else {}
         resp = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
+            connect, read = timeout or self.timeout
+            remaining = self._remaining(final)
+            if remaining is not None:
+                connect, read = min(connect, remaining), min(read, remaining)
             try:
-                # без перенаправлений: пароль и cookie сессии уходят только на адрес из подключения
+                # без перенаправлений: пароль и cookie сессии уходят только на адрес из подключения. verify — явно:
+                # иначе REQUESTS_CA_BUNDLE в окружении отменил бы «Не проверять TLS-сертификат»
                 resp = self.session.request(method, url, params=params, json=json_body, headers=headers,
-                                            timeout=timeout or self.timeout, allow_redirects=False, stream=True)
+                                            timeout=(connect, read), allow_redirects=False, stream=True,
+                                            verify=self.session.verify)
             except requests.exceptions.SSLError:
                 raise PodeluError("Ошибка TLS-сертификата «По Делу». Если используется самоподписанный или "
                                   "корпоративный сертификат, включите «Не проверять TLS-сертификат»") from None
             except requests.exceptions.ConnectTimeout:
                 raise PodeluError(f"Превышено время ожидания подключения к {self.base_url}") from None
             except requests.exceptions.ReadTimeout:
+                if remaining is not None and read >= remaining:
+                    raise self._too_long() from None
                 raise PodeluError("«По Делу» не ответила вовремя — попробуйте ещё раз") from None
             except requests.exceptions.ConnectionError:
                 raise PodeluError(f"Не удалось подключиться к {self.base_url}: проверьте адрес и доступность "
@@ -190,27 +224,43 @@ class PodeluClient:
                 resp.close()
                 raise PodeluError(f"«По Делу» перенаправляет запрос ({resp.status_code}){where} — укажите в "
                                   "подключении итоговый адрес «По Делу» (например, с https://)", resp.status_code)
-            retry = resp.status_code in (502, 503, 504) or (resp.status_code == 429 and method == "GET")
+            # Повторяется только чтение: повторный вход считается в лимите входа «По Делу» и оставил бы лишнюю сессию
+            retry = method == "GET" and resp.status_code in (429, 502, 503, 504)
             if retry and attempt < MAX_ATTEMPTS:
                 try:
                     delay = min(float(resp.headers.get("Retry-After", attempt)), 5.0)
                 except ValueError:
                     delay = attempt
-                resp.close()
-                time.sleep(max(0.0, delay))
-                continue
+                if remaining is None or delay < remaining:
+                    resp.close()
+                    time.sleep(max(0.0, delay))
+                    continue
             break
-        return resp, self._read(resp, max_bytes)
+        return resp, self._read(resp, max_bytes, final)
 
-    @staticmethod
-    def _read(resp, max_bytes):
+    def _tighten(self, resp, final):
+        """Медленная выгрузка не держит запрос дольше общего предела: requests задаёт таймаут чтения один раз на
+        запрос, поэтому перед каждой порцией он сокращается до остатка предела."""
+        remaining = self._remaining(final)
+        if remaining is None:
+            return
+        try:
+            resp.raw._connection.sock.settimeout(max(0.1, remaining))
+        except AttributeError:   # соединение уже отдано или другой транспорт — предел проверяется между порциями
+            pass
+
+    def _read(self, resp, max_bytes, final=False):
         body = bytearray()
         try:
+            self._tighten(resp, final)
             for chunk in resp.iter_content(65536):
                 body += chunk
                 if len(body) > max_bytes:
                     raise PodeluError(f"Ответ «По Делу» больше {max_bytes // (1024 * 1024)} МБ — выгрузка не принята")
+                self._tighten(resp, final)
         except requests.RequestException:
+            if self.deadline is not None and not final and _clock() >= self.deadline - 0.5:
+                raise self._too_long() from None
             raise PodeluError("Ответ «По Делу» прерван — попробуйте ещё раз") from None
         finally:
             resp.close()
@@ -239,6 +289,7 @@ class PodeluClient:
             raise PodeluError(denied or ("Недостаточно прав в «По Делу» (403)" + (f": {message}" if message else "")),
                               403)
         if status == 400 and code == "csrf_error":
+            message = message.rstrip(". ")
             raise PodeluError("«По Делу» отклонила запрос защитой от подделки (CSRF)"
                               + (f": {message}" if message else "")
                               + ". Укажите в подключении тот адрес, по которому открывается «По Делу» (та же схема "
@@ -276,17 +327,23 @@ class PodeluClient:
         if not isinstance(token, str) or not token or len(token) > 500:
             raise PodeluError("«По Делу» не выдала CSRF-токен — проверьте адрес подключения")
         self.csrf_token = token
+        # Production-«По Делу» выдаёт cookie сессии (с CSRF-токеном) уже здесь — с флагом Secure: по http:// её не
+        # вернуть, и вход закончился бы непонятной ошибкой CSRF
+        self._check_cookies(required=False)
         resp, body = self.request("POST", "auth/login", json_body={"login": self._login, "password": self._password})
         self.check(resp, body, "auth/login")
         data = self._expect(body, "auth/login", dict)
+        self._check_cookies(required=True)
+        self.user = data.get("user") if isinstance(data.get("user"), dict) else {}
+        return self.user
+
+    def _check_cookies(self, required):
         cookies = [cookie for cookie in self.session.cookies if cookie.name == SESSION_COOKIE] or list(self.session.cookies)
-        if not cookies:
+        if required and not cookies:
             raise PodeluError("«По Делу» не выдала cookie сессии после входа — проверьте адрес подключения")
         if not self.secure and any(cookie.secure for cookie in cookies):
             raise PodeluError("«По Делу» выдаёт cookie сессии только для HTTPS (SESSION_COOKIE_SECURE): укажите адрес "
                               "https://, по которому открывается «По Делу»")
-        self.user = data.get("user") if isinstance(data.get("user"), dict) else {}
-        return self.user
 
     def me(self):
         self.user = self.get_json("auth/me")
@@ -298,7 +355,7 @@ class PodeluClient:
             self.session.close()
             return
         try:
-            self.request("POST", "auth/logout", json_body={})
+            self.request("POST", "auth/logout", json_body={}, timeout=LOGOUT_TIMEOUT, final=True)
         except PodeluError:
             pass
         finally:
@@ -335,7 +392,8 @@ def _json(body):
 
 def read_employees_zip(raw):
     """Архив выгрузки сотрудников → (документ из employees.json, {путь фото: байты}). Размеры проверяются до
-    распаковки: архив не раздувается в памяти сервера."""
+    распаковки: каждое фото — не больше 5 МБ, все вместе — не больше MAX_PHOTOS_TOTAL, каждый файл читается один
+    раз, у сотрудника — одно фото; архив не раздувается в памяти сервера."""
     try:
         archive = zipfile.ZipFile(io.BytesIO(raw))
         infos = {info.filename: info for info in archive.infolist()}
@@ -349,12 +407,16 @@ def read_employees_zip(raw):
         document = _json(archive.read(info))
         if not isinstance(document, dict):
             raise PodeluError("employees.json в архиве «По Делу» повреждён")
-        photos = {}
+        entries = {}
         for item in document.get("employees") or []:
             path = item.get("avatar") if isinstance(item, dict) else None
             entry = infos.get(path) if isinstance(path, str) and path.startswith("avatars/") else None
             if entry is not None and 0 < entry.file_size <= MAX_PHOTO_BYTES:
-                photos[path] = archive.read(entry)
-        return document, photos
+                entries[path] = entry   # один файл — один раз, сколько бы записей на него ни ссылалось
+        if sum(entry.file_size for entry in entries.values()) > MAX_PHOTOS_TOTAL:
+            raise PodeluError(f"Фото в выгрузке сотрудников «По Делу» больше {MAX_PHOTOS_TOTAL // (1024 * 1024)} МБ "
+                              "после распаковки — загрузите сотрудников без фото")
+        # ZipExtFile не отдаёт больше объявленного file_size: сумма выше — предел памяти
+        return document, {path: archive.read(entry) for path, entry in entries.items()}
     except (zipfile.BadZipFile, zipfile.LargeZipFile, OSError, RuntimeError, EOFError):
         raise PodeluError("«По Делу» вернула повреждённый архив сотрудников") from None

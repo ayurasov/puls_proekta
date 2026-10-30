@@ -60,9 +60,11 @@ class FakePodelu:
         self.requests = []
         self.sessions = {}
         self.logouts = 0
+        self.logins = 0
         self.secure_cookie = False
         self.down = False
         self.overrides = {}
+        self.hooks = {}   # путь → что сделать до ответа (например, «прошло время»)
         admin = {"id": person_id("svc@vector.test"), "name": "Сервис Пульса", "login": "svc-puls", "email": "svc@vector.test",
                  "globalRole": "user", "capabilities": ["org.manage", "users.manage"], "isActive": True}
         weak = {**admin, "id": person_id("weak@vector.test"), "name": "Без прав", "login": "weak", "capabilities": []}
@@ -74,23 +76,43 @@ class FakePodelu:
                        for e in self.document["employees"]]
         self.people.append({"id": person_id("system@podelu"), "email": "system@podelu", "login": "system", "isSystem": True})
 
+    def _sent_cookie(self, session):
+        """Cookie сессии, которую отправил бы клиент: Secure-cookie по http:// не отправляется."""
+        for cookie in session.cookies:
+            if cookie.name == SESSION_COOKIE and cookie.domain == self.host:
+                return None if cookie.secure and not self.base.startswith("https://") else cookie.value
+        return None
+
     def __call__(self, session, method, url, **kwargs):
         headers = {**session.headers, **(kwargs.get("headers") or {})}
         assert kwargs.get("allow_redirects") is False and kwargs.get("timeout")
-        self.requests.append({"method": method, "url": url, "headers": headers, "json": kwargs.get("json")})
+        self.requests.append({"method": method, "url": url, "headers": headers, "json": kwargs.get("json"),
+                              "timeout": kwargs.get("timeout"), "verify": kwargs.get("verify")})
         if self.down:
             raise requests.exceptions.ConnectionError("refused")
         if not url.startswith(self.base + "/api/"):
             return FakeResponse(404, {"error": "not_found"})
         path = url[len(self.base + "/api/"):]
         self.calls.append((method, path))
+        if path in self.hooks:
+            self.hooks[path]()
         if path in self.overrides:
             return self.overrides[path]
+        sid = self._sent_cookie(session)
         if path == "auth/csrf-token":
+            # Как Flask-Session «По Делу»: токен — в сессии, cookie сессии выдаётся уже здесь (в production — Secure)
+            if sid not in self.sessions:
+                sid = f"sid-{len(self.sessions) + 1}-{len(self.calls)}"
+                self.sessions[sid] = None
+                session.cookies.set(SESSION_COOKIE, sid, domain=self.host, path="/", secure=self.secure_cookie)
             return FakeResponse(200, {"csrfToken": self.token})
         if method == "POST":
-            if headers.get("X-CSRF-Token") != self.token:
+            if not headers.get("X-CSRF-Token"):
                 return FakeResponse(400, {"error": "csrf_error", "message": "The CSRF token is missing."})
+            if sid not in self.sessions:
+                return FakeResponse(400, {"error": "csrf_error", "message": "The CSRF session token is missing."})
+            if headers.get("X-CSRF-Token") != self.token:
+                return FakeResponse(400, {"error": "csrf_error", "message": "The CSRF tokens do not match."})
             # production «По Делу»: HTTPS-запрос с изменением данных — только с Referer того же сайта
             if self.base.startswith("https://") and not (headers.get("Referer") or "").startswith(self.base + "/"):
                 return FakeResponse(400, {"error": "csrf_error", "message": "The referrer header is missing."})
@@ -99,11 +121,12 @@ class FakePodelu:
             account = self.accounts.get(body.get("login"))
             if account is None or account["password"] != body.get("password"):
                 return FakeResponse(401, {"error": "invalid_credentials", "message": "Неверный login или пароль"})
-            sid = f"sid-{len(self.sessions) + 1}"
+            self.sessions.pop(sid, None)   # новая сессия после входа
+            sid = f"sid-{len(self.sessions) + 1}-{len(self.calls)}"
             self.sessions[sid] = body["login"]
             session.cookies.set(SESSION_COOKIE, sid, domain=self.host, path="/", secure=self.secure_cookie)
+            self.logins += 1
             return FakeResponse(200, {"user": account["user"]})
-        sid = session.cookies.get(SESSION_COOKIE, domain=self.host)
         if path == "auth/logout":
             self.sessions.pop(sid, None)
             self.logouts += 1
@@ -676,3 +699,312 @@ def test_cli_sync_podelu_renames_and_moves(app, admin, podelu):
         assert db.session.get(Department, sales["key"]).name == "Коммерция"
         assert db.session.get(Department, lab["key"]).parent_id == sales["key"]
         assert db.session.query(Department).count() == 5
+
+
+# ---------------------------------------------------------------- независимая проверка 0.4.0 (замечания и их исправления)
+def _zip_photos(document, photos):
+    """Архив, как его собирает «По Делу»: фото — avatars/<номер записи по порядку выгрузки>.<ext>."""
+    import zipfile
+
+    buffer = io.BytesIO()
+    items = []
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for index, item in enumerate(document["employees"], start=1):
+            item = {k: v for k, v in item.items() if k != "avatar"}
+            data = photos.get(item["email"].lower())
+            if data:
+                item["avatar"] = f"avatars/{index}.png"
+                archive.writestr(item["avatar"], data)
+            items.append(item)
+        archive.writestr("employees.json", json.dumps({**document, "employees": items}, ensure_ascii=False))
+    return buffer.getvalue()
+
+
+def _fixture_photos():
+    import zipfile
+
+    archive = zipfile.ZipFile(FIXTURES / "todo_employees.zip")
+    inside = json.loads(archive.read("employees.json"))
+    return {e["email"].lower(): archive.read(e["avatar"]) for e in inside["employees"] if e.get("avatar")}
+
+
+def test_review_zip_photos_total_size_is_bounded(monkeypatch):
+    """Каждое фото не больше 5 МБ, но и все вместе — не больше предела; файл, на который ссылаются много записей,
+    читается один раз."""
+    import zipfile
+
+    monkeypatch.setattr(podelu_client, "MAX_PHOTOS_TOTAL", 12 * 1024 * 1024)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        employees = []
+        for index in range(3):   # 3 × 5 МБ нулей — архив в десятки КБ
+            archive.writestr(f"avatars/{index}.png", b"\0" * podelu_client.MAX_PHOTO_BYTES)
+            employees.append({"email": f"u{index}@x.ru", "login": f"u{index}", "name": "U", "avatar": f"avatars/{index}.png"})
+        archive.writestr("employees.json", json.dumps({"format": "podelu.employees", "version": 1, "employees": employees}))
+    assert len(buffer.getvalue()) < 1024 * 1024
+    with pytest.raises(podelu_client.PodeluError, match="больше 12 МБ после распаковки"):
+        podelu_client.read_employees_zip(buffer.getvalue())
+
+    # 40 записей ссылаются на одно фото — оно читается и учитывается один раз
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("avatars/1.png", b"\x89PNG" + b"\0" * (4 * 1024 * 1024))
+        employees = [{"email": f"u{i}@x.ru", "login": f"u{i}", "name": "U", "avatar": "avatars/1.png"} for i in range(40)]
+        archive.writestr("employees.json", json.dumps({"format": "podelu.employees", "version": 1, "employees": employees}))
+    _document, photos = podelu_client.read_employees_zip(buffer.getvalue())
+    assert list(photos) == ["avatars/1.png"]
+
+
+def test_review_fingerprint_ignores_export_order_and_photo_numbers(app, admin, podelu):
+    """«По Делу» выгружает сотрудников по имени без второго ключа: тёзки меняются местами после любого обновления
+    строки (в PostgreSQL), а с ними — номера фото. Это не изменение данных: «Применить» не отвечает 409."""
+    photos = _fixture_photos()
+    podelu.zip = _zip_photos(podelu.document, photos)
+    _connect(admin)
+    plan = _sync(admin).get_json()
+    assert plan["source"]["photos"] == 2
+    podelu.document["employees"].reverse()
+    podelu.zip = _zip_photos(podelu.document, photos)
+    podelu.structure["departments"][1]["heads"].reverse()
+    res = _sync(admin, apply=True, fingerprint=plan["fingerprint"])
+    assert res.status_code == 200, res.get_json().get("message")
+    assert res.get_json()["photos"]["saved"] == 2
+    # Настоящее изменение фото — другой отпечаток
+    photos["p.ivanov@vector.test"] = photos["p.ivanov@vector.test"] + b"\0"
+    podelu.zip = _zip_photos(podelu.document, photos)
+    assert _sync(admin).get_json()["fingerprint"] != plan["fingerprint"]
+
+
+def test_review_accept_invalid_certs_survives_ca_bundle_in_environment(monkeypatch):
+    """REQUESTS_CA_BUNDLE (или CURL_CA_BUNDLE) в окружении сервера не отменяет «Не проверять TLS-сертификат» —
+    ни у «По Делу», ни у Jira."""
+    from app.jira_client import JiraClient, JiraError
+
+    sent = []
+
+    def send(self, request, **kwargs):
+        sent.append(kwargs.get("verify"))
+        raise requests.exceptions.ConnectionError("нет сети")
+
+    monkeypatch.setattr(requests.Session, "send", send)
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/certs/ca-certificates.crt")
+    with pytest.raises(podelu_client.PodeluError):
+        podelu_client.PodeluClient(BASE, "svc", "pw", accept_invalid_certs=True).login()
+    with pytest.raises(JiraError):
+        JiraClient("https://jira.example.ru", "server_basic", "svc", "pw", accept_invalid_certs=True).myself()
+    assert sent == [False, False]
+    # С проверкой сертификата — пакет сертификатов из окружения, как раньше
+    with pytest.raises(podelu_client.PodeluError):
+        podelu_client.PodeluClient(BASE, "svc", "pw").login()
+    assert sent[-1] == "/etc/ssl/certs/ca-certificates.crt"
+
+
+@pytest.fixture
+def limited_app(tmp_path):
+    from app import create_app
+    from app.cli import seed_calendar
+
+    app = create_app("testing", {"SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'limited.db'}", "RATELIMIT_ENABLED": True})
+    with app.app_context():
+        db.create_all()
+        seed_calendar()
+    yield app
+    with app.app_context():
+        db.session.remove()
+        db.drop_all()
+        db.engine.dispose()
+
+
+def test_review_apply_with_snapshot_is_rate_limited(limited_app, podelu):
+    """Снимок в запросе освобождает от лимита только пересчёт плана: применение входит в «По Делу» заново."""
+    from tests.conftest import login
+
+    make_user(limited_app, "admin", "admin")
+    client = limited_app.test_client()
+    login(client, "admin")
+    _connect(client)
+    snapshot = _sync(client, photos=False).get_json()["snapshot"]
+    replans = [_sync(client, snapshot=snapshot, photos=False).status_code for _ in range(25)]
+    assert set(replans) == {200}
+    statuses = [_sync(client, apply=True, fingerprint="0" * 64, snapshot={"x": 1}, photos=False).status_code
+                for _ in range(25)]
+    assert 429 in statuses and podelu.logins <= 20
+
+
+def test_review_secure_cookie_over_http_is_explained_before_login(app, admin, monkeypatch):
+    """Production-«По Делу» выдаёт Secure-cookie уже вместе с CSRF-токеном: по http:// вход дошёл бы до ошибки CSRF.
+    Понятное сообщение — сразу, без попытки входа."""
+    fake = FakePodelu("http://podelu.example.ru")
+    fake.secure_cookie = True
+    monkeypatch.setattr(requests.Session, "request", lambda self, method, url, **kw: fake(self, method, url, **kw))
+    admin.put("/api/settings/podelu", json={"baseUrl": "http://podelu.example.ru", "login": "svc-puls", "password": PASSWORD})
+    message = admin.post("/api/settings/podelu/test", json={}).get_json()["message"]
+    assert message.startswith("«По Делу» выдаёт cookie сессии только для HTTPS"), message
+    assert ("POST", "auth/login") not in fake.calls
+
+
+def test_review_csrf_error_message_has_single_period(app, admin, podelu):
+    _connect(admin)
+    podelu.overrides["auth/login"] = FakeResponse(400, {"error": "csrf_error", "message": "The CSRF session token is missing."})
+    message = admin.post("/api/settings/podelu/test", json={}).get_json()["message"]
+    assert "The CSRF session token is missing. Укажите" in message and ".." not in message
+
+
+def _reuse_email(podelu):
+    """В «По Делу» у Орлова сменился email, а прежний получил новый сотрудник."""
+    for item in podelu.document["employees"]:
+        if item["login"] == "d.orlov":
+            item["email"] = "d.orlov.old@vector.test"
+    for person in podelu.people:
+        if person["login"] == "d.orlov":
+            person["email"] = "d.orlov.old@vector.test"
+    newcomer = {**next(e for e in podelu.document["employees"] if e["login"] == "p.ivanov"),
+                "email": "d.orlov@vector.test", "login": "d.orlov2", "name": "Денис Орлов"}
+    podelu.document["employees"].append(newcomer)
+    podelu.people.append({"id": person_id("newcomer"), "email": "d.orlov@vector.test", "login": "d.orlov2",
+                          "isSystem": False})
+
+
+def test_review_email_taken_over_by_another_podelu_person(app, admin, podelu):
+    """Сотрудник «Пульса», связанный с другим человеком «По Делу» из той же выгрузки, по email и логину не
+    сопоставляется: новый сотрудник с прежним email Орлова — новый, а не «уже указан в строке»."""
+    _connect(admin)
+    _apply_sync(admin, newUsers="file", photos=False)
+    _reuse_email(podelu)
+    plan = _sync(admin, photos=False, newUsers="file").get_json()
+    records = {r["login"]: r for r in plan["employees"]["records"]}
+    orlov, newcomer = records["d.orlov"], records["d.orlov2"]
+    assert not any("уже указан" in e for r in plan["employees"]["records"] for e in r["errors"])
+    assert orlov["userId"] is not None and [c["field"] for c in orlov["conflicts"]] == ["email"]
+    assert newcomer["action"] == "create" and newcomer["userId"] is None
+    # Пока у Орлова в «Пульсе» прежний email, второго с таким же не создать — понятная ошибка
+    assert newcomer["errors"] == ["email «d.orlov@vector.test» в системе у сотрудника Дмитрий Орлов — сначала смените "
+                                  "его email (например, возьмите значение из «По Делу» в его коллизии «Email»)"]
+    decisions = {orlov["key"]: {"fields": {"email": {"choice": "incoming"}}}}
+    plan = _sync(admin, photos=False, newUsers="file", decisions=decisions).get_json()
+    assert plan["canApply"], [r["errors"] for r in plan["employees"]["records"] if r["errors"]]
+    res = _sync(admin, apply=True, fingerprint=plan["fingerprint"], photos=False, newUsers="file", decisions=decisions)
+    assert res.status_code == 200, res.get_json()
+    with app.app_context():
+        users = {u.login: u for u in db.session.execute(select(User)).scalars()}
+        assert users["d.orlov"].email == "d.orlov.old@vector.test"
+        assert users["d.orlov"].podelu_id == person_id("d.orlov@vector.test")
+        assert users["d.orlov2"].email == "d.orlov@vector.test" and users["d.orlov2"].podelu_id == person_id("newcomer")
+
+
+def test_review_email_of_another_user_is_not_offered(app, admin, podelu):
+    """Сопоставлен по идентификатору «По Делу», а новый email в «Пульсе» у другого сотрудника — «взять из «По Делу»»
+    не предлагается (как у логина)."""
+    _connect(admin)
+    _apply_sync(admin, newUsers="file", photos=False)
+    make_user(app, "other", "viewer", name="Другой сотрудник", email="taken@vector.test")
+    for item in podelu.document["employees"]:
+        if item["login"] == "d.orlov":
+            item["email"] = "taken@vector.test"
+    for person in podelu.people:
+        if person["login"] == "d.orlov":
+            person["email"] = "taken@vector.test"
+    plan = _sync(admin, photos=False, newUsers="file").get_json()
+    record = {r["login"]: r for r in plan["employees"]["records"]}["d.orlov"]
+    conflict = next(c for c in record["conflicts"] if c["field"] == "email")
+    assert conflict["choices"] == ["current", "custom"]
+    assert conflict["note"] == "email «taken@vector.test» в системе у сотрудника Другой сотрудник"
+
+
+def test_review_total_deadline_logs_out_and_explains(app, admin, podelu, monkeypatch):
+    """Вход, выгрузки и выход укладываются в PODELU_TOTAL_TIMEOUT (меньше таймаута gunicorn): медленная «По Делу» —
+    понятная ошибка, а не убитый процесс сервера и незакрытая сессия."""
+    clock = [1000.0]
+    monkeypatch.setattr(podelu_client, "_clock", lambda: clock[0])
+    _connect(admin)
+
+    def slow():
+        clock[0] += 45   # выгрузка сотрудников заняла 45 из 50 секунд
+
+    podelu.hooks["users/export"] = lambda: (clock.__setitem__(0, clock[0] + 10))
+    podelu.hooks["org/export"] = slow
+    res = _sync(admin, photos=False)
+    assert res.status_code == 502
+    assert res.get_json()["message"].startswith("«По Делу» отвечает слишком долго: вход и выгрузки не уложились в 50 с")
+    assert podelu.calls[-1] == ("POST", "auth/logout") and podelu.sessions == {}
+    # Таймаут чтения каждого запроса — не больше остатка общего предела
+    export = next(r for r in podelu.requests if "/users/export" in r["url"])
+    assert export["timeout"][1] <= 5
+
+
+def test_review_stalled_download_stops_at_total_deadline():
+    """Настоящий сокет: «По Делу» отдала заголовки и замолчала посреди выгрузки — ожидание кончается на общем
+    пределе, а не через таймаут чтения (120 с), заданный в начале запроса."""
+    import socket
+    import threading
+    import time
+
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    release = threading.Event()
+
+    def serve():
+        conn, _ = listener.accept()
+        conn.recv(65536)
+        conn.sendall(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"departments\"")
+        release.wait(10)
+        conn.close()
+        listener.close()
+
+    threading.Thread(target=serve, daemon=True).start()
+    client = podelu_client.PodeluClient(f"http://127.0.0.1:{listener.getsockname()[1]}", "svc", "pw", total_timeout=1.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(podelu_client.PodeluError, match="не уложились в 1.5 с"):
+            client.export_structure()
+    finally:
+        release.set()
+    assert time.monotonic() - started < 4
+
+
+def test_review_case_only_name_difference_is_renamed_on_first_sync(app, admin, podelu):
+    root = _item(podelu, "ООО «Вектор»")
+    with app.app_context():
+        db.session.add(Department(id="11111111-1111-1111-1111-111111111111", name="ооо «вектор»", parent_id=None,
+                                  kind="company", sort_order=0, org_source="manual"))
+        db.session.commit()
+    _connect(admin)
+    plan = _sync(admin, photos=False).get_json()
+    entry = next(d for d in plan["structure"]["departments"] if d["key"] == root["key"])
+    assert entry["action"] == "update" and entry["changes"] == [{"field": "name", "old": "ооо «вектор»",
+                                                                  "new": "ООО «Вектор»"}]
+    _apply_sync(admin, newUsers="file", photos=False)
+    with app.app_context():
+        row = db.session.get(Department, "11111111-1111-1111-1111-111111111111")
+        assert row.name == "ООО «Вектор»" and row.podelu_id == root["key"]
+    again = _sync(admin, photos=False).get_json()
+    assert next(d for d in again["structure"]["departments"] if d["key"] == root["key"])["action"] == "unchanged"
+
+
+def test_review_login_is_not_retried(app, admin, podelu):
+    """Повторный вход считается в лимите входа «По Делу» и может оставить лишнюю сессию — 5xx на вход не повторяется."""
+    _connect(admin)
+    podelu.overrides["auth/login"] = FakeResponse(503, {"error": "unavailable"})
+    assert admin.post("/api/settings/podelu/test", json={}).status_code == 502
+    assert podelu.calls.count(("POST", "auth/login")) == 1
+    podelu.overrides["auth/csrf-token"] = FakeResponse(503, {"error": "unavailable"})
+    admin.post("/api/settings/podelu/test", json={})
+    assert podelu.calls.count(("GET", "auth/csrf-token")) == 1 + 3   # чтение повторяется
+
+
+def test_review_one_audit_entry_per_run_and_none_without_changes(app, admin, podelu):
+    def entries(entity):
+        with app.app_context():
+            return db.session.query(AuditLog).filter(AuditLog.entity == entity).count()
+
+    _connect(admin)
+    _apply_sync(admin, newUsers="file", photos=False)
+    assert entries("Загрузка из «По Делу»") == 1
+    _apply_sync(admin, newUsers="file", photos=False)   # ничего не изменилось
+    assert entries("Загрузка из «По Делу»") == 1
+    _item(podelu, "Продажи")["sortOrder"] = 9
+    assert run(app, ["sync-podelu", "--actor", "admin", "--no-photos", "--apply"], out=io.StringIO()) == 0
+    assert entries("Командная строка: sync-podelu") == 1 and entries("Загрузка из «По Делу»") == 1
+    assert run(app, ["sync-podelu", "--actor", "admin", "--no-photos", "--apply"], out=io.StringIO()) == 0
+    assert entries("Командная строка: sync-podelu") == 1

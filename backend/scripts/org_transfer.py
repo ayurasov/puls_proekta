@@ -141,11 +141,14 @@ def _problems(employees):
     return problems
 
 
+CLI_TOTAL_TIMEOUT = 600   # командной строке не нужно укладываться в таймаут gunicorn
+
+
 def _sync_podelu(args, actor):
     """Структура и сотрудники из «По Делу»: план, при --apply — применение одной транзакцией."""
     options = podelu_sync.Options(apply_settings=not args.no_settings, new_users=args.new_users,
                                   create_missing=args.create_missing, photos=not args.no_photos)
-    client = podelu.make_client()
+    client = podelu.make_client(total_timeout=CLI_TOTAL_TIMEOUT)
     db.session.rollback()   # выгрузка из «По Делу» — без открытой транзакции базы
     snapshot = podelu_sync.fetch(client, photos=options.photos)
     plan = podelu_sync.preview(snapshot, actor_id=actor.id, options=options)
@@ -154,7 +157,8 @@ def _sync_podelu(args, actor):
         plan = podelu_sync.preview(snapshot, actor_id=actor.id, options=options, decisions=decisions)
     deactivated, applied = [], False
     if args.apply and plan["canApply"]:
-        plan, applied, deactivated = podelu_sync.apply(snapshot, actor_id=actor.id, options=options, decisions=decisions)
+        plan, applied, deactivated = podelu_sync.apply(snapshot, actor_id=actor.id, options=options, decisions=decisions,
+                                                       entity="Командная строка: sync-podelu")
         if applied:
             try:
                 org.assert_consistent()   # итоговая структура без циклов (ADR-0008)
@@ -229,9 +233,10 @@ def run(app, argv=None, out=None):
             print(f"error: {error}", file=sys.stderr)
             return 2
         if args.apply and applied:
-            source = {"sync-ad": "AD", "sync-podelu": "По Делу"}.get(args.command) or Path(args.file).name
-            audit.record("Структура" if args.command != "import-employees" else "Пользователи", "import",
-                         f"Командная строка: {args.command}", "", "", source)
+            if args.command != "sync-podelu":   # загрузка из «По Делу» записывает себя сама — и только при изменениях
+                source = "AD" if args.command == "sync-ad" else Path(args.file).name
+                audit.record("Структура" if args.command != "import-employees" else "Пользователи", "import",
+                             f"Командная строка: {args.command}", "", "", source)
             db.session.commit()
             for user_id in dict.fromkeys(deactivated):
                 revoke_user_sessions(user_id)

@@ -283,8 +283,10 @@ class JiraClient:
         resp = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                # без перенаправлений: запросы с токеном идут только на адрес из подключения
-                resp = self.session.request(method, url, timeout=self.timeout, allow_redirects=False, **kwargs)
+                # без перенаправлений: запросы с токеном идут только на адрес из подключения. verify — явно: иначе
+                # REQUESTS_CA_BUNDLE в окружении отменил бы «Не проверять TLS-сертификат»
+                resp = self.session.request(method, url, timeout=self.timeout, allow_redirects=False,
+                                            verify=self.session.verify, **kwargs)
             except requests.exceptions.SSLError as exc:
                 self.fail("Ошибка TLS/сертификата. Если Jira использует самоподписанный или корпоративный "
                           f"сертификат, включите «Не проверять TLS-сертификат». ({exc})", "Ошибка TLS-сертификата Jira")

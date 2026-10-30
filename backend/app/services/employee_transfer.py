@@ -618,6 +618,13 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
         if user.podelu_id:
             by_podelu.setdefault(user.podelu_id, user)
     plan.paths = _Paths(snap)
+    # Сотрудник «Пульса», связанный с другим человеком «По Делу» из этой же выгрузки, — не он, даже если email или
+    # логин совпали (email ушёл к новому сотруднику). У файлов идентификаторов «По Делу» нет — проверка не действует
+    present = {record.podelu_id for record in records if record.podelu_id}
+
+    def free(candidate, record):
+        return candidate is not None and (not candidate.podelu_id or candidate.podelu_id == record.podelu_id
+                                          or candidate.podelu_id not in present)
     foreign = set().union(*(record.foreign for record in records)) if records else set()
     if foreign:
         plan.notes.append("Поля «По Делу», которых нет в «Пульсе», не загружаются: "
@@ -650,13 +657,13 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
         if user is not None:
             entry.matched = "podelu"   # тот же сотрудник «По Делу», даже если email или логин сменились
         elif record.email:
-            matches = by_email.get(record.email, [])
+            matches = [match for match in by_email.get(record.email, []) if free(match, record)]
             if len(matches) > 1:
                 entry.errors.append("в системе несколько сотрудников с таким email — исправьте в системе")
                 continue
             user = matches[0] if matches else None
             entry.matched = "email" if user is not None else None
-            if user is None and record.login and record.login.lower() in by_login:
+            if user is None and record.login and free(by_login.get(record.login.lower()), record):
                 other = by_login[record.login.lower()]
                 if not (other.email or "").strip():
                     # Логин принадлежит сотруднику без email — это он же
@@ -670,6 +677,7 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
                         entry.unresolved = True
         else:
             user = by_login.get(record.login.lower())
+            user = user if free(user, record) else None
             entry.matched = "login" if user is not None else None
         if user is not None and user.id in seen_users:
             entry.errors.append(f"сотрудник уже указан в строке {seen_users[user.id]}")
@@ -682,14 +690,16 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
             entry.warnings.append("сотрудника нет в системе — не создаётся (создание новых сотрудников выключено)")
             continue
         _plan_entry(entry, decision, actor_id=actor_id, new_users=new_users, snap=snap, by_login=by_login,
-                    avatar_hashes=avatar_hashes, avatar_in_file=avatars.get(key) if key in avatars else None)
+                    by_email=by_email, avatar_hashes=avatar_hashes,
+                    avatar_in_file=avatars.get(key) if key in avatars else None)
     _check_logins(plan, by_login)
+    _check_emails(plan, by_email)
     _resolve_people(plan, snap, by_email, by_login)
     _check_admins(plan, snap)
     return plan
 
 
-def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, avatar_hashes, avatar_in_file):
+def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, by_email, avatar_hashes, avatar_in_file):
     record, user = entry.record, entry.user
     field_decisions = decision.get("fields") if isinstance(decision.get("fields"), dict) else {}
     if user is None:
@@ -756,6 +766,13 @@ def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, avatar_
             continue
         if _same(field_name, current[field_name], incoming):
             continue
+        email_holder = None
+        if field_name == "email":
+            # Сопоставлен по идентификатору «По Делу», а новый email в «Пульсе» — у другого сотрудника
+            email_holder = next((u for u in by_email.get(incoming.lower(), []) if u.id != user.id), None)
+        if email_holder is not None and _empty(current[field_name]):
+            entry.warnings.append(f"email «{incoming}» в системе у сотрудника {email_holder.name} — не заполняется")
+            continue
         if _empty(current[field_name]) and field_name not in ("reportsToNone", "isActive"):
             # В системе пусто — берём из файла без вопросов
             final[field_name] = incoming
@@ -774,6 +791,9 @@ def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, avatar_
             if holder is not None and holder.id != user.id:
                 choices = ["current", "custom"]
                 note = f"логин «{incoming}» занят сотрудником {holder.name}"
+        if email_holder is not None:
+            choices = ["current", "custom"]
+            note = f"email «{incoming}» в системе у сотрудника {email_holder.name}"
         chosen = field_decisions.get(field_name) if isinstance(field_decisions.get(field_name), dict) else {}
         choice = chosen.get("choice") if chosen.get("choice") in choices else "current"
         value = current[field_name]
@@ -826,6 +846,27 @@ def _check_logins(plan, by_login):
         if login.lower() in taken:
             entry.errors.append(f"логин «{login}» повторяется (строка {taken[login.lower()]})")
         taken.setdefault(login.lower(), entry.record.line)
+
+
+def _check_emails(plan, by_email):
+    """Email после загрузки — у одного сотрудника: новый сотрудник или сменённый email не совпадают с email
+    сотрудника системы, который его сохраняет (например, email ушёл в «По Делу» к другому человеку)."""
+    final_of = {entry.user.id: (entry.final.get("email") or "").lower() for entry in plan.entries
+                if entry.user is not None and entry.final and not entry.errors and entry.action != "skip"}
+    for entry in plan.entries:
+        if entry.errors or entry.action == "skip" or not entry.final:
+            continue
+        email = (entry.final.get("email") or "").lower()
+        if not email or (entry.user is not None and "email" not in entry.touched):
+            continue
+        for holder in by_email.get(email, []):
+            if entry.user is not None and holder.id == entry.user.id:
+                continue
+            if final_of.get(holder.id, email) != email:
+                continue   # у него email в этой же загрузке меняется
+            entry.errors.append(f"email «{email}» в системе у сотрудника {holder.name} — сначала смените его email "
+                                "(например, возьмите значение из «По Делу» в его коллизии «Email»)")
+            break
 
 
 def _person_key(entry):
