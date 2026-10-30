@@ -30,7 +30,8 @@ const resizing = ref(false)
 
 const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progress: 52 }
 const columns = computed(() => Object.entries(COLUMN_WIDTHS).filter(([key]) => view.columns[key]).map(([key, width]) => ({ key, width })))
-const nameWidth = computed(() => Math.max(180, view.gridWidth))
+const MIN_NAME_WIDTH = 140
+const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
 const gridWidth = computed(() => nameWidth.value + columns.value.reduce((s, c) => s + c.width, 0))
 const rowHeight = computed(() => editor.settings.rowHeight || 44)
 const display = computed(() => editor.settings.display)
@@ -59,7 +60,28 @@ const arrows = computed(() => {
   const all = rows.value.map((row, i) => (i >= windowRange.value.start - 60 && i < windowRange.value.end + 60 ? rowModel(row, i, ctx.value, preview.value) : null)).filter(Boolean)
   return dependencyPaths(all, ctx.value)
 })
-const legend = computed(() => (display.value.legendEnabled ? legendEntries(editor.itemList, display.value) : []))
+const legend = computed(() => (display.value.legendEnabled ? legendEntries(editor.itemList, display.value, editor.settings.categories || []) : []))
+// Легенда — в одну строку: что не помещается, открывается кнопкой «+N»
+const legendMenu = ref(null)
+let legendCanvas = null
+const legendFit = computed(() => {
+  const entries = legend.value
+  if (!entries.length) return { shown: [], hidden: [] }
+  legendCanvas = legendCanvas || document.createElement('canvas')
+  const g = legendCanvas.getContext('2d')
+  g.font = `11.5px ${getComputedStyle(document.body).fontFamily}`
+  const available = viewport.width - 28
+  let used = 0
+  let count = 0
+  for (const [i, entry] of entries.entries()) {
+    const w = Math.min(220, g.measureText(entry.label).width) + 22 + (i ? 14 : 0)
+    const reserve = i < entries.length - 1 ? 52 : 0
+    if (used + w + reserve > available && count) break
+    used += w
+    count += 1
+  }
+  return { shown: entries.slice(0, count), hidden: entries.slice(count) }
+})
 const selectedKey = computed(() => view.selectedKey)
 const todayColor = computed(() => resolveColor(editor.settings.today?.color || 'red', 'red').color)
 const assigneeName = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
@@ -152,7 +174,7 @@ function startResize(event) {
   const startX = event.clientX
   const startWidth = nameWidth.value
   resizing.value = true
-  const move = (e) => { view.gridWidth = Math.max(180, Math.min(900, startWidth + e.clientX - startX)) }
+  const move = (e) => { view.gridWidth = Math.max(MIN_NAME_WIDTH, Math.min(900, startWidth + e.clientX - startX)) }
   const up = () => {
     resizing.value = false
     window.removeEventListener('pointermove', move)
@@ -163,6 +185,19 @@ function startResize(event) {
   stopResize = up
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
+}
+
+/** Двойной щелчок по краю колонки — ширина по самому длинному названию среди показанных строк. */
+let measureCanvas = null
+function autoFitNameColumn() {
+  measureCanvas = measureCanvas || document.createElement('canvas')
+  const g = measureCanvas.getContext('2d')
+  g.font = `700 12.5px ${getComputedStyle(document.body).fontFamily}`
+  let widest = 0
+  for (const row of rows.value) widest = Math.max(widest, g.measureText(row.item.name || '').width + row.depth * 16)
+  // ручка, стрелка, значок, промежутки и кнопка карточки
+  view.gridWidth = Math.round(Math.max(160, Math.min(640, widest + 112)))
+  editor.saveView()
 }
 
 // ---------- строки слева ----------
@@ -532,9 +567,6 @@ function noteLabel(note) {
 
 <template>
   <div class="gantt" :class="{ 'is-resizing': resizing, 'is-dragging': drag?.moved || rowDrag?.active }">
-    <div v-if="legend.length && display.legendPosition === 'top'" class="legend">
-      <span v-for="entry in legend" :key="entry.label" class="legend-item"><span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" />{{ entry.label }}</span>
-    </div>
     <div ref="scroller" class="scroller scroll-thin" @scroll="onScroll" @wheel="onWheel">
       <div class="canvas" :style="{ width: gridWidth + ctx.width + 'px', height: ctx.headerHeight + bodyHeight + 'px' }">
         <!-- Заголовок -->
@@ -549,7 +581,7 @@ function noteLabel(note) {
                 {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Ответственный', progress: '%' }[col.key] }}
               </div>
             </div>
-            <div class="resizer" title="Ширина колонки" @pointerdown="startResize" />
+            <div class="resizer" title="Ширина колонки: перетащите; двойной щелчок — по самому длинному названию" @pointerdown="startResize" @dblclick="autoFitNameColumn" />
           </div>
           <svg class="header-svg" :width="ctx.width" :height="ctx.headerHeight">
             <g class="top-row">
@@ -713,9 +745,20 @@ function noteLabel(note) {
         </div>
       </div>
     </div>
-    <div v-if="legend.length && display.legendPosition !== 'top'" class="legend">
-      <span v-for="entry in legend" :key="entry.label" class="legend-item"><span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" />{{ entry.label }}</span>
+    <div v-if="legend.length" class="legend" :class="{ 'is-top': display.legendPosition === 'top' }" data-testid="legend">
+      <span v-for="entry in legendFit.shown" :key="entry.kind + entry.label + entry.color" class="legend-item" :title="entry.title || entry.label">
+        <span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" /><span class="legend-label">{{ entry.label }}</span>
+      </span>
+      <button v-if="legendFit.hidden.length" class="legend-more" type="button" :title="`Ещё ${legendFit.hidden.length} в легенде`" @click="legendMenu = legendMenu ? null : $event.currentTarget">
+        +{{ legendFit.hidden.length }}
+      </button>
     </div>
+    <PopupMenu v-if="legendMenu" :anchor="legendMenu" align="end" :min-width="220" @close="legendMenu = null">
+      <div class="menu-label">Легенда</div>
+      <div v-for="entry in legendFit.hidden" :key="'more' + entry.kind + entry.label + entry.color" class="legend-item legend-menu-item" :title="entry.title || entry.label">
+        <span :class="entry.kind === 'milestone' ? 'legend-diamond' : 'legend-bar'" :style="{ background: entry.color }" /><span class="legend-label">{{ entry.label }}</span>
+      </div>
+    </PopupMenu>
 
     <Teleport to="body">
       <div v-if="tooltipData && !drag" class="tooltip gantt-tooltip" :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }">
@@ -879,10 +922,21 @@ function noteLabel(note) {
 .copy-ghost rect { fill: rgba(79, 124, 255, 0.25); stroke: var(--color-primary); stroke-dasharray: 4 3; pointer-events: none; }
 .flash .bar { animation: flash-bar 2.4s ease; }
 @keyframes flash-bar { 0%, 30% { filter: drop-shadow(0 0 6px #facc15); } 100% { filter: none; } }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; padding: 8px 14px; border-top: 1px solid var(--color-border); font-size: 11.5px; color: var(--color-text-secondary); flex-shrink: 0; }
-.legend-item { display: inline-flex; align-items: center; gap: 6px; }
-.legend-bar { width: 16px; height: 8px; border-radius: 2px; }
-.legend-diamond { width: 8px; height: 8px; transform: rotate(45deg); }
+/* Сенсорный экран: ручки перетаскивания не занимают места, кнопка карточки видна всегда */
+@media (hover: none) {
+  .handle { display: none; }
+  .open-btn { display: none; }
+  .grid-row.selected .open-btn { display: flex; opacity: 1; width: 32px; height: 32px; }
+}
+.legend { display: flex; flex-wrap: nowrap; align-items: center; gap: 14px; padding: 5px 14px; border-top: 1px solid var(--color-border); font-size: 11.5px; color: var(--color-text-secondary); flex-shrink: 0; overflow: hidden; min-height: 28px; }
+.legend.is-top { order: -1; border-top: 0; border-bottom: 1px solid var(--color-border); }
+.legend-item { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-shrink: 0; }
+.legend-label { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.legend-bar { width: 16px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+.legend-diamond { width: 8px; height: 8px; transform: rotate(45deg); flex-shrink: 0; }
+.legend-more { border: 1px solid var(--color-border); background: var(--color-surface); border-radius: 999px; padding: 1px 8px; font-size: 11px; font-weight: 600; color: var(--color-text-secondary); flex-shrink: 0; }
+.legend-more:hover { border-color: var(--color-border-strong); color: var(--color-text); }
+.legend-menu-item { display: flex; padding: 6px 10px; font-size: 12.5px; }
 </style>
 
 <style>

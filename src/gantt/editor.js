@@ -56,6 +56,15 @@ if (typeof window !== 'undefined') {
   })
 }
 
+/** Ширина колонки названий по умолчанию — от ширины экрана: 160 px на телефоне, до 380 px на большом мониторе. */
+export function defaultGridWidth(screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1366) {
+  return Math.round(Math.min(380, Math.max(160, screenWidth * 0.22)))
+}
+/** Сохранённая ширина не занимает на узком экране больше половины ширины. */
+export function fitGridWidth(width, screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1366) {
+  return Math.round(Math.min(width, Math.max(160, screenWidth * 0.45)))
+}
+
 let calendarCache = null
 async function loadCalendarDays() {
   if (!calendarCache) {
@@ -149,7 +158,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     try { saved = JSON.parse(localStorageGet(viewKey()) || 'null') } catch { saved = null }
     state.view.scale = saved?.scale || s.scale || 'day'
     state.view.zoom = saved?.zoom || s.zoom || 1
-    state.view.gridWidth = saved?.gridWidth || Math.max(s.gridWidth || 0, 300)
+    state.view.gridWidth = fitGridWidth(saved?.gridWidth || Math.max(s.gridWidth || 0, defaultGridWidth()))
     state.view.collapsed = new Set(saved?.collapsed || s.defaultCollapsed || [])
     if (saved?.columns) state.view.columns = { ...state.view.columns, ...saved.columns }
   }

@@ -183,15 +183,50 @@ export function dependencyPaths(models, ctx) {
   return paths
 }
 
-/** Легенда (как в 1.0.x): по категории или названию задачи, вехи — одной записью. */
-export function legendEntries(items, display) {
-  const map = new Map()
+export const NO_CATEGORY = 'Без категории'
+
+/**
+ * Легенда: цвета категорий задач и вех. Задачи — по категории (цвет первой задачи категории,
+ * порядок — как в настройках плана); задачи без категории — одной записью «Без категории» и только
+ * если категории в плане есть (в 1.0.x каждая задача без категории давала свою запись). Вехи —
+ * по цвету линии: одна запись на цвет, подпись — название вехи или «Вехи: …».
+ */
+export function legendEntries(items, display, categoryOrder = []) {
+  const categories = new Map()
+  const uncategorised = new Map()
+  const milestones = new Map()
   for (const item of items) {
     if (display.legendMode === 'main' && item.parentKey) continue
-    if (item.type === 'task') map.set(item.category || item.name, { color: resolveColor(item.color, 'blue').color, kind: 'task' })
-    if (item.type === 'milestone') map.set('Веха', { color: resolveColor(item.lineColor || item.color, 'teal').color, kind: 'milestone' })
+    if (item.type === 'task') {
+      const color = resolveColor(item.color, 'blue').color
+      if (item.category) {
+        if (!categories.has(item.category)) categories.set(item.category, color)
+      } else {
+        uncategorised.set(color, (uncategorised.get(color) || 0) + 1)
+      }
+    }
+    if (item.type === 'milestone') {
+      const color = resolveColor(item.lineColor || item.color, 'teal').color
+      if (!milestones.has(color)) milestones.set(color, [])
+      milestones.get(color).push(item.name)
+    }
   }
-  return [...map].map(([label, v]) => ({ label, ...v }))
+  const order = (name) => {
+    const i = categoryOrder.indexOf(name)
+    return i < 0 ? Number.MAX_SAFE_INTEGER : i
+  }
+  const entries = [...categories].sort((a, b) => order(a[0]) - order(b[0]))
+    .map(([label, color]) => ({ label, color, kind: 'task' }))
+  if (entries.length && uncategorised.size) {
+    const [color] = [...uncategorised].sort((a, b) => b[1] - a[1])[0]
+    entries.push({ label: NO_CATEGORY, color, kind: 'task' })
+  }
+  for (const [color, names] of milestones) {
+    const label = milestones.size === 1 ? (names.length === 1 ? 'Веха' : 'Вехи')
+      : names.length === 1 ? names[0] : `Вехи: ${names[0]} и ещё ${names.length - 1}`
+    entries.push({ label, color, kind: 'milestone', title: names.join(', ') })
+  }
+  return entries
 }
 
 export function statusMeta(key) {

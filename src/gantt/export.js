@@ -36,10 +36,20 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
   const models = rows.map((row, i) => rowModel(row, i, ctx))
   const gridW = Math.max(260, view.gridWidth)
   const titleH = 56
-  const legend = display.legendEnabled ? legendEntries(editor.itemList, display) : []
-  const legendH = legend.length ? 30 : 0
+  const legend = display.legendEnabled ? legendEntries(editor.itemList, display, editor.settings.categories || []) : []
   const bodyH = rows.length * rowHeight
   const width = gridW + ctx.width
+  // Легенда в выгрузке — строками по ширине изображения
+  const legendRows = []
+  let legendX = 16
+  for (const entry of legend) {
+    const label = entry.label.length > 60 ? entry.label.slice(0, 59) + '…' : entry.label
+    const w = 34 + label.length * 6.5
+    if (!legendRows.length || (legendX + w > width - 16 && legendX > 16)) { legendRows.push([]); legendX = 16 }
+    legendRows[legendRows.length - 1].push({ ...entry, label, x: legendX })
+    legendX += w
+  }
+  const legendH = legendRows.length ? 12 + legendRows.length * 20 : 0
   const height = titleH + ctx.headerHeight + bodyH + legendH + 12
   const assigneeName = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
   const out = []
@@ -143,17 +153,16 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
   for (const line of ctx.milestoneLines) out.push(`<line x1="${line.x}" x2="${line.x}" y1="${-ctx.laneHeight}" y2="${bodyH}" stroke="${line.color}" stroke-width="2"${dash(line.style)}/>`)
   out.push('</g>')
 
-  if (legend.length) {
-    let x = 16
-    const y = by + bodyH + 20
-    for (const entry of legend) {
+  legendRows.forEach((line, row) => {
+    const y = by + bodyH + 20 + row * 20
+    for (const entry of line) {
+      const x = entry.x
       out.push(entry.kind === 'milestone'
         ? `<path d="M${x + 4} ${y - 8} l4 4 l-4 4 l-4 -4 Z" fill="${entry.color}"/>`
         : `<rect x="${x}" y="${y - 8}" width="16" height="8" rx="2" fill="${entry.color}"/>`)
       out.push(`<text x="${x + 22}" y="${y}" font-size="11" fill="#4b5568">${esc(entry.label)}</text>`)
-      x += 34 + entry.label.length * 6.5
     }
-  }
+  })
   out.push('</svg>')
   return { svg: out.join(''), width, height }
 }
