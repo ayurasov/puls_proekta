@@ -8,6 +8,8 @@ dist-ssr
 .env
 .env.*
 !.env.example
+# Настройки конкретного сервера (например, подсеть Docker) — см. руководство по установке
+docker-compose.override.yml
 
 # Test artifacts
 test-results/

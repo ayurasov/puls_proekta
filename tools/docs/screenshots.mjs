@@ -54,6 +54,7 @@ const jira = createServer((req, res) => {
     const path = req.url.split('?')[0].replace('/rest/api/2/', '')
     if (path === 'myself') return send(200, { displayName: 'svc-puls (только чтение)' })
     if (path === 'field') return send(200, [{ id: 'duedate', name: 'Срок', schema: { type: 'date' } }, { id: 'customfield_10015', name: 'Start date', custom: true, schema: { type: 'date' } }])
+    if (path === 'serverInfo') return send(200, { version: '9.12.2', deploymentType: 'DataCenter' })
     if (path === 'search') {
       const { jql } = JSON.parse(body || '{}')
       const keys = jql.startsWith('key in') ? jql.slice(jql.indexOf('(') + 1, jql.lastIndexOf(')')).split(',').map((k) => k.trim()) : Object.keys(JIRA_ISSUES)

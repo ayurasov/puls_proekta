@@ -119,14 +119,30 @@ def _admin_client():
         raise _jira_failed(exc) from None
 
 
+# Проверочный поиск: ограниченный запрос (Cloud не принимает JQL без условия), без проверки JQL — так же, как
+# читаются задачи строк плана
+PROBE_JQL = "updated >= -1d ORDER BY updated DESC"
+
+
 @bp.post("/settings/jira/test")
 @admin_required
 def test_connection():
+    """Вход, версия Jira и поиск задач — тем же запросом, каким читаются задачи планов: «соединение установлено»
+    значит, что задачи действительно будут загружаться."""
     client = _admin_client()
     try:
-        return jsonify({"ok": True, "user": client.myself()})
+        user = client.myself()
     except JiraError as exc:
         raise _jira_failed(exc) from None
+    try:
+        info = client.server_info()
+    except JiraError:
+        info = {"version": "", "deploymentType": ""}
+    try:
+        client.search(PROBE_JQL, ["summary"], limit=1, strict=False)
+    except JiraError as exc:
+        raise ApiError(502, "jira_error", f"Вход выполнен ({user}), но поиск задач в Jira не работает: {exc}") from None
+    return jsonify({"ok": True, "user": user, **info})
 
 
 @bp.post("/settings/jira/fields")
@@ -208,6 +224,8 @@ def search():
         client = jira_service.make_client(detailed=detailed)
         ordered = client.search(payload.jql.strip(), request_fields(fmap), limit=payload.limit or SEARCH_MAX)
     except JiraError as exc:
+        if exc.status == 400 and exc.detail:
+            raise ApiError(400, "jql_error", f"Jira не приняла запрос: {exc.detail}") from None
         raise _jira_failed(exc) from None
     return jsonify({"issues": [normalize_issue(k.upper(), f, conn["baseUrl"], fmap) for k, f in ordered],
                     "missing": [], "invalid": invalid, "truncated": len(ordered) >= (payload.limit or SEARCH_MAX),

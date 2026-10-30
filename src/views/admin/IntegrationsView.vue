@@ -64,7 +64,11 @@ async function test() {
   status.value = { kind: 'info', text: 'Проверка подключения…' }
   try {
     const res = await api.post('/settings/jira/test', payload())
-    status.value = { kind: 'ok', text: `Соединение установлено${res.user ? `: ${res.user}` : ''}` }
+    const jira = [res.deploymentType && `Jira ${res.deploymentType}`, res.version].filter(Boolean).join(' ')
+    status.value = {
+      kind: 'ok',
+      text: `Соединение установлено${res.user ? `: ${res.user}` : ''}${jira ? ` · ${jira}` : ''} · поиск задач работает`,
+    }
   } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
 }
 async function loadFields() {

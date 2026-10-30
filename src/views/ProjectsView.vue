@@ -31,7 +31,8 @@ const groups = computed(() => {
   const q = search.value.trim().toLowerCase()
   return projects.grouped
     .map((g) => ({ ...g, projects: q ? g.projects.filter((p) => p.title.toLowerCase().includes(q)) : g.projects }))
-    .filter((g) => g.projects.length || (!q && g.direction))
+    // Пустое направление видно только администратору: остальным направление без их проектов ни к чему
+    .filter((g) => g.projects.length || (!q && g.direction && auth.isAdmin))
 })
 const total = computed(() => projects.projects.length)
 const query = computed(() => search.value.trim())

@@ -1,4 +1,4 @@
-/** Тёмный текст на светлых полосах: с ним и белым у каждого цвета палитры есть пара с контрастом ≥ 4,5 (WCAG AA). */
+/** Тёмный текст — только на светлых полосах; на насыщенных и тёмных — белый (см. readableText). */
 export const DARK_TEXT = '#000000'
 
 function channel(value) {
@@ -18,10 +18,27 @@ export function contrastRatio(a, b) {
   const [x, y] = [luminance(a), luminance(b)]
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)
 }
-/** Белый или тёмный текст — тот, что контрастнее на полосе цвета hex (с учётом её прозрачности). */
+/** Воспринимаемый контраст текста txt на фоне bg по APCA (|Lc|, 0–106). WCAG 2 на насыщенных средних тонах
+ * ошибается: на синей, красной, фиолетовой полосе «контрастнее» у него чёрный текст, хотя глазу читаемее белый. */
+export function apcaContrast(txt, bg) {
+  const y = (hex) => {
+    const [r, g, b] = [1, 3, 5].map((i) => (parseInt(hex.slice(i, i + 2), 16) / 255) ** 2.4)
+    const value = 0.2126729 * r + 0.7151522 * g + 0.072175 * b
+    return value > 0.022 ? value : value + (0.022 - value) ** 1.414
+  }
+  const [t, b] = [y(txt), y(bg)]
+  if (b > t) {
+    const sapc = (b ** 0.56 - t ** 0.57) * 1.14
+    return sapc < 0.1 ? 0 : (sapc - 0.027) * 100
+  }
+  const sapc = (b ** 0.65 - t ** 0.62) * 1.14
+  return sapc > -0.1 ? 0 : -(sapc + 0.027) * 100
+}
+/** Белый или тёмный текст — тот, что воспринимается контрастнее на полосе цвета hex (с учётом её прозрачности):
+ * белый на синем, красном, фиолетовом, сером и тёмных цветах, тёмный — на жёлтом, лаймовом, зелёном, голубом. */
 export function readableText(hex, opacity = 1) {
   const fill = opacity < 1 ? blendWithWhite(hex, opacity) : hex
-  return contrastRatio(fill, '#ffffff') >= contrastRatio(fill, DARK_TEXT) ? '#ffffff' : DARK_TEXT
+  return apcaContrast('#ffffff', fill) >= apcaContrast(DARK_TEXT, fill) ? '#ffffff' : DARK_TEXT
 }
 
 /** Тот же оттенок, затемнённый до контраста ≥ 4,5 с белым фоном — для цветных подписей (пометки, вехи над шкалой). */
