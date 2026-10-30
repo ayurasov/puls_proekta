@@ -302,3 +302,47 @@ def test_archive_does_not_move_revision_back(app, admin, monkeypatch):
     state = _colleague_commits_before_lock(app, monkeypatch, lambda: ok_ops(other, plan_id, [task("x1"), task("x2")]))
     archived = admin.post(f"/api/plans/{plan_id}/archive").get_json()
     assert archived["revision"] > state["result"]["revision"]
+
+
+def test_simultaneous_same_field_edits_are_serialized(app, admin, monkeypatch):
+    """Два пакета одновременно (настоящие потоки): блокировка плана выстраивает их друг за другом —
+    на PostgreSQL (SELECT … FOR UPDATE) и на SQLite (BEGIN IMMEDIATE). Ревизии разные, второй узнаёт
+    о правке первого."""
+    import threading
+    import time
+
+    import app.api.plans as plans_api
+
+    project_id, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", "Общая")])
+    base = admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["revision"]
+    other = new_client(app, "admin2", "admin", name="Второй администратор")
+    real_apply = plans_api.apply_ops
+
+    def slow_apply(*args, **kwargs):
+        result = real_apply(*args, **kwargs)
+        time.sleep(0.3)  # держим блокировку: второй пакет в это время уже ждёт
+        return result
+
+    monkeypatch.setattr(plans_api, "apply_ops", slow_apply)
+    start = threading.Barrier(2)
+    results = {}
+
+    def send(name, client, value):
+        start.wait()
+        results[name] = client.post(f"/api/plans/{plan_id}/ops", json={
+            "baseRevision": base, "ops": [{"op": "item.update", "key": "t1", "fields": {"name": value}}]})
+
+    threads = [threading.Thread(target=send, args=("a", admin, "Вариант А")),
+               threading.Thread(target=send, args=("b", other, "Вариант Б"))]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+    assert all(r.status_code == 200 for r in results.values()), {k: r.get_json() for k, r in results.items()}
+    a, b = results["a"].get_json(), results["b"].get_json()
+    assert a["revision"] != b["revision"]
+    later = a if a["revision"] > b["revision"] else b
+    assert later["conflicts"], "второй пакет должен узнать об одновременной правке того же поля"
+    final = admin.get(f"/api/plans/{plan_id}").get_json()
+    assert final["plan"]["revision"] == max(a["revision"], b["revision"])

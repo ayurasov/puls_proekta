@@ -547,6 +547,22 @@ class PlanEditor:
         return self.pending_events
 
 
+def _begin_immediate_on_sqlite():
+    """SQLite не знает SELECT … FOR UPDATE: блокировку записи берём сразу, BEGIN IMMEDIATE.
+
+    Иначе два одновременных пакета на SQLite (разработка, e2e, небольшие стенды) оба читали бы план
+    до записи и получали одну ревизию, а правка одного и того же поля не распознавалась бы как
+    одновременная. Второй запрос ждёт первого (busy_timeout, extensions.py). Если в транзакции уже
+    была запись, блокировка и так у неё. В PostgreSQL то же делает with_for_update().
+    """
+    connection = db.session.connection()
+    if connection.dialect.name != "sqlite":
+        return
+    raw = connection.connection.driver_connection
+    if not raw.in_transaction:
+        raw.execute("BEGIN IMMEDIATE")
+
+
 def lock_plan(plan_id, allow_archived=False):
     """Заблокировать строку плана до конца транзакции и перечитать её.
 
@@ -555,6 +571,7 @@ def lock_plan(plan_id, allow_archived=False):
     прочитанными до блокировки, два одновременных пакета получили бы одну ревизию, а коллега пропустил
     бы чужую правку при опросе. Состояние (удалён, в архиве) проверяется уже после блокировки.
     """
+    _begin_immediate_on_sqlite()
     plan = db.session.execute(
         select(Plan).where(Plan.id == plan_id).with_for_update().execution_options(populate_existing=True)
     ).scalar_one_or_none()
