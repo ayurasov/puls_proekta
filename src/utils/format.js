@@ -68,3 +68,8 @@ export function pluralize(n, one, few, many) {
   if (last === 1) return one
   return many
 }
+
+/** Число со словом в нужной форме: countLabel(2, 'строка', 'строки', 'строк') → «2 строки». */
+export function countLabel(n, one, few, many) {
+  return `${n} ${pluralize(n, one, few, many)}`
+}

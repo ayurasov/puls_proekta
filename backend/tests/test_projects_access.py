@@ -93,3 +93,28 @@ def test_dashboard_stats(app, admin):
     stats = admin.get("/api/projects").get_json()[0]["stats"]
     assert stats["total"] == 3 and stats["done"] == 1 and stats["inwork"] == 1 and stats["overdue"] == 1
     assert stats["nextMilestone"] == {"name": "Сдача", "date": "2099-01-01"}
+
+
+def test_dashboard_stats_count_default_plan_only(app, admin):
+    """Копия плана не удваивает задачи на карточке; процент — как «Средний прогресс» в «Статистике»."""
+    from tests.helpers import ok_ops, task
+
+    project_id, plan_id = create_project(admin, "Копии")
+    ok_ops(admin, plan_id, [
+        task("t1", status="done", progress=100), task("t2", progress=50, end="2099-05-05"),
+        task("t3", progress=0, end="2099-05-05"),
+    ])
+    copy = admin.post(f"/api/projects/{project_id}/plans", json={"sourcePlanId": plan_id}).get_json()
+    ok_ops(admin, copy["id"], [task("t9", progress=10, end="2099-05-05")])
+    stats = admin.get("/api/projects").get_json()[0]["stats"]
+    assert stats["total"] == 3 and stats["done"] == 1
+    assert stats["progress"] == 50  # (100 + 50 + 0) / 3
+    assert stats["planId"] == plan_id
+    # Основной план — первая открытая вкладка: после переноса копии вперёд считается копия
+    admin.post(f"/api/projects/{project_id}/plans/reorder", json={"ids": [copy["id"], plan_id]})
+    stats = admin.get("/api/projects").get_json()[0]["stats"]
+    assert stats["planId"] == copy["id"] and stats["total"] == 4
+    # Архивный план не считается основным
+    admin.post(f"/api/plans/{copy['id']}/archive")
+    stats = admin.get("/api/projects").get_json()[0]["stats"]
+    assert stats["planId"] == plan_id and stats["total"] == 3
