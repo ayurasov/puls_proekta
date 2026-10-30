@@ -90,9 +90,29 @@ function replace(updated) {
   if (i >= 0) users.value[i] = { ...users.value[i], ...updated }
 }
 
-async function setRole(user, role) {
-  if (role === user.role) return
-  try { replace(await api.patch(`/users/${user.id}`, { role })) } catch (err) { ui.error(err); load() }
+// Роль в таблице меняется сразу; изменение можно отменить из уведомления. Выдача и снятие роли
+// администратора — с подтверждением: это доступ ко всем проектам, сотрудникам и настройкам.
+async function setRole(user, role, event = null, { undo = false } = {}) {
+  const previous = user.role
+  if (role === previous) return
+  if (!undo && (role === 'admin' || previous === 'admin')) {
+    const ok = await confirm({
+      title: role === 'admin' ? `Сделать ${user.name} администратором?` : `Снять с ${user.name} роль администратора?`,
+      message: role === 'admin'
+        ? 'Администратор видит и меняет все проекты, сотрудников, доступы и настройки системы.'
+        : `Сотрудник станет «${ROLE_LABELS[role]}» и будет видеть только проекты по выданным доступам.`,
+      confirmText: role === 'admin' ? 'Сделать администратором' : 'Снять роль', danger: role !== 'admin',
+    })
+    if (!ok) { if (event?.target) event.target.value = previous; return }
+  }
+  try {
+    replace(await api.patch(`/users/${user.id}`, { role }))
+    if (undo) return
+    ui.toast({
+      title: `${user.name}: ${ROLE_LABELS[role]}`, body: `Было: ${ROLE_LABELS[previous]}`, kind: 'success', timeout: 8000,
+      action: { label: 'Отменить', handler: () => setRole(users.value.find((u) => u.id === user.id) || user, previous, null, { undo: true }) },
+    })
+  } catch (err) { ui.error(err); load() }
 }
 
 async function setActive(user, active) {
@@ -186,7 +206,7 @@ async function removePhoto() {
             </td>
             <td class="small">{{ user.position || '—' }}</td>
             <td>
-              <select class="select input-sm" :value="user.role" :disabled="user.id === auth.user?.id" :title="ROLE_HINTS[user.role]" @change="setRole(user, $event.target.value)">
+              <select class="select input-sm" :value="user.role" :disabled="user.id === auth.user?.id" :title="ROLE_HINTS[user.role]" @change="setRole(user, $event.target.value, $event)">
                 <option v-for="(label, key) in ROLE_LABELS" :key="key" :value="key">{{ label }}</option>
               </select>
             </td>
