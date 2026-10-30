@@ -13,6 +13,7 @@ COPY --from=builder /app/dist /usr/share/nginx/html
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 ENV BACKEND_UPSTREAM=backend:5000
 EXPOSE 80
+# 127.0.0.1, а не localhost: при включённом в Docker IPv6 localhost — это ::1, а nginx слушает только IPv4
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=5 \
-    CMD wget -qO- http://localhost:80/healthz || exit 1
+    CMD wget -qO- http://127.0.0.1:80/healthz || exit 1
 CMD ["nginx", "-g", "daemon off;"]

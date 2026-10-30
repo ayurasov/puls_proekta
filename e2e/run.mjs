@@ -29,8 +29,8 @@ function start(cmd, args, options) {
   children.push(child)
   return child
 }
-start(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--port', '5055'], { cwd: join(root, 'backend'), env })
-start('npx', ['vite', 'preview', '--port', '4173', '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: 'http://127.0.0.1:5055' } })
+start(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--host', '127.0.0.1', '--port', '5055'], { cwd: join(root, 'backend'), env })
+start('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port', '4173', '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: 'http://127.0.0.1:5055' } })
 
 async function waitFor(url) {
   for (let i = 0; i < 120; i += 1) {

@@ -27,6 +27,6 @@ RUN sed -i 's/\r$//' docker-entrypoint.sh \
 USER appuser
 EXPOSE 5000
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s --retries=5 \
-    CMD curl -fsS http://localhost:5000/api/health/ready || exit 1
+    CMD curl -fsS http://127.0.0.1:5000/api/health/ready || exit 1
 ENTRYPOINT ["./docker-entrypoint.sh"]
 CMD ["gunicorn", "--config", "gunicorn.conf.py", "wsgi:app"]
