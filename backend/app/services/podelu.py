@@ -54,9 +54,10 @@ def public_json(conn):
     return {"connected": True, "baseUrl": conn["baseUrl"]}
 
 
-def make_client(override=None):
+def make_client(override=None, total_timeout=None):
     """Клиент по сохранённому подключению; override — данные формы администратора (проверка до сохранения).
-    Без нового пароля в форме используется сохранённый — только для того же адреса и логина."""
+    Без нового пароля в форме используется сохранённый — только для того же адреса и логина. total_timeout — предел
+    всей операции, по умолчанию PODELU_TOTAL_TIMEOUT (запрос к «Пульсу» не дольше таймаута gunicorn)."""
     saved = get_connection()
     if override is None:
         if not saved:
@@ -79,4 +80,5 @@ def make_client(override=None):
         raise PodeluError("Укажите логин учётной записи «По Делу»")
     if not password:
         raise PodeluError("Укажите пароль учётной записи «По Делу»")
-    return PodeluClient(conf["baseUrl"], conf["login"], password, accept_invalid_certs=bool(conf.get("acceptInvalidCerts")))
+    return PodeluClient(conf["baseUrl"], conf["login"], password, accept_invalid_certs=bool(conf.get("acceptInvalidCerts")),
+                        total_timeout=total_timeout or current_app.config.get("PODELU_TOTAL_TIMEOUT") or None)

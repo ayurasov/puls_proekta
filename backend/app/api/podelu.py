@@ -182,14 +182,15 @@ def _format_failed(exc):
     return ApiError(502, "podelu_format", f"«По Делу» вернула данные, которые «Пульс» не разобрал: {exc}")
 
 
-def _fetching():
+def _replanning():
+    """Пересчёт плана по снимку — без обращения к «По Делу». Применение получает данные заново, даже со снимком."""
     payload = request.get_json(silent=True) or {}
-    return not payload.get("snapshot")
+    return bool(payload.get("snapshot")) and not payload.get("apply")
 
 
 @bp.post("/org/sync/podelu")
 @admin_required
-@limiter.limit("20 per minute", key_func=_user_key, exempt_when=lambda: not _fetching())
+@limiter.limit("20 per minute", key_func=_user_key, exempt_when=_replanning)
 def sync_run():
     """Без snapshot и apply — получить данные из «По Делу» и показать план (ответ содержит snapshot для
     пересчёта); со snapshot — пересчитать план с решениями по коллизиям без обращения к «По Делу»;

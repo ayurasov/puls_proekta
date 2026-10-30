@@ -32,6 +32,8 @@ CACHE_DAYS = 30             # задачи, которые никто не от�
 MISSING_CACHE_SECONDS = 60  # «нет в Jira или нет доступа» считается свежим минуту
 _down_until = 0.0
 _down_since = 0.0
+EPIC_FIELD_SECONDS = 600    # поле «Epic Link» ищется в /field не чаще раза в 10 минут (на процесс)
+_epic_fields = {}           # (адрес Jira, тип подключения) → (поле, до какого времени)
 
 
 def get_connection():
@@ -55,12 +57,27 @@ def delete_connection():
     if row is not None:
         db.session.delete(row)
     clear_cache()
+    _epic_fields.clear()
 
 
 def reset_backoff():
-    """Подключение сохранено заново — пробуем Jira сразу, не дожидаясь конца паузы после отказа."""
+    """Подключение сохранено заново — пробуем Jira сразу, не дожидаясь конца паузы после отказа; поле «Epic Link»
+    ищется заново."""
     global _down_until, _down_since
     _down_until = _down_since = 0.0
+    _epic_fields.clear()
+
+
+def epic_link_field(client):
+    """Поле «Epic Link» подключённой Jira — из кэша на EPIC_FIELD_SECONDS: список полей (/field) у Jira большой и
+    меняется редко, а «Задачи из Jira» ищут часто."""
+    key = (client.base_url, client.instance_type)
+    cached = _epic_fields.get(key)
+    if cached is not None and cached[1] > time.monotonic():
+        return cached[0]
+    value = client.epic_link_field()
+    _epic_fields[key] = (value, time.monotonic() + EPIC_FIELD_SECONDS)
+    return value
 
 
 def clear_cache():

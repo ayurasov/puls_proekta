@@ -45,6 +45,7 @@ services:
       JIRA_CACHE_SECONDS: ${JIRA_CACHE_SECONDS:-300}
       # «По Делу» (ADR-0009): разрешённые хосты подключения
       PODELU_ALLOWED_HOSTS: ${PODELU_ALLOWED_HOSTS:-}
+      PODELU_TOTAL_TIMEOUT: ${PODELU_TOTAL_TIMEOUT:-50}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       HTTP_PROXY: ${HTTP_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}

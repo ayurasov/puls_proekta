@@ -241,7 +241,7 @@ def _search_with_epics(conn, keys, invalid, payload, detailed):
     запросом. Кэш задач строк не используется: в нём нет полей эпика."""
     try:
         client = jira_service.make_client(detailed=detailed)
-        fmap = {**jira_service.field_map(conn), "epicField": client.epic_link_field()}
+        fmap = {**jira_service.field_map(conn), "epicField": jira_service.epic_link_field(client)}
         fields = request_fields(fmap, epics=True)
         if keys:
             wanted = keys[:SEARCH_MAX]
