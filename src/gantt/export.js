@@ -7,6 +7,7 @@ import { api, saveBlob } from '../api/client'
 import { createChartContext, dependencyPaths, legendEntries, rowModel } from './chartModel'
 import { diffDays, formatDay, formatDayNoYear } from './domain/dates'
 import { STATUS_BY_KEY, DEPENDENCY_TYPES, resolveColor } from './domain/colors'
+import { filterChips } from './domain/filters'
 import { formatDateTime } from '../utils/format'
 
 const FONT = '-apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif'
@@ -21,6 +22,17 @@ function fileBase(editor) {
 
 function dash(style) {
   return style === 'solid' ? '' : style === 'dotted' ? ' stroke-dasharray="1.5 3"' : ' stroke-dasharray="5 4"'
+}
+
+/** Что отобрано поиском и фильтрами — в подписи выгрузки, чтобы часть плана не выглядела всем планом. */
+function filterNote(editor) {
+  if (!editor.filtersActive) return ''
+  const view = editor.state.view
+  const parts = filterChips(view, { assignees: editor.assigneeList })
+    .filter((c) => c.group !== 'jira' || editor.filterContext.jira).map((c) => c.label)
+  if ((view.search || '').trim()) parts.unshift(`поиск «${view.search.trim()}»`)
+  const text = `фильтры: ${parts.join(', ')}`
+  return text.length > 140 ? `${text.slice(0, 139)}…` : text
 }
 
 /** SVG всего плана (с учётом фильтров и свёрнутых групп, но по всей длине шкалы). */
@@ -58,7 +70,7 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
     + '<pattern id="hl" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="3" height="6" fill="rgba(255,255,255,.35)"/></pattern></defs>')
   out.push(`<rect width="${width}" height="${height}" fill="#ffffff"/>`)
   out.push(`<text x="16" y="26" font-size="17" font-weight="700" fill="#1c2331">${esc(editor.state.plan?.title)}</text>`)
-  out.push(`<text x="16" y="45" font-size="11.5" fill="#6b7280">${esc([projectTitle, editor.state.plan?.subtitle, `шкала ${formatDay(editor.range.start)} — ${formatDay(editor.range.end)}`, `выгружено ${formatDateTime(new Date())}`].filter(Boolean).join(' · '))}</text>`)
+  out.push(`<text x="16" y="45" font-size="11.5" fill="#6b7280">${esc([projectTitle, editor.state.plan?.subtitle, `шкала ${formatDay(editor.range.start)} — ${formatDay(editor.range.end)}`, filterNote(editor), `выгружено ${formatDateTime(new Date())}`].filter(Boolean).join(' · '))}</text>`)
 
   // Заголовок шкалы
   const hy = titleH

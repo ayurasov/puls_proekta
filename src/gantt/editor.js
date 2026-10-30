@@ -13,7 +13,7 @@ import { computed, reactive, toRaw } from 'vue'
 import { api, AuthRequiredError, NetworkError } from '../api/client'
 import { applyBatch, touchedKeys } from './domain/ops'
 import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree'
-import { hasActiveFilters, visibilityPredicate } from './domain/filters'
+import { hasActiveFilters, myAssigneeKeys, visibilityPredicate } from './domain/filters'
 import { computeDependencyShifts } from './domain/dependencies'
 import { createCalendar } from './domain/calendar'
 import { STEP, insertPosition } from './domain/positions'
@@ -105,6 +105,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     view: {
       scale: 'day', zoom: 1, gridWidth: 300, collapsed: new Set(), search: '',
       categories: new Set(), statuses: new Set(), assignees: new Set(),
+      dates: new Set(), period: { from: '', to: '' }, jira: new Set(), traits: new Set(), mine: false,
       selectedKey: null, panelKey: null, columns: { start: false, end: false, duration: false, assignee: false, progress: false, jira: false },
     },
     previewSnapshot: null,
@@ -131,12 +132,26 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     workdays: state.calendarDays.workdays,
     useRuCalendar: settings.value.display.useRuCalendar,
   }))
-  const filtersActive = computed(() => hasActiveFilters(state.view))
+  const assigneeList = computed(() => Object.values(source.value.assignees).sort((a, b) => a.position - b.position))
+  // Для фильтров: Jira плана и текущий сотрудник (задаёт рабочая область — setFilterEnv)
+  const filterEnv = reactive({ jira: null, user: null })
+  const filterContext = computed(() => {
+    const jira = filterEnv.jira
+    return {
+      today: state.today,
+      jira: jira?.state.connected ? {
+        linked: (item) => Boolean(jira.keyFor(item)),
+        differs: (item) => jira.differs(item),
+        category: (item) => jira.issueFor(item)?.statusCategory || null,
+      } : null,
+      mine: myAssigneeKeys(assigneeList.value, filterEnv.user),
+    }
+  })
+  const filtersActive = computed(() => hasActiveFilters(state.view, filterContext.value))
   const visibleRows = computed(() => {
-    const predicate = visibilityPredicate(index.value, state.view)
+    const predicate = visibilityPredicate(index.value, state.view, filterContext.value)
     return flattenTree(index.value, { collapsed: state.view.collapsed, expandAll: Boolean(predicate), isVisible: predicate })
   })
-  const assigneeList = computed(() => Object.values(source.value.assignees).sort((a, b) => a.position - b.position))
   const noteList = computed(() => Object.values(source.value.notes))
   const todayMarker = computed(() => {
     const t = settings.value.today || {}
@@ -808,6 +823,11 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     commit([{ op: 'plan.update', fields }], label)
   }
 
+  function setFilterEnv({ jira = filterEnv.jira, user = filterEnv.user } = {}) {
+    filterEnv.jira = jira
+    filterEnv.user = user ? { id: user.id, name: user.name } : null
+  }
+
   // ---------- выбор и сворачивание ----------
   function select(key, { openPanel = false } = {}) {
     state.view.selectedKey = key
@@ -837,9 +857,9 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   return reactive({
-    state, settings, range, canEdit, itemList, index, calendar, visibleRows, filtersActive, assigneeList, noteList,
+    state, settings, range, canEdit, itemList, index, calendar, visibleRows, filtersActive, filterContext, assigneeList, noteList,
     todayMarker, pendingCount, categories, source,
-    load, start, stop, flushNow, poll, saveView,
+    load, start, stop, flushNow, poll, saveView, setFilterEnv,
     commit, undo, redo, updateItem, updateItems, createItem, createItems, duplicateItem, deleteItems, moveItem, setStatus,
     createNote, updateNote, deleteNote, createAssignee, updateAssignee, deleteAssignee, updatePlan,
     select, toggleCollapse, collapseAll, revealItem, cascadeOps,

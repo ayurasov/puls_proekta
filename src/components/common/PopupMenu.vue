@@ -50,6 +50,8 @@ function onKey(event) {
   if (event.key === 'Escape') { event.stopPropagation(); emit('close'); return }
   // Стрелки, Home и End ходят по пунктам меню и дальше не уходят: строки диаграммы под меню не переключаются
   if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    // В поле ввода меню (дата, название) стрелки и Home/End — клавиши самого поля
+    if (event.target?.closest?.('input:not([type=checkbox]):not([type=radio]), textarea, select') && menu.value?.contains(event.target)) return
     event.preventDefault()
     event.stopPropagation()
     const items = [...(menu.value?.querySelectorAll('.menu-item:not(:disabled)') || [])]

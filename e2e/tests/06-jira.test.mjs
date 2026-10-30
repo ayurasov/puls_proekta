@@ -63,6 +63,14 @@ after(async () => {
   jiraServer.close()
 })
 
+async function waitUntil(check, timeout = 10000) {
+  const started = Date.now()
+  while (!(await check())) {
+    if (Date.now() - started > timeout) throw new Error('условие не выполнилось за 10 с')
+    await new Promise((resolve) => setTimeout(resolve, 200))
+  }
+}
+
 async function planItems() {
   return (await api(page, 'GET', `/plans/${planId}`)).body.items
 }
@@ -152,6 +160,34 @@ test('сверка с Jira после изменений в Jira', async () => {
   assert.deepEqual(page.errors, [])
 })
 
+test('фильтры Jira: без задачи, расходятся, статус в Jira', async () => {
+  if (await page.locator('.modal').count()) await page.keyboard.press('Escape')
+  await page.fill('[data-testid=quick-add]', 'Без Jira')
+  await page.press('[data-testid=quick-add]', 'Enter')
+  await waitSaved(page)
+  issues['PULS-1'].duedate = '2026-06-30'
+  await page.click('[data-testid=jira-menu]')
+  await page.locator('.menu-item', { hasText: 'Обновить из Jira' }).click()
+  await page.locator('.toast', { hasText: 'Данные Jira обновлены' }).waitFor()
+  const rows = () => page.locator('.grid-row .name').allTextContents()
+  await page.locator('.toolbar button', { hasText: 'Фильтры' }).click()
+  await page.click('[data-testid=filter-group-jira]')
+  assert.match(await page.textContent('[data-testid=filter-jira-linked]'), /Связаны с Jira\s*3/)
+  await page.click('[data-testid=filter-jira-unlinked]')
+  assert.deepEqual(await rows(), ['Без Jira'])
+  await page.click('[data-testid=filter-jira-unlinked]')
+  await page.click('[data-testid=filter-jira-differs]')
+  assert.deepEqual(await rows(), ['Согласование ТЗ'])
+  await page.click('[data-testid=filter-jira-differs]')
+  await page.click('[data-testid="filter-jira-category:done"]')
+  assert.deepEqual(await rows(), ['Приёмка заказчиком'])
+  assert.deepEqual((await page.locator('.filter-bar .chip').allTextContents()).map((t) => t.trim()), ['Jira: Готово'])
+  await shot(page, '06-jira-filters')
+  await page.keyboard.press('Escape')
+  await page.locator('.filter-bar button', { hasText: 'Сбросить' }).click()
+  assert.deepEqual(page.errors, [])
+})
+
 test('0.4.0: автоперенос из Jira — включается в «Сверке» и срабатывает при обновлении', async () => {
   await page.click('[data-testid=jira-menu]')
   await page.click('[data-testid=jira-sync-open]')
@@ -160,6 +196,8 @@ test('0.4.0: автоперенос из Jira — включается в «Св
   await waitSaved(page)
   const plan = (await api(page, 'GET', `/plans/${planId}`)).body.plan
   assert.deepEqual(plan.settings.jiraAuto, ['status', 'dates'])
+  // Включение сразу переносит расхождения: срок «Согласования ТЗ» в Jira сдвинули в сценарии фильтров
+  assert.equal((await planItems()).find((i) => i.name === 'Согласование ТЗ').end, '2026-06-30')
   await page.keyboard.press('Escape')
 
   // В Jira задачу закрыли и перенесли срок: после «Обновить из Jira» строка меняется сама
@@ -168,8 +206,7 @@ test('0.4.0: автоперенос из Jira — включается в «Св
   issues['PULS-2'].duedate = '2026-06-25'
   await page.click('[data-testid=jira-menu]')
   await page.click('button:has-text("Обновить из Jira")')
-  await page.locator('.toast', { hasText: 'Из Jira перенесено в строки: 1' }).waitFor()
-  await waitSaved(page)
+  await waitUntil(async () => (await planItems()).find((i) => i.name === 'Прототип интерфейса').status === 'done')
   const item = (await planItems()).find((i) => i.name === 'Прототип интерфейса')
   assert.equal(item.status, 'done')
   assert.equal(item.completedDate, '2026-06-25')

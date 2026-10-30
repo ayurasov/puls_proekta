@@ -1,7 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
+import { useAuthStore } from '../../stores/auth'
 import { useDirectoryStore } from '../../stores/directory'
 import { useDialogs } from '../../composables/useDialogs'
 import { createPlanEditor } from '../editor'
@@ -30,7 +32,10 @@ const props = defineProps({
 })
 const emit = defineEmits(['plan-meta'])
 const ui = useUiStore()
+const auth = useAuthStore()
 const directory = useDirectoryStore()
+const route = useRoute()
+const router = useRouter()
 const { confirm } = useDialogs()
 
 const editor = createPlanEditor({
@@ -41,6 +46,8 @@ const editor = createPlanEditor({
 provide('gantt', editor)
 const jira = createJira(editor, ui)
 provide('jira', jira)
+// Фильтры «Jira» и «Мои задачи» знают о Jira плана и о том, кто открыл план
+watch(() => auth.user, (user) => editor.setFilterEnv({ jira, user }), { immediate: true })
 defineExpose({ editor })
 
 const chart = ref(null)
@@ -59,7 +66,8 @@ onMounted(async () => {
   try {
     await editor.load()
     editor.start()
-    chart.value?.scrollToToday({ initial: true })
+    await nextTick()
+    if (!openRequestedItem()) chart.value?.scrollToToday({ initial: true })
     jira.init()
   } catch {
     /* сообщение показывает шаблон */
@@ -72,6 +80,21 @@ onBeforeUnmount(() => {
   clearInterval(tickTimer)
   window.removeEventListener('keydown', onKeydown)
 })
+
+/**
+ * Ссылка на строку плана (?item=ключ) — например, из «Статистики» на главной: строка раскрывается,
+ * выбирается и открывается её карточка. Параметр убирается из адреса, чтобы не срабатывать снова.
+ */
+function openRequestedItem() {
+  const key = typeof route.query.item === 'string' ? route.query.item : null
+  if (!key) return false
+  const { item: _item, ...query } = route.query
+  router.replace({ query })
+  if (!state.items[key]) return false
+  editor.revealItem(key)
+  editor.select(key, { openPanel: true })
+  return true
+}
 
 watch(() => state.plan?.title, (title, old) => { if (old && title !== old) emit('plan-meta') })
 // Коллега привязал строку к задаче Jira — подгружаем её, не дожидаясь обновления всего плана

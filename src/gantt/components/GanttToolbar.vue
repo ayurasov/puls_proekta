@@ -3,9 +3,9 @@ import { computed, inject, onBeforeUnmount, ref } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
+import GanttFilters from './GanttFilters.vue'
 import { SCALES, nextZoom } from '../domain/layout'
-import { STATUSES, resolveColor } from '../domain/colors'
-import { NONE } from '../domain/filters'
+import { clearFilters, filterChips, toggleFilter } from '../domain/filters'
 import { exportPlan } from '../export'
 import { useUiStore } from '../../stores/ui'
 
@@ -66,44 +66,9 @@ const SHORTCUTS = [
 // Insert в рабочей области добавляет задачу так же, как кнопка «Задача»
 defineExpose({ addRow, showShortcuts })
 
-const counts = computed(() => {
-  const statuses = {}
-  const assignees = {}
-  const categories = {}
-  for (const item of editor.itemList) {
-    if (item.type !== 'task') continue
-    statuses[item.status || 'new'] = (statuses[item.status || 'new'] || 0) + 1
-    assignees[item.assigneeKey || NONE] = (assignees[item.assigneeKey || NONE] || 0) + 1
-    categories[item.category || NONE] = (categories[item.category || NONE] || 0) + 1
-  }
-  return { statuses, assignees, categories }
-})
-
-const filterGroups = computed(() => [
-  { key: 'statuses', label: 'Статус', options: STATUSES.map((s) => ({ value: s.key, label: s.label, color: s.color })) },
-  {
-    key: 'assignees', label: 'Исполнитель',
-    options: [...editor.assigneeList.map((a) => ({ value: a.key, label: a.name, color: resolveColor(a.color).color })), { value: NONE, label: 'Без исполнителя' }],
-  },
-  { key: 'categories', label: 'Категория', options: [...editor.categories.map((c) => ({ value: c, label: c })), { value: NONE, label: 'Без категории' }] },
-])
-const activeFilterCount = computed(() => view.statuses.size + view.assignees.size + view.categories.size)
-
-function toggleFilter(group, value) {
-  const set = view[group]
-  if (set.has(value)) set.delete(value)
-  else set.add(value)
-}
-function clearFilters() {
-  view.statuses.clear()
-  view.assignees.clear()
-  view.categories.clear()
-  view.search = ''
-}
-function filterLabel(group, value) {
-  const g = filterGroups.value.find((f) => f.key === group)
-  return g?.options.find((o) => o.value === value)?.label || value
-}
+// Строка отметок под панелью: каждая отметка снимается щелчком (условия Jira — пока Jira подключена)
+const chips = computed(() => filterChips(view, { assignees: editor.assigneeList }).filter((c) => c.group !== 'jira' || jira.state.connected))
+const activeFilterCount = computed(() => chips.value.length)
 
 function setScale(scale) {
   view.scale = scale
@@ -248,25 +213,8 @@ function toggleColumn(column) {
       <div v-if="jira.state.error" class="menu-note small">{{ jira.state.error }}</div>
     </PopupMenu>
 
-    <PopupMenu v-if="menu?.type === 'filters'" :anchor="menu.anchor" :min-width="560" @close="menu = null">
-      <div class="filters">
-        <div v-for="group in filterGroups" :key="group.key" class="filter-col">
-          <div class="menu-label">{{ group.label }}</div>
-          <div class="filter-options scroll-thin">
-            <label v-for="option in group.options" :key="option.value" class="filter-option" :title="option.label">
-              <input type="checkbox" :checked="view[group.key].has(option.value)" @change="toggleFilter(group.key, option.value)" />
-              <span v-if="option.color" class="status-dot" :style="{ background: option.color }" />
-              <span class="ellipsis">{{ option.label }}</span>
-              <span class="muted small">{{ counts[group.key][option.value] || 0 }}</span>
-            </label>
-          </div>
-        </div>
-      </div>
-      <div class="menu-separator" />
-      <div class="filters-foot">
-        <span class="muted small">Внутри фильтра — любое из отмеченного, между фильтрами — все условия</span>
-        <button class="btn btn-ghost btn-sm" type="button" :disabled="!activeFilterCount" @click="clearFilters">Сбросить</button>
-      </div>
+    <PopupMenu v-if="menu?.type === 'filters'" :anchor="menu.anchor" :min-width="660" @close="menu = null">
+      <GanttFilters />
     </PopupMenu>
 
     <PopupMenu v-if="menu?.type === 'view'" :anchor="menu.anchor" align="end" @close="menu = null">
@@ -297,14 +245,12 @@ function toggleColumn(column) {
       <button class="menu-item" type="button" @click="runExport('json')"><AppIcon name="download" /> JSON (открывается и в 1.0)</button>
     </PopupMenu>
   </div>
-  <div v-if="activeFilterCount" class="filter-bar">
+  <div v-if="activeFilterCount" class="filter-bar" data-testid="filter-bar">
     <span class="muted small">Фильтры:</span>
-    <template v-for="group in ['statuses', 'assignees', 'categories']" :key="group">
-      <button v-for="value in [...view[group]]" :key="group + value" class="chip" type="button" title="Убрать фильтр" @click="toggleFilter(group, value)">
-        {{ filterLabel(group, value) }} <AppIcon name="close" :size="11" />
-      </button>
-    </template>
-    <button class="btn btn-ghost btn-sm" type="button" @click="clearFilters">Сбросить</button>
+    <button v-for="chip in chips" :key="chip.group + chip.value" class="chip" type="button" title="Убрать фильтр" @click="toggleFilter(view, chip.group, chip.value)">
+      {{ chip.label }} <AppIcon name="close" :size="11" />
+    </button>
+    <button class="btn btn-ghost btn-sm" type="button" @click="clearFilters(view)">Сбросить</button>
   </div>
   </div>
 </template>
@@ -330,13 +276,6 @@ function toggleColumn(column) {
 .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #c9d6ff; background: var(--color-primary-soft); color: var(--color-primary-dark); border-radius: 999px; font-size: 11.5px; padding: 2px 8px; }
 .zoom { display: flex; align-items: center; }
 .zoom-input { width: 52px; text-align: center; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: 12px; min-height: 26px; }
-.filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 4px; }
-.filter-col { min-width: 0; }
-.filter-options { max-height: 260px; overflow: auto; display: flex; flex-direction: column; }
-.filter-option { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
-.filter-option:hover { background: var(--color-hover); }
-.filter-option .ellipsis { flex: 1; }
-.filters-foot { display: flex; align-items: center; gap: 8px; padding: 4px 8px; justify-content: space-between; }
 label.menu-item { cursor: pointer; }
 .shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 4px 10px 8px; font-size: 12.5px; align-items: baseline; }
 .shortcuts dt { white-space: nowrap; }
@@ -345,7 +284,6 @@ kbd { font-family: inherit; font-size: 11.5px; background: var(--color-surface-2
 @media (max-width: 768px) { .export-label { display: none; } }
 /* Узкая рабочая область: «Сегодня» — только значком, чтобы панель оставалась в одну строку */
 @container (max-width: 1000px) { .today-label { display: none; } }
-@media (max-width: 900px) { .filters { grid-template-columns: 1fr; } }
 /* Телефон: поиск и фильтры — первой строкой, остальные кнопки — одной прокручиваемой строкой */
 @media (max-width: 768px) {
   .toolbar { gap: 6px 8px; padding: 6px 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
@@ -355,7 +293,6 @@ kbd { font-family: inherit; font-size: 11.5px; background: var(--color-surface-2
   .mobile-search .search { flex: 1 1 auto; }
   .zoom-input { min-height: 40px; }
   .split-caret { padding: 3px 10px; }
-  .filter-option { min-height: 40px; }
 }
 
 </style>
