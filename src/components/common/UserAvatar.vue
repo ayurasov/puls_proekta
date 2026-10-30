@@ -10,9 +10,11 @@ const props = defineProps({
 })
 
 const PALETTE = ['#4f7cff', '#2fa96b', '#e8a13a', '#8b5cf6', '#ec4899', '#0ea5a4', '#ef6c3a', '#64748b']
+// Первые буквы двух первых слов; кавычки и знаки пропускаются («АО «Меридиан»» → «АМ», а не «А«»)
 const initials = computed(() => {
   const parts = String(props.user?.name || '?').trim().split(/\s+/)
-  return ((parts[0]?.[0] || '') + (parts[1]?.[0] || '')).toUpperCase() || '?'
+  const letter = (word) => word?.match(/[\p{L}\p{N}]/u)?.[0] || ''
+  return (letter(parts[0]) + letter(parts[1])).toUpperCase() || '?'
 })
 const color = computed(() => {
   if (props.color) return props.color

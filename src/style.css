@@ -217,6 +217,9 @@ h1, h2, h3, h4 { margin: 0; }
   .modal-overlay { padding: 0; align-items: stretch; }
   .modal { width: 100% !important; max-height: 100%; border-radius: 0; }
   @supports (height: 100dvh) { .modal { max-height: 100dvh; } }
+  /* Окно на весь экран: поля прокручиваются, кнопки окна — всегда внизу экрана */
+  .modal-body { flex: 1 1 auto; }
+  .modal-footer { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
 
   /* Цели касания не меньше 40 px */
   .btn, .btn-sm { min-height: 40px; }
