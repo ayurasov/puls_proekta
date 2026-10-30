@@ -72,13 +72,14 @@ def _register_blueprints(app):
     from app.api.calendar import bp as calendar_bp
     from app.api.directions import bp as directions_bp
     from app.api.health import bp as health_bp
+    from app.api.jira import bp as jira_bp
     from app.api.plans import bp as plans_bp
     from app.api.projects import bp as projects_bp
     from app.api.settings import bp as settings_bp
     from app.api.users import bp as users_bp
 
     for bp in (health_bp, auth_bp, avatars_bp, users_bp, directions_bp, projects_bp, plans_bp,
-               access_bp, audit_bp, settings_bp, calendar_bp):
+               access_bp, audit_bp, settings_bp, calendar_bp, jira_bp):
         app.register_blueprint(bp)
 
 

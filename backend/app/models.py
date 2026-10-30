@@ -346,6 +346,18 @@ class AppSetting(db.Model):
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class JiraIssue(db.Model):
+    """Кэш задач Jira, привязанных к строкам планов (ADR-0007): план открывается без ожидания Jira,
+    а сама Jira не получает запрос от каждого открывшего план."""
+
+    __tablename__ = "jira_issues"
+
+    key = db.Column(db.String(100), primary_key=True)
+    found = db.Column(db.Boolean, nullable=False, default=True)
+    data = db.Column(db.JSON, nullable=True)
+    fetched_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+
+
 class CalendarDay(db.Model):
     """Исключение производственного календаря: праздник/перенесённый выходной или рабочая суббота."""
 

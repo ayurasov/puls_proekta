@@ -9,5 +9,7 @@ psycopg2-binary==2.9.10
 pydantic==2.9.2
 bcrypt==4.2.1
 ldap3==2.9.1
+requests==2.34.2
+cryptography==50.0.2
 tzdata==2025.2
 python-dotenv==1.0.1
