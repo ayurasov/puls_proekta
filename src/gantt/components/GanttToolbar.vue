@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, ref } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
 import { SCALES, nextZoom } from '../domain/layout'
@@ -16,6 +16,12 @@ const state = editor.state
 const view = state.view
 const menu = ref(null)
 const exporting = ref(false)
+// Телефон: поиск и фильтры — отдельной строкой над прокручиваемой панелью (одна копия кнопок в разметке)
+const phoneQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 768px)') : null
+const isPhone = ref(Boolean(phoneQuery?.matches))
+const onPhoneChange = (event) => { isPhone.value = event.matches }
+phoneQuery?.addEventListener?.('change', onPhoneChange)
+onBeforeUnmount(() => phoneQuery?.removeEventListener?.('change', onPhoneChange))
 
 function open(type, event) {
   menu.value = menu.value?.type === type ? null : { type, anchor: event.currentTarget }
@@ -134,10 +140,10 @@ function toggleColumn(column) {
 
 <template>
   <div class="toolbar-wrap">
-  <div class="mobile-search">
+  <div v-if="isPhone" class="mobile-search">
     <label class="search">
       <AppIcon name="search" :size="14" class="search-icon" />
-      <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" />
+      <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" data-testid="search" />
     </label>
     <button class="btn btn-sm" :class="{ 'is-active': activeFilterCount }" type="button" @click="open('filters', $event)">
       <AppIcon name="filter" :size="14" /> Фильтры<span v-if="activeFilterCount" class="count">{{ activeFilterCount }}</span>
@@ -161,7 +167,7 @@ function toggleColumn(column) {
       </button>
     </div>
 
-    <div class="group grow">
+    <div v-if="!isPhone" class="group grow">
       <label class="search">
         <AppIcon name="search" :size="14" class="search-icon" />
         <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" data-testid="search" />
@@ -305,12 +311,11 @@ kbd { font-family: inherit; font-size: 11.5px; background: var(--color-surface-2
   .toolbar { gap: 6px 8px; padding: 6px 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
   .toolbar::-webkit-scrollbar { display: none; }
   .group { flex-wrap: nowrap; flex-shrink: 0; }
-  .group.grow { display: none; }
   .mobile-search { display: flex; gap: 6px; padding: 6px 10px 0; }
   .mobile-search .search { flex: 1 1 auto; }
   .zoom-input { min-height: 40px; }
   .split-caret { padding: 3px 10px; }
   .filter-option { min-height: 40px; }
 }
-@media (min-width: 769px) { .mobile-search { display: none; } }
+
 </style>
