@@ -699,14 +699,14 @@ function noteLabel(note) {
                   <rect v-if="m.bar.progress" class="progress" :x="m.bar.x" :y="m.bar.y" :width="m.bar.w * m.bar.progress / 100" :height="m.bar.h" rx="6" />
                   <rect v-if="m.bar.tail?.kind === 'early'" class="tail early" :x="m.bar.tail.x" :y="m.bar.y" :width="m.bar.tail.w" :height="m.bar.h" rx="6" />
                   <rect v-if="m.bar.tail" class="tail-hatch" :x="m.bar.tail.kind === 'late' ? m.bar.tail.x : m.bar.tail.x" :y="m.bar.tail.kind === 'late' ? m.bar.y + 3 : m.bar.y" :width="m.bar.tail.w" :height="m.bar.tail.kind === 'late' ? m.bar.h - 6 : m.bar.h" fill="url(#hatch-late)" />
-                  <text class="bar-text" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + 16" :fill="m.bar.text">{{ m.bar.label }}</text>
-                  <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + 16">{{ m.bar.tailLabel }}</text>
-                  <path v-if="m.bar.status === 'done' && m.bar.w > 26" class="done-check" :d="`M${m.bar.x + m.bar.w - 15} ${m.bar.y + 12} l3 3 l6 -6`" />
+                  <text class="bar-text" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + m.bar.h / 2 + 3.5" :fill="m.bar.text">{{ m.bar.label }}</text>
+                  <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + m.bar.h / 2 + 3.5">{{ m.bar.tailLabel }}</text>
+                  <path v-if="m.bar.status === 'done' && m.bar.w > 26" class="done-check" :d="`M${m.bar.x + m.bar.w - 15} ${m.bar.y + m.bar.h / 2} l3 3 l6 -6`" />
                   <rect v-if="m.bar.status === 'done' || m.bar.status === 'blocked' || m.key === selectedKey" class="outline" :x="m.bar.x + 1" :y="m.bar.y + 1" :width="m.bar.w - 2" :height="m.bar.h - 2" rx="5" />
                   <a v-if="m.bar.jira && m.bar.w > 36" :href="m.bar.jira" target="_blank" rel="noopener noreferrer" class="jira" @pointerdown.stop @click.stop>
                     <title>Открыть в Jira</title>
-                    <rect :x="m.bar.x + m.bar.w - 19" :y="m.bar.y + 4" width="15" height="15" rx="4" />
-                    <path :d="`M${m.bar.x + m.bar.w - 14} ${m.bar.y + 8} h5 v5 M${m.bar.x + m.bar.w - 9} ${m.bar.y + 8} l-5 5`" />
+                    <rect :x="m.bar.x + m.bar.w - 19" :y="m.bar.y + m.bar.h / 2 - 7.5" width="15" height="15" rx="4" />
+                    <path :d="`M${m.bar.x + m.bar.w - 14} ${m.bar.y + m.bar.h / 2 - 3.5} h5 v5 M${m.bar.x + m.bar.w - 9} ${m.bar.y + m.bar.h / 2 - 3.5} l-5 5`" />
                   </a>
                   <template v-if="editor.canEdit">
                     <rect class="handle-zone" data-handle="left" :x="m.bar.x - 2" :y="m.bar.y" width="8" :height="m.bar.h" />

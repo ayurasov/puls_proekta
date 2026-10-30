@@ -131,8 +131,8 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
       if (b.tail?.kind === 'early') out.push(`<rect x="${b.tail.x}" y="${b.y}" width="${b.tail.w}" height="${b.h}" rx="6" fill="#22c55e" opacity="0.7"/>`)
       if (b.status === 'done') out.push(`<rect x="${b.x + 1}" y="${b.y + 1}" width="${b.w - 2}" height="${b.h - 2}" rx="5" fill="none" stroke="#22c55e" stroke-width="2.5"/>`)
       if (b.status === 'blocked') out.push(`<rect x="${b.x + 1}" y="${b.y + 1}" width="${b.w - 2}" height="${b.h - 2}" rx="5" fill="none" stroke="#e5484d" stroke-width="2" stroke-dasharray="4 3"/>`)
-      if (b.label) out.push(`<text x="${b.x + b.w / 2}" y="${b.y + 16}" font-size="10" font-weight="700" fill="${b.text}" text-anchor="middle">${esc(b.label)}</text>`)
-      if (b.tailLabel && b.tail?.kind === 'late') out.push(`<text x="${b.tail.x + b.tail.w + 5}" y="${b.y + 16}" font-size="9.5" font-weight="700" fill="#c53030">${esc(b.tailLabel)}</text>`)
+      if (b.label) out.push(`<text x="${b.x + b.w / 2}" y="${b.y + b.h / 2 + 3.5}" font-size="10" font-weight="700" fill="${b.text}" text-anchor="middle">${esc(b.label)}</text>`)
+      if (b.tailLabel && b.tail?.kind === 'late') out.push(`<text x="${b.tail.x + b.tail.w + 5}" y="${b.y + b.h / 2 + 3.5}" font-size="9.5" font-weight="700" fill="#c53030">${esc(b.tailLabel)}</text>`)
     }
     if (m.group) {
       const g = m.group

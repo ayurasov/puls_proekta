@@ -9,6 +9,8 @@ import { resolveColor, STATUS_BY_KEY } from './domain/colors'
 import { groupSpan, shiftedEnd } from './domain/tree'
 
 export const BAR_HEIGHT = 24
+/** Полоса в строке с пометкой: ниже и тоньше, чтобы подпись пометки над ней не наезжала на полосу. */
+export const BAR_HEIGHT_WITH_NOTE = 20
 export const GROUP_BAR_HEIGHT = 10
 export const TOP_ROW = 22
 
@@ -84,14 +86,24 @@ export function rowModel(row, i, ctx, preview = null) {
   const mid = y + ctx.rowHeight / 2
   const model = { key: item.key, type: item.type, y, mid, item }
   const { range, px, display } = ctx
+  if (display.showNotes) {
+    model.notes = ctx.notes
+      .filter((n) => n.rowKey === item.key && n.date >= range.start && n.date <= range.end)
+      .map((n) => ({ ...n, x: dayX(range, px, n.date) + Math.floor(px / 2), y: y + 2, color: resolveColor(n.color, 'orange').color }))
+  } else {
+    model.notes = []
+  }
+  // Пометка на строке: подпись — в верхней части строки, полоса — ниже (иначе текст ложится на полосу)
+  const roomForNote = model.notes.length > 0 && ctx.rowHeight >= 40
   if (item.type === 'task' && item.start && item.end) {
     const x = dayX(range, px, item.start)
     const w = Math.max(10, (diffDays(item.start, item.end) + 1) * px)
     const color = resolveColor(item.color, 'blue')
     const offset = Number(item.offset || 0)
     const label = barLabel(item, display)
+    const h = roomForNote ? BAR_HEIGHT_WITH_NOTE : BAR_HEIGHT
     model.bar = {
-      x, w, y: mid - BAR_HEIGHT / 2, h: BAR_HEIGHT, fill: color.color, text: color.text,
+      x, w, y: roomForNote ? y + ctx.rowHeight - h - 6 : mid - h / 2, h, fill: color.color, text: color.text,
       label: fitText(label, w), fullLabel: label,
       progress: display.showProgress ? Math.max(0, Math.min(100, Number(item.progress || 0))) : 0,
       status: item.status || 'new', offset,
@@ -119,14 +131,7 @@ export function rowModel(row, i, ctx, preview = null) {
   }
   if (item.type === 'milestone' && item.date) {
     const color = resolveColor(item.lineColor || item.color, 'teal')
-    model.milestone = { x: dayX(range, px, item.date) + px - 1, y: mid, size: 7, fill: color.color, label: item.name }
-  }
-  if (display.showNotes) {
-    model.notes = ctx.notes
-      .filter((n) => n.rowKey === item.key && n.date >= range.start && n.date <= range.end)
-      .map((n) => ({ ...n, x: dayX(range, px, n.date) + Math.floor(px / 2), y: y + 2, color: resolveColor(n.color, 'orange').color }))
-  } else {
-    model.notes = []
+    model.milestone = { x: dayX(range, px, item.date) + px - 1, y: roomForNote ? mid + 4 : mid, size: 7, fill: color.color, label: item.name }
   }
   return model
 }
