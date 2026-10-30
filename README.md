@@ -43,6 +43,7 @@
 | Ревизия 1.0.1: найденные дефекты и решения | [MD](docs/review/v0.2.0-revision-1.0.1.md) |
 | Нагрузочное тестирование | [MD](docs/performance/loadtest-v0.2.0.md) |
 | Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0008](docs/architecture/adr-0008-company-structure.md) |
+| Независимые проверки 0.2.1 и 0.3.0 | [MD](docs/review/v0.3.0-independent-checks.md) |
 | Release notes | [v0.3.0](docs/release-notes/v0.3.0.md), [v0.2.1](docs/release-notes/v0.2.1.md), [v0.2.0](docs/release-notes/v0.2.0.md) |
 
 Руководства пользователя и администратора открываются и в самом приложении — пункт «Руководство» в боковом
