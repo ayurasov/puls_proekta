@@ -38,6 +38,7 @@ const groups = computed(() => projects.grouped.filter((g) => g.projects.length |
 const adminLinks = [
   { to: '/admin/users', icon: 'users', label: 'Сотрудники' },
   { to: '/admin/structure', icon: 'hierarchy', label: 'Структура' },
+  { to: '/admin/org-transfer', icon: 'upload', label: 'Импорт и экспорт' },
   { to: '/admin/directions', icon: 'folder', label: 'Направления' },
   { to: '/admin/access', icon: 'shield', label: 'Доступы' },
   { to: '/admin/audit', icon: 'history', label: 'Реестр изменений' },

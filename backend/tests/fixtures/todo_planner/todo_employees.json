@@ -1,0 +1,216 @@
+{
+  "format": "podelu.employees",
+  "version": 1,
+  "exportedAt": "2026-10-30T06:17:18.772358Z",
+  "app": "1.4.0",
+  "employees": [
+    {
+      "email": "admin@todo-planner.local",
+      "login": "admin",
+      "name": "Admin",
+      "position": "",
+      "department": [],
+      "manager": "",
+      "reportsToNone": false,
+      "heads": [],
+      "functionalManagers": [],
+      "role": "admin",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": true,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "user@todo-planner.local",
+      "login": "user",
+      "name": "User",
+      "position": "",
+      "department": [],
+      "manager": "",
+      "reportsToNone": false,
+      "heads": [],
+      "functionalManagers": [],
+      "role": "user",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": true,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "Sales.Head@vector.test",
+      "login": "a.kovaleva",
+      "name": "Анна Ковалёва",
+      "position": "Директор по продажам",
+      "department": [
+        "ООО «Вектор»",
+        "Продажи"
+      ],
+      "manager": "",
+      "reportsToNone": false,
+      "heads": [
+        {
+          "department": [
+            "ООО «Вектор»",
+            "Продажи"
+          ],
+          "primary": true
+        }
+      ],
+      "functionalManagers": [],
+      "role": "manager",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": true,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "d.orlov@vector.test",
+      "login": "d.orlov",
+      "name": "Дмитрий Орлов",
+      "position": "Руководитель группы",
+      "department": [
+        "ООО «Вектор»",
+        "Продажи",
+        "Группа B2B"
+      ],
+      "manager": "",
+      "reportsToNone": false,
+      "heads": [
+        {
+          "department": [
+            "ООО «Вектор»",
+            "Продажи",
+            "Группа B2B"
+          ],
+          "primary": true
+        }
+      ],
+      "functionalManagers": [],
+      "role": "user",
+      "capabilities": [
+        "org.manage"
+      ],
+      "timezone": "Asia/Yekaterinburg",
+      "isActive": true,
+      "visibilityScope": "direct",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "e.smirnova@vector.test",
+      "login": "e.smirnova",
+      "name": "Елена Смирнова",
+      "position": "Инженер",
+      "department": [
+        "ООО «Вектор»",
+        "Разработка",
+        "Лаборатория"
+      ],
+      "manager": "ceo@vector.test",
+      "reportsToNone": false,
+      "heads": [],
+      "functionalManagers": [],
+      "role": "user",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": false,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "ceo@vector.test",
+      "login": "i.sokolova",
+      "name": "Ирина Соколова",
+      "position": "Генеральный директор",
+      "department": [
+        "ООО «Вектор»"
+      ],
+      "manager": "",
+      "reportsToNone": true,
+      "heads": [
+        {
+          "department": [
+            "ООО «Вектор»"
+          ],
+          "primary": true
+        },
+        {
+          "department": [
+            "ООО «Вектор»",
+            "Разработка",
+            "Лаборатория"
+          ],
+          "primary": false
+        }
+      ],
+      "functionalManagers": [],
+      "role": "admin",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": true,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "cto@vector.test",
+      "login": "m.lebedev",
+      "name": "Михаил Лебедев",
+      "position": "Технический директор",
+      "department": [
+        "ООО «Вектор»",
+        "Разработка"
+      ],
+      "manager": "",
+      "reportsToNone": false,
+      "heads": [
+        {
+          "department": [
+            "ООО «Вектор»",
+            "Разработка"
+          ],
+          "primary": true
+        }
+      ],
+      "functionalManagers": [],
+      "role": "manager",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": true,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    },
+    {
+      "email": "p.ivanov@vector.test",
+      "login": "p.ivanov",
+      "name": "Пётр Иванов",
+      "position": "Менеджер",
+      "department": [
+        "ООО «Вектор»",
+        "Продажи",
+        "Группа B2B"
+      ],
+      "manager": "",
+      "reportsToNone": false,
+      "heads": [],
+      "functionalManagers": [
+        "cto@vector.test"
+      ],
+      "role": "user",
+      "capabilities": [],
+      "timezone": "Europe/Moscow",
+      "isActive": true,
+      "visibilityScope": "",
+      "authSource": "local",
+      "externalId": ""
+    }
+  ]
+}
