@@ -11,6 +11,7 @@ import { resolveEnd } from '../domain/calendar'
 import { countLabel } from '../../utils/format'
 
 const editor = inject('gantt')
+const jira = inject('jira')
 const actions = inject('ganttActions')
 const state = editor.state
 const view = state.view
@@ -29,8 +30,9 @@ const preview = ref(null)
 const rowDrag = ref(null)
 const resizing = ref(false)
 
-const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progress: 52 }
-const columns = computed(() => Object.entries(COLUMN_WIDTHS).filter(([key]) => view.columns[key]).map(([key, width]) => ({ key, width })))
+const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progress: 52, jira: 150 }
+const columns = computed(() => Object.entries(COLUMN_WIDTHS)
+  .filter(([key]) => view.columns[key] && (key !== 'jira' || jira.state.connected)).map(([key, width]) => ({ key, width })))
 const MIN_NAME_WIDTH = 140
 const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
 const gridWidth = computed(() => nameWidth.value + columns.value.reduce((s, c) => s + c.width, 0))
@@ -202,6 +204,7 @@ function autoFitNameColumn() {
 }
 
 // ---------- строки слева ----------
+const JIRA_COLORS = { new: '#44546f', indeterminate: '#0055cc', done: '#216e4e' }
 function metaLine(item) {
   const parts = []
   if (item.type === 'task') {
@@ -212,6 +215,8 @@ function metaLine(item) {
     if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? LATE_TEXT : EARLY_TEXT })
     if (item.dependencyLag) parts.push({ text: `лаг ${item.dependencyLag > 0 ? '+' : ''}${item.dependencyLag} д` })
     if (item.commentCount) parts.push({ text: `💬 ${item.commentCount}` })
+    const issue = jira.issueFor(item)
+    if (issue) parts.push({ text: `${issue.key}: ${issue.status}`, color: JIRA_COLORS[issue.statusCategory] })
   } else if (item.type === 'group') {
     const model = rows.value.find((r) => r.item.key === item.key)
     if (model?.childCount) parts.push({ text: countLabel(model.childCount, 'элемент', 'элемента', 'элементов') })
@@ -443,6 +448,15 @@ function onBarUp(event) {
   }
 }
 
+function jiraClass(key) {
+  const issue = jira.issueFor(editor.source.items[key])
+  return issue ? `cat-${issue.statusCategory}` : ''
+}
+function jiraTitle(key) {
+  const issue = jira.issueFor(editor.source.items[key])
+  return issue ? `Открыть в Jira: ${issue.key} · ${issue.status}` : 'Открыть в Jira'
+}
+
 // ---------- подсказка ----------
 function updateTooltip(event) {
   const target = event.target.closest('[data-tip]')
@@ -477,6 +491,11 @@ const tooltipData = computed(() => {
     }
     if (fields.includes('assignee') && item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
     if (item.category) rowsOut.push(['Категория', item.category])
+    const issue = jira.issueFor(item)
+    if (issue) {
+      rowsOut.push(['Jira', `${issue.key} · ${issue.status}${issue.assignee ? ` · ${issue.assignee}` : ''}`, JIRA_COLORS[issue.statusCategory]])
+      if (issue.due && issue.due !== item.end) rowsOut.push(['Срок в Jira', formatDay(issue.due)])
+    } else if (issue === null) rowsOut.push(['Jira', `${jira.keyFor(item)} — нет доступа или задача удалена`])
   } else if (item.type === 'milestone') {
     rowsOut.push(['Дата', formatDay(item.date)])
     if (item.comment) rowsOut.push(['Комментарий', item.comment])
@@ -578,7 +597,7 @@ function noteLabel(note) {
                 <span class="muted small">{{ countLabel(rows.length, 'строка', 'строки', 'строк') }}</span>
               </div>
               <div v-for="col in columns" :key="col.key" class="col-head" :style="{ width: col.width + 'px' }">
-                {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Исполнитель', progress: '%' }[col.key] }}
+                {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Исполнитель', progress: '%', jira: 'Jira' }[col.key] }}
               </div>
             </div>
             <div class="resizer" title="Ширина колонки: перетащите; двойной щелчок — по самому длинному названию" @pointerdown="startResize" @dblclick="autoFitNameColumn" />
@@ -656,7 +675,13 @@ function noteLabel(note) {
                 </div>
                 <button class="open-btn" type="button" title="Открыть карточку (Enter)" @mousedown.prevent @click.stop="openPanel(row.item)"><AppIcon name="detail" :size="14" /></button>
               </div>
-              <div v-for="col in columns" :key="col.key" class="cell" :style="{ width: col.width + 'px' }">{{ columnValue(row.item, col.key) }}</div>
+              <div v-for="col in columns" :key="col.key" class="cell" :style="{ width: col.width + 'px' }">
+                <template v-if="col.key === 'jira'">
+                  <span v-if="jira.issueFor(row.item)" class="jira-status" :class="`cat-${jira.issueFor(row.item).statusCategory}`" :title="`${jira.keyFor(row.item)}: ${jira.issueFor(row.item).status}`">{{ jira.issueFor(row.item).status }}</span>
+                  <span v-else-if="jira.keyFor(row.item)" class="muted">{{ jira.keyFor(row.item) }}</span>
+                </template>
+                <template v-else>{{ columnValue(row.item, col.key) }}</template>
+              </div>
             </div>
             <form v-if="extraRows" class="grid-row quick-add" :style="{ top: rows.length * rowHeight + 'px', height: rowHeight + 'px' }" @submit.prevent="quickAdd">
               <div class="cell-name" :style="{ width: nameWidth + 'px' }">
@@ -702,8 +727,8 @@ function noteLabel(note) {
                   <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + m.bar.h / 2 + 3.5">{{ m.bar.tailLabel }}</text>
                   <path v-if="m.bar.status === 'done' && m.bar.w > 26" class="done-check" :d="`M${m.bar.x + m.bar.w - 15} ${m.bar.y + m.bar.h / 2} l3 3 l6 -6`" />
                   <rect v-if="m.bar.status === 'done' || m.bar.status === 'blocked' || m.key === selectedKey" class="outline" :x="m.bar.x + 1" :y="m.bar.y + 1" :width="m.bar.w - 2" :height="m.bar.h - 2" rx="5" />
-                  <a v-if="m.bar.jira && m.bar.w > 36" :href="m.bar.jira" target="_blank" rel="noopener noreferrer" class="jira" @pointerdown.stop @click.stop>
-                    <title>Открыть в Jira</title>
+                  <a v-if="m.bar.jira && m.bar.w > 36" :href="m.bar.jira" target="_blank" rel="noopener noreferrer" class="jira" :class="jiraClass(m.key)" @pointerdown.stop @click.stop>
+                    <title>{{ jiraTitle(m.key) }}</title>
                     <rect :x="m.bar.x + m.bar.w - 19" :y="m.bar.y + m.bar.h / 2 - 7.5" width="15" height="15" rx="4" />
                     <path :d="`M${m.bar.x + m.bar.w - 14} ${m.bar.y + m.bar.h / 2 - 3.5} h5 v5 M${m.bar.x + m.bar.w - 9} ${m.bar.y + m.bar.h / 2 - 3.5} l-5 5`" />
                   </a>
@@ -905,6 +930,8 @@ function noteLabel(note) {
 .jira rect { fill: rgba(255, 255, 255, 0.92); }
 .jira path { fill: none; stroke: #0052cc; stroke-width: 1.6; stroke-linecap: round; }
 .jira:hover rect { fill: #fff; }
+.jira.cat-new path { stroke: #44546f; }
+.jira.cat-done path { stroke: #216e4e; }
 .group-bar { cursor: pointer; }
 .group-bar.editable { cursor: grab; }
 .group-shape { opacity: 0.55; }

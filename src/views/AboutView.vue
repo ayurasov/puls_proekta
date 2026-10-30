@@ -1,10 +1,16 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import packageJson from '../../package.json'
 import AppIcon from '../components/common/AppIcon.vue'
 import ReleaseNotesModal from '../components/common/ReleaseNotesModal.vue'
+import { useAuthStore } from '../stores/auth'
+import { availableGuides, guideDownloads } from '../docs/guides'
+
 const version = packageJson.version
+const auth = useAuthStore()
 const releaseNotesOpen = ref(false)
+// Руководство администратора — только администраторам
+const guides = computed(() => availableGuides(auth).map((guide) => ({ ...guide, files: guideDownloads(guide.key) })))
 </script>
 
 <template>
@@ -25,27 +31,44 @@ const releaseNotesOpen = ref(false)
           <li>рабочие дни по производственному календарю РФ, временные сдвиги сроков;</li>
           <li>совместная работа: правки сохраняются сразу и видны коллегам, конфликты подсвечиваются;</li>
           <li>история изменений «было → стало», сохранённые версии и восстановление;</li>
-          <li>роли, доступы к проектам и направлениям, вход через домен (LDAP);</li>
+          <li>роли, доступы к проектам и направлениям — сотрудникам и подразделениям, вход через домен (LDAP);</li>
+          <li>связь с Jira и структура компании, общая с «По Делу»;</li>
           <li>экспорт в PNG, PDF, SVG, Excel (CSV) и JSON.</li>
         </ul>
       </section>
       <section class="card block">
-        <h2 class="section-title">Что нового в 0.2</h2>
+        <h2 class="section-title">Что нового в 0.3</h2>
         <ul>
-          <li>новая платформа: диаграмма — часть приложения, а не встроенная страница;</li>
-          <li>одновременная работа без потери чужих правок, индикатор «сейчас на плане»;</li>
-          <li>окна приложения вместо системных подтверждений браузера;</li>
-          <li>закрытые вкладки-версии не теряются — уходят в архив;</li>
-          <li>данные прежней версии перенесены полностью, включая историю и комментарии.</li>
+          <li>задачи Jira в плане: статус, сроки и трудозатраты, сверка и перенос в план;</li>
+          <li>структура компании, общая с «По Делу», и доступ к проектам для подразделений;</li>
+          <li>руководства прямо в приложении и справка «?» у инструментов;</li>
+          <li>работа на телефоне и планшете, отмена удаления плана и проекта.</li>
         </ul>
         <p class="guide">
           <button class="btn btn-sm" type="button" @click="releaseNotesOpen = true"><AppIcon name="star" :size="14" /> Что нового по версиям</button>
-          <a class="btn btn-sm" href="/user-guide.pdf" target="_blank" rel="noopener"><AppIcon name="file" :size="14" /> Руководство пользователя (PDF)</a>
         </p>
         <p class="muted small">Автор — Alexander Yurasov.</p>
       </section>
     </div>
     <ReleaseNotesModal v-if="releaseNotesOpen" @close="releaseNotesOpen = false" />
+
+    <section class="docs" aria-labelledby="about-docs-title">
+      <h2 id="about-docs-title" class="section-title">Документация</h2>
+      <div class="docs-grid">
+        <article v-for="guide in guides" :key="guide.key" class="card doc" :data-testid="`about-guide-${guide.key}`">
+          <span class="doc-icon" aria-hidden="true"><AppIcon name="book" :size="22" /></span>
+          <div class="doc-body">
+            <h3>{{ guide.title }}</h3>
+            <p>{{ guide.description }} Соответствует установленной версии {{ version }}.</p>
+            <div class="doc-actions">
+              <router-link :to="guide.path" class="btn btn-sm btn-primary"><AppIcon name="book" :size="13" />Читать в приложении</router-link>
+              <a class="btn btn-sm" :href="guide.files.pdfUrl" :download="guide.files.pdfName"><AppIcon name="download" :size="13" />Скачать PDF</a>
+              <a class="btn btn-sm" :href="guide.files.docxUrl" :download="guide.files.docxName"><AppIcon name="file" :size="13" />Скачать DOCX</a>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
   </div>
 </template>
 
@@ -59,5 +82,17 @@ const releaseNotesOpen = ref(false)
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
 .block { padding: 16px 18px; }
 .block ul { margin: 10px 0 0; padding-left: 18px; line-height: 1.6; font-size: 13.5px; }
-@media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+.docs { margin-top: 22px; }
+.docs .section-title { margin-bottom: 10px; }
+.docs-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.doc { display: flex; gap: 14px; padding: 18px; }
+.doc-icon { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; border-radius: 12px; background: var(--color-primary-soft); color: var(--color-primary-dark); flex-shrink: 0; }
+.doc-body { min-width: 0; }
+.doc-body h3 { font-size: 14.5px; margin-bottom: 4px; }
+.doc-body p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--color-text-muted); }
+.doc-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+@media (max-width: 768px) {
+  .grid { grid-template-columns: 1fr; }
+  .doc-actions .btn { flex: 1; min-height: 36px; }
+}
 </style>

@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref } from 'vue'
 import BaseModal from '../../components/common/BaseModal.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
 import ColorPicker from './ColorPicker.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
@@ -70,6 +71,7 @@ async function remove(a) {
 
 <template>
   <BaseModal title="Исполнители плана" size="wide" @close="emit('close')">
+    <template #header-actions><HelpLink topic="plan-assignees" /></template>
     <div class="list">
       <div v-for="a in editor.assigneeList" :key="a.key" class="row">
         <template v-if="editing?.key === a.key">

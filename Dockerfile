@@ -9,8 +9,8 @@ RUN npm run build
 
 # ---- nginx: статика клиента и проксирование /api на backend ----
 FROM nginx:1.27-alpine AS runtime
+# Руководства (текст, снимки экранов, PDF, DOCX) — уже в dist/assets: их собирает клиент
 COPY --from=builder /app/dist /usr/share/nginx/html
-COPY docs/manuals/user-guide.pdf /usr/share/nginx/html/user-guide.pdf
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 ENV BACKEND_UPSTREAM=backend:5000
 EXPOSE 80

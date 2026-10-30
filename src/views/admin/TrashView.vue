@@ -6,6 +6,7 @@ import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { formatDateTime } from '../../utils/format'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 
 const ui = useUiStore()
 const projects = useProjectsStore()
@@ -54,6 +55,7 @@ async function purgePlan(p) {
           {{ trash.canPurge ? 'Удалённые проекты и планы хранятся здесь, пока их не удалят навсегда.' : 'Удалённые планы ваших проектов. Вернуть план можно в любой момент; удалить навсегда — только администратор.' }}
         </div>
       </div>
+      <HelpLink topic="admin-trash" />
     </div>
     <section v-if="trash.canPurge" class="card block">
       <h2 class="section-title">Проекты</h2>

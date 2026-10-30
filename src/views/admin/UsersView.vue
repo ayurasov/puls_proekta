@@ -2,15 +2,22 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../../api/client'
 import { ROLE_LABELS, useAuthStore } from '../../stores/auth'
+import { useOrgStore } from '../../stores/org'
+import { useRoute } from 'vue-router'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { resizeImage } from '../../utils/images'
 import { countLabel, formatDateTime } from '../../utils/format'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import BaseModal from '../../components/common/BaseModal.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
 
 const auth = useAuthStore()
+const org = useOrgStore()
+const route = useRoute()
+// Фильтр по подразделению: ссылка со страницы «Структура» (?department=<id> или none)
+const departmentFilter = ref(typeof route.query.department === 'string' ? route.query.department : '')
 const ui = useUiStore()
 const { confirm } = useDialogs()
 const users = ref([])
@@ -33,12 +40,13 @@ async function load() {
   loading.value = true
   try { users.value = await api.get('/users') } catch (err) { ui.error(err) } finally { loading.value = false }
 }
-onMounted(load)
+onMounted(() => { load(); org.reload().catch(() => {}) })
 
 const visible = computed(() => {
   const q = search.value.trim().toLowerCase()
   return users.value
     .filter((u) => !roleFilter.value || u.role === roleFilter.value || (roleFilter.value === 'inactive' && !u.isActive))
+    .filter((u) => !departmentFilter.value || (departmentFilter.value === 'none' ? !u.departmentId : u.departmentId === departmentFilter.value))
     .filter((u) => !q || [u.name, u.login, u.position, u.email].some((v) => (v || '').toLowerCase().includes(q)))
     .sort((a, b) => String(a[sort.value.key] ?? '').localeCompare(String(b[sort.value.key] ?? ''), 'ru') * sort.value.dir)
 })
@@ -55,8 +63,20 @@ function openCreate() {
   editor.value = { mode: 'create', name: '', login: '', position: '', email: '', role: 'editor', authSource: 'local', password: '', isActive: true }
 }
 function openEdit(user) {
-  editor.value = { mode: 'edit', id: user.id, ...user, password: '' }
+  editor.value = {
+    mode: 'edit', id: user.id, ...user, password: '', departmentId: user.departmentId || '',
+    managerChoice: user.reportsToNone ? 'none' : user.managerId ? String(user.managerId) : 'structure',
+  }
+  editor.value.original = { departmentId: editor.value.departmentId, managerChoice: editor.value.managerChoice }
 }
+const structureManager = computed(() => {
+  const person = editor.value && org.personById[editor.value.id]
+  return person && person.managerSource === 'structure' ? org.personById[person.directManagerId] : null
+})
+// Отключённый руководитель остаётся в списке, если он назначен сейчас: иначе список был бы пуст, а сохранение
+// карточки — невозможно; заменить его можно любым активным сотрудником
+const managerOptions = computed(() => org.people.filter((p) => p.id !== editor.value?.id
+  && (p.isActive || String(p.id) === editor.value?.managerChoice)))
 
 async function save() {
   const e = editor.value
@@ -71,10 +91,17 @@ async function save() {
       ui.success('Сотрудник добавлен', created.name)
     } else {
       const payload = { name: e.name, login: e.login, position: e.position, email: e.email, role: e.role, authSource: e.authSource }
+      // Подразделение и руководитель — только если их изменили (руководитель мог быть отключён после назначения)
+      if ((e.departmentId || null) !== (e.original.departmentId || null)) payload.departmentId = e.departmentId || ''
+      if (e.managerChoice !== e.original.managerChoice) {
+        payload.managerId = e.managerChoice === 'none' || e.managerChoice === 'structure' ? 0 : Number(e.managerChoice)
+        payload.reportsToNone = e.managerChoice === 'none'
+      }
       if (e.password) payload.password = e.password
       const updated = await api.patch(`/users/${e.id}`, payload)
       replace(updated)
       if (updated.id === auth.user?.id) auth.setUser(updated)
+      org.reload().catch(() => {})
       ui.success('Сохранено')
     }
     editor.value = null
@@ -169,8 +196,14 @@ async function removePhoto() {
         <h1 class="page-title">Сотрудники</h1>
         <div class="page-subtitle">{{ countLabel(counts.total, 'сотрудник', 'сотрудника', 'сотрудников') }}<span v-if="counts.inactive"> · {{ countLabel(counts.inactive, 'отключён', 'отключены', 'отключено') }}</span></div>
       </div>
+      <HelpLink topic="admin-users" />
       <div class="spacer" />
       <input v-model="search" class="input search" type="search" placeholder="Поиск по ФИО, логину, должности" />
+      <select v-if="org.departments.length" v-model="departmentFilter" class="select dep-filter" aria-label="Подразделение">
+        <option value="">Все подразделения</option>
+        <option value="none">Без подразделения</option>
+        <option v-for="o in org.options()" :key="o.id" :value="o.id">{{ o.label }}</option>
+      </select>
       <select v-model="roleFilter" class="select role-filter">
         <option value="">Все роли</option>
         <option v-for="(label, key) in ROLE_LABELS" :key="key" :value="key">{{ label }}</option>
@@ -184,7 +217,7 @@ async function removePhoto() {
         <thead>
           <tr>
             <th class="sortable" @click="toggleSort('name')">Сотрудник</th>
-            <th class="sortable" @click="toggleSort('position')">Должность</th>
+            <th class="sortable" @click="toggleSort('position')">Должность и подразделение</th>
             <th class="sortable" @click="toggleSort('role')">Роль</th>
             <th>Вход</th>
             <th class="sortable" @click="toggleSort('lastLoginAt')">Последний вход</th>
@@ -204,7 +237,10 @@ async function removePhoto() {
                 </div>
               </div>
             </td>
-            <td class="small">{{ user.position || '—' }}</td>
+            <td class="small">
+              <div>{{ user.position || '—' }}</div>
+              <div v-if="user.departmentId && org.depById[user.departmentId]" class="muted ellipsis dep" :title="org.pathText(user.departmentId)">{{ org.depById[user.departmentId].name }}</div>
+            </td>
             <td>
               <select class="select input-sm" :value="user.role" :disabled="user.id === auth.user?.id" :title="ROLE_HINTS[user.role]" @change="setRole(user, $event.target.value, $event)">
                 <option v-for="(label, key) in ROLE_LABELS" :key="key" :value="key">{{ label }}</option>
@@ -236,6 +272,23 @@ async function removePhoto() {
         </div>
         <label class="field"><span class="field-label">ФИО</span><input v-model="editor.name" class="input" maxlength="255" required /></label>
         <label class="field"><span class="field-label">Должность</span><input v-model="editor.position" class="input" maxlength="500" /></label>
+        <div v-if="editor.mode === 'edit' && org.departments.length" class="form-grid">
+          <label class="field">
+            <span class="field-label">Подразделение</span>
+            <select v-model="editor.departmentId" class="select" data-testid="user-department">
+              <option value="">— не указано —</option>
+              <option v-for="o in org.options()" :key="o.id" :value="o.id">{{ o.label }}</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field-label">Руководитель</span>
+            <select v-model="editor.managerChoice" class="select">
+              <option value="structure">По структуре{{ structureManager ? `: ${structureManager.name}` : '' }}</option>
+              <option value="none">Первое лицо — никому не подчиняется</option>
+              <option v-for="p in managerOptions" :key="p.id" :value="String(p.id)">{{ p.name }}{{ p.isActive ? '' : ' (отключён)' }}</option>
+            </select>
+          </label>
+        </div>
         <div class="form-grid">
           <label class="field"><span class="field-label">Логин</span><input v-model="editor.login" class="input" maxlength="150" autocomplete="off" required /></label>
           <label class="field"><span class="field-label">Email</span><input v-model="editor.email" class="input" type="email" maxlength="255" /></label>
@@ -277,6 +330,8 @@ async function removePhoto() {
 <style scoped>
 .search { width: 280px; }
 .role-filter { width: 170px; }
+.dep-filter { width: 220px; }
+.dep { max-width: 260px; }
 .person { display: flex; align-items: center; gap: 10px; }
 .person-name { font-weight: 600; display: flex; align-items: center; gap: 6px; }
 tr.inactive td { opacity: 0.55; }

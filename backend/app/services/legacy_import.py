@@ -98,7 +98,12 @@ def _wipe_target():
         db.session.execute(model.__table__.delete())
     db.session.execute(text("DELETE FROM plan_presence"))
     db.session.execute(text("DELETE FROM user_sessions"))
+    db.session.execute(text("DELETE FROM department_heads"))
+    db.session.execute(text("DELETE FROM jira_issues"))
     db.session.execute(User.__table__.delete())
+    # Родитель подразделения защищён от удаления (RESTRICT) — сначала связи, потом сами подразделения
+    db.session.execute(text("UPDATE departments SET parent_id = NULL"))
+    db.session.execute(text("DELETE FROM departments"))
     db.session.flush()
 
 

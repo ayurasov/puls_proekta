@@ -39,10 +39,13 @@ function toggle(group) {
 const groups = computed(() => projects.grouped.filter((g) => g.projects.length || g.direction))
 const adminLinks = [
   { to: '/admin/users', icon: 'users', label: 'Сотрудники' },
+  { to: '/admin/structure', icon: 'hierarchy', label: 'Структура' },
+  { to: '/admin/org-transfer', icon: 'upload', label: 'Импорт и экспорт' },
   { to: '/admin/directions', icon: 'folder', label: 'Направления' },
   { to: '/admin/access', icon: 'shield', label: 'Доступы' },
   { to: '/admin/audit', icon: 'history', label: 'Реестр изменений' },
   { to: '/admin/trash', icon: 'trash', label: 'Корзина' },
+  { to: '/admin/integrations', icon: 'link', label: 'Интеграции' },
   { to: '/admin/settings', icon: 'settings', label: 'Настройки' },
 ]
 
@@ -72,6 +75,9 @@ async function logout() {
     <nav class="sidebar-nav" aria-label="Основная навигация">
       <router-link to="/" class="nav-item" :class="{ 'router-link-active': route.name === 'projects' }" exact-active-class="" title="Проекты">
         <AppIcon name="home" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Проекты</span>
+      </router-link>
+      <router-link to="/org" class="nav-item" title="Структура компании" data-testid="org-link">
+        <AppIcon name="hierarchy" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Структура компании</span>
       </router-link>
       <router-link v-if="auth.user?.role === 'manager'" to="/admin/trash" class="nav-item" title="Корзина — удалённые планы ваших проектов">
         <AppIcon name="trash" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Корзина</span>
@@ -107,6 +113,12 @@ async function logout() {
     </div>
 
     <div class="sidebar-bottom">
+      <router-link
+        to="/guide" class="nav-item" :class="{ 'router-link-active': route.path.startsWith('/guide') }"
+        title="Руководство" data-testid="guide-link"
+      >
+        <AppIcon name="book" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Руководство</span>
+      </router-link>
       <button class="user-card" type="button" :title="`${auth.user?.name || ''} · ${auth.roleLabel}\nПрофиль: фото, пароль`" @click="profileOpen = true">
         <UserAvatar :user="auth.user" :size="30" />
         <span v-if="!ui.sidebarCollapsed" class="user-text">

@@ -5,6 +5,7 @@ import { useProjectsStore } from '../../stores/projects'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import { countLabel } from '../../utils/format'
 import ColorPicker from '../../gantt/components/ColorPicker.vue'
 
@@ -99,6 +100,7 @@ async function drop(target) {
         <h1 class="page-title">Направления</h1>
         <div class="page-subtitle">Группы проектов на главной странице. Порядок меняется перетаскиванием.</div>
       </div>
+      <HelpLink topic="admin-directions" />
     </div>
     <form class="card add" @submit.prevent="add">
       <input v-model="name" class="input" placeholder="Название нового направления" maxlength="255" />

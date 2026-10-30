@@ -3,6 +3,8 @@
 Модель данных (ADR-0002):
 
 * сотрудники, их фото и серверные сессии;
+* структура компании: подразделения, их руководители, место сотрудника и его руководитель
+  (как в todo-planner «По Делу», ADR-0008);
 * направления (группы проектов) и проекты;
 * планы — бывшие «вкладки-версии» диаграммы Ганта 1.0.x: у проекта их может быть
   несколько, закрытая вкладка становится архивным планом, а не исчезает;
@@ -44,6 +46,14 @@ class User(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     auth_source = db.Column(db.String(20), nullable=False, default="local")
     avatar_version = db.Column(db.Integer, nullable=False, default=0)
+    # Структура компании (ADR-0008): подразделение, явный руководитель (иначе — по структуре),
+    # «первое лицо» (никому не подчиняется), источник записи и внешний идентификатор (табельный, objectGUID)
+    department_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="SET NULL"), nullable=True,
+                              index=True)
+    manager_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    reports_to_none = db.Column(db.Boolean, nullable=False, default=False)
+    org_source = db.Column(db.String(20), nullable=True)
+    external_id = db.Column(db.String(255), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)
@@ -78,6 +88,37 @@ class UserSession(db.Model):
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
     ip = db.Column(db.String(64), nullable=True)
     user_agent = db.Column(db.String(300), nullable=True)
+
+
+class Department(db.Model):
+    """Подразделение структуры компании (ADR-0008). Идентификатор — UUID, как в todo-planner: структура
+    переносится между инструментами файлом podelu.org-structure."""
+
+    __tablename__ = "departments"
+
+    id = db.Column(db.String(36), primary_key=True)
+    name = db.Column(db.Text, nullable=False)
+    parent_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="RESTRICT"), nullable=True,
+                          index=True)
+    kind = db.Column(db.String(32), nullable=False, default="department")
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    org_source = db.Column(db.String(20), nullable=False, default="manual")
+    external_id = db.Column(db.String(255), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (db.Index("ix_departments_parent_name", "parent_id", "name"),)
+
+
+class DepartmentHead(db.Model):
+    """Руководитель подразделения; у подразделения может быть несколько, основной — непосредственный
+    руководитель его сотрудников."""
+
+    __tablename__ = "department_heads"
+
+    department_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="CASCADE"), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    is_primary = db.Column(db.Boolean, nullable=False, default=False)
 
 
 class Direction(db.Model):
@@ -318,6 +359,34 @@ class AccessRule(db.Model):
     )
 
 
+class DepartmentAccessRule(db.Model):
+    """Доступ подразделения к проекту или ко всем проектам направления (ADR-0008): действует на сотрудников
+    подразделения и всех вложенных — новый сотрудник отдела сразу получает доступ отдела."""
+
+    __tablename__ = "department_access_rules"
+
+    id = db.Column(db.Integer, primary_key=True)
+    department_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="CASCADE"), nullable=False,
+                              index=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    direction_id = db.Column(db.Integer, db.ForeignKey("directions.id", ondelete="CASCADE"), nullable=True, index=True)
+    level = db.Column(db.String(10), nullable=False, default="view")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    created_by_id = db.Column(db.Integer, nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint("level in ('view','edit','manage')", name="level"),
+        db.CheckConstraint(
+            "(project_id is null and direction_id is not null) or (project_id is not null and direction_id is null)",
+            name="target",
+        ),
+        db.Index("uq_department_access_project", "department_id", "project_id", unique=True,
+                 sqlite_where=db.text("project_id is not null"), postgresql_where=db.text("project_id is not null")),
+        db.Index("uq_department_access_direction", "department_id", "direction_id", unique=True,
+                 sqlite_where=db.text("direction_id is not null"), postgresql_where=db.text("direction_id is not null")),
+    )
+
+
 class AuditLog(db.Model):
     """Реестр изменений для администратора. Записи 1.0.x перенесены без изменений."""
 
@@ -344,6 +413,18 @@ class AppSetting(db.Model):
     key = db.Column(db.String(100), primary_key=True)
     value = db.Column(db.JSON, nullable=True)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class JiraIssue(db.Model):
+    """Кэш задач Jira, привязанных к строкам планов (ADR-0007): план открывается без ожидания Jira,
+    а сама Jira не получает запрос от каждого открывшего план."""
+
+    __tablename__ = "jira_issues"
+
+    key = db.Column(db.String(100), primary_key=True)
+    found = db.Column(db.Boolean, nullable=False, default=True)
+    data = db.Column(db.JSON, nullable=True)
+    fetched_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
 
 class CalendarDay(db.Model):

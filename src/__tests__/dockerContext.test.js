@@ -33,8 +33,15 @@ describe('контекст сборки Docker', () => {
     const used = new Set()
     for (const file of sources(join(root, 'src'))) {
       const text = readFileSync(file, 'utf8')
-      for (const match of text.matchAll(/['"]((?:\.\.\/)+docs\/[^'"?*{]+)/g)) {
-        used.add(relative(root, resolve(file, '..', match[1])).split('\\').join('/'))
+      for (const match of text.matchAll(/['"]((?:\.\.\/)+docs\/[^'"]+)['"]/g)) {
+        // ?raw/?url отбрасываются, {user,admin} в import.meta.glob раскрываются, путь — до первой «*»
+        const spec = match[1].replace(/\?.*$/, '')
+        const brace = /\{([^}]*)\}/.exec(spec)
+        const variants = brace ? brace[1].split(',').map((v) => spec.replace(brace[0], v)) : [spec]
+        for (const variant of variants) {
+          const path = relative(root, resolve(file, '..', variant.split('*')[0])).split('\\').join('/')
+          if (path.startsWith('docs/')) used.add(path) // src/docs — исходники клиента, не каталог docs
+        }
       }
     }
     expect(used.size).toBeGreaterThan(0)

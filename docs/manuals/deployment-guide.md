@@ -1,13 +1,13 @@
 ---
 title: "Пульс Проекта — руководство по развёртыванию"
-subtitle: "Версия 0.2.1"
+subtitle: "Версия 0.3.0"
 date: "Октябрь 2026"
 lang: ru
 ---
 
 # О документе
 
-Руководство описывает установку «Пульса Проекта» версии 0.2.1 на сервер компании, переход с версии 1.0.1,
+Руководство описывает установку «Пульса Проекта» версии 0.3.0 на сервер компании, переход с версии 1.0.1,
 настройку HTTPS, резервное копирование и восстановление, обновление, наблюдение и диагностику. Документ
 предназначен для инженеров сопровождения. Работа в системе описана в руководствах пользователя и
 администратора.
@@ -35,12 +35,12 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Сервер
 
 | Параметр | Значение |
-| ----------- | ------------------------------------------------------------------ |
+| ----------- | ------------------------------------------------------------------- |
 | ОС | Linux x86-64 с Docker Engine (проверено на Ubuntu 24.04; подойдёт любой дистрибутив с Docker Compose V2) |
 | Docker | Docker Engine 24+ с Compose V2 (`docker compose`) |
 | Процессор и память | 2 vCPU и 2 ГБ ОЗУ — до нескольких сотен сотрудников; 4 vCPU и 4 ГБ — 1000–2000 сотрудников |
 | Диск | 5 ГБ под образы и базу плюс место под резервные копии (≈ 4 МБ на копию на данных 2026 г.) |
-| Сеть | Порт 39663 (или 443 через HTTPS-прокси); при сборке — доступ к реестру образов, PyPI и npm (или закрытый контур, см. ниже) |
+| Сеть | Порт 39663 (или 443 через HTTPS-прокси); при сборке — доступ к реестру образов, PyPI и npm (или закрытый контур, см. ниже); для связи с Jira — доступ backend к адресу Jira (напрямую или через прокси `HTTPS_PROXY`) |
 
 Нагрузка измерена: на 4 vCPU — около 500 опросов изменений в секунду при задержке p95 < 100 мс; для 2000
 сотрудников в пиковый час нужно около 110 запросов в секунду (`docs/performance/loadtest-v0.2.0.md`).
@@ -54,7 +54,7 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Шаг 1. Получение дистрибутива
 
 ```bash
-sudo git clone --branch v0.2.1 <адрес репозитория puls_proekta> /opt/puls
+sudo git clone --branch v0.3.0 <адрес репозитория puls_proekta> /opt/puls
 cd /opt/puls
 ```
 
@@ -86,7 +86,7 @@ sudo docker compose ps
 
 ```bash
 curl -fsS http://127.0.0.1:39663/api/health/ready; echo
-# {"status":"ok","schema":"0001_initial","version":"0.2.1"}
+# {"status":"ok","schema":"0004_department_access","version":"0.3.0"}
 curl -sI http://127.0.0.1:39663/ | grep -i content-security-policy
 ```
 
@@ -186,6 +186,18 @@ server {
 | `AUTO_MIGRATE` | `true` | Применять миграции при старте backend |
 | `ACCESS_LOG` | `false` | Журнал запросов backend |
 
+## Jira
+
+| Переменная | По умолчанию | Назначение |
+| ---------------------- | ----------- | --------------------------------------------------- |
+| `JIRA_ALLOWED_HOSTS` | — | Разрешённые адреса Jira через запятую: `jira.company.ru` или `.company.ru` (домен и поддомены); пусто — любой |
+| `JIRA_CACHE_SECONDS` | `300` | Сколько секунд данные задач Jira считаются свежими при открытии плана |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | — | Прокси для выхода backend к Jira, если сервер ходит в сеть через прокси |
+
+Само подключение (адрес, учётная запись, токен) задаёт администратор в интерфейсе: «Администрирование →
+Интеграции». Токен хранится в базе зашифрованным ключом из `SECRET_KEY`: после смены `SECRET_KEY` токен нужно
+ввести заново.
+
 ## Резервное копирование
 
 | Переменная | По умолчанию | Назначение |
@@ -193,6 +205,38 @@ server {
 | `BACKUP_DIR` | `./backups` | Каталог копий на сервере |
 | `BACKUP_HOUR` | `03` | Час ежедневной копии (по `TZ`) |
 | `BACKUP_RETENTION_DAYS` | `30` | Сколько дней хранить ежедневные копии |
+
+# Структура компании из командной строки
+
+Те же операции, что на странице «Импорт и экспорт», — командой в контейнере backend (без `--apply` — только
+проверка, ничего не записывается):
+
+```bash
+docker compose exec backend python scripts/org_transfer.py export-structure -o /tmp/structure.json
+docker compose exec backend python scripts/org_transfer.py export-employees --format zip -o /tmp/employees.zip
+docker compose cp backend:/tmp/structure.json backend:/tmp/employees.zip .
+```
+
+Загрузка: скопируйте файл в контейнер и проверьте, затем примените (`--actor` — логин администратора, от имени
+которого изменения попадут в реестр):
+
+```bash
+docker compose cp people.csv backend:/tmp/people.csv
+docker compose exec backend python scripts/org_transfer.py import-csv /tmp/people.csv --create-missing --actor admin
+docker compose exec backend python scripts/org_transfer.py import-csv /tmp/people.csv --create-missing --actor admin --apply
+```
+
+Так же работают `import-structure` (`--no-settings` — без типов и глубины из файла), `import-employees`
+(`--new-users active|inactive|file`) и `sync-ad` (`--create-missing`, `--deactivate-missing`).
+
+Синхронизация с Active Directory по расписанию — запись cron на сервере, например ежедневно в 06:15:
+
+```bash
+15 6 * * * cd /opt/puls && docker compose exec -T backend python scripts/org_transfer.py sync-ad --create-missing --actor admin --apply >> /var/log/puls-ad-sync.log 2>&1
+```
+
+Подключение к каталогу берётся из «Администрирование → Настройки → Вход через домен», параметры синхронизации — со
+страницы «Импорт и экспорт → Active Directory».
 
 # Резервное копирование и восстановление
 
@@ -237,7 +281,7 @@ sudo docker compose start backend frontend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.2.1
+sudo sh deploy/update.sh v0.3.0
 ```
 
 Скрипт: копия `pre-update` → получение версии из git (ветка — только перемоткой вперёд) → сборка и перезапуск
@@ -308,13 +352,13 @@ sudo docker compose logs backup              # резервные копии
 cd puls_proekta
 docker compose build
 docker pull postgres:16-alpine
-docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.2.1-images.tar.gz
+docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.3.0-images.tar.gz
 ```
 
 На сервере:
 
 ```bash
-gunzip -c puls-0.2.1-images.tar.gz | sudo docker load
+gunzip -c puls-0.3.0-images.tar.gz | sudo docker load
 cd /opt/puls
 sudo docker compose up -d          # без --build: используются загруженные образы
 ```

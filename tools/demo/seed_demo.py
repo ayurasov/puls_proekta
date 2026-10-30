@@ -33,6 +33,9 @@ PASSWORD = os.environ.get("DEMO_PASSWORD", "demo-password-1")
 # Сегодня по сценарию — даты планов отсчитываются от него, чтобы снимки экранов
 # всегда показывали «живой» план: часть работ завершена, часть идёт, часть впереди.
 TODAY = date.fromisoformat(os.environ.get("DEMO_TODAY", "2026-10-30"))
+# Jira демо-стенда: DEMO_JIRA_URL — адрес заглушки (tools/docs/screenshots.mjs поднимает её сама);
+# без неё ссылки строк ведут на вымышленный адрес, а подключение не настраивается
+JIRA = os.environ.get("DEMO_JIRA_URL", "https://jira.example.com").rstrip("/")
 
 USERS = [
     # login, ФИО, должность, роль
@@ -121,18 +124,20 @@ def portal_main(users):
              dependencyKey="t11"),
         task("t13", "Техническое задание", -40, -25, parentKey="g1", status="done", progress=100,
              completedDate=d(-22), assigneeKey="a_kov", category="разработка документации", dependencyKey="t12",
-             jiraUrl="https://jira.example.com/browse/MER-12"),
+             jiraUrl=f"{JIRA}/browse/MER-12"),
         task("t14", "Согласование ТЗ с заказчиком", -21, -12, parentKey="g1", status="done", progress=100,
              completedDate=d(-12), assigneeKey="a_cust", category="согласование", dependencyKey="t13"),
         milestone("m1", "ТЗ утверждено", -12, color="green", lineStyle="solid",
                   comment="Протокол согласования № 3 от заказчика"),
         group("g2", "Этап 2. Разработка", color="blue"),
         task("t21", "Личный кабинет поставщика", -9, 26, parentKey="g2", status="inwork", progress=55,
-             assigneeKey="a_leb", category="разработка", dependencyKey="t14", dependencyLag=2),
+             assigneeKey="a_leb", category="разработка", dependencyKey="t14", dependencyLag=2,
+             jiraUrl=f"{JIRA}/browse/MER-31"),
         task("t22", "Интеграция с ERP заказчика", -5, 40, parentKey="g2", status="blocked", progress=20,
-             assigneeKey="a_leb", category="разработка", offset=14, barText="ждём доступ к тестовой ERP"),
+             assigneeKey="a_leb", category="разработка", offset=14, barText="ждём доступ к тестовой ERP",
+             jiraUrl=f"{JIRA}/browse/MER-32"),
         task("t23", "Электронная подпись документов", 5, 35, parentKey="g2", status="inwork", progress=10,
-             assigneeKey="a_leb", category="разработка"),
+             assigneeKey="a_leb", category="разработка", jiraUrl=f"{JIRA}/browse/MER-35"),
         task("t24", "Отчёты для категорийных менеджеров", 12, 42, parentKey="g2", status="new",
              assigneeKey="a_kov", category="разработка", dependencyKey="t21", dependencyType="SS",
              dependencyLag=21),
@@ -295,6 +300,27 @@ def main():
     admin.call("POST", "/access", {"userIds": [users["kovaleva"]], "projectIds": [bi_id], "level": "edit"})
     admin.call("POST", "/access", {"userIds": [users["volkov"], users["egorova"]],
                                    "directionIds": [directions["impl"], directions["prod"]], "level": "view"})
+
+    # Структура компании (ADR-0008): подразделения, руководители, место сотрудников, доступ отдела
+    def unit(name, parent=None, kind="department", heads=()):
+        dep = admin.call("POST", "/departments", {"name": name, "parentId": parent, "kind": kind})
+        if heads:
+            admin.call("PUT", f"/departments/{dep['id']}/heads", {"userIds": [users[h] for h in heads]})
+        return dep["id"]
+
+    vector = unit("ООО «Вектор»", kind="company", heads=("egorova",))
+    office = unit("Проектный офис", vector, heads=("sokolova",))
+    development = unit("Разработка", vector, heads=("lebedev",))
+    analysis = unit("Группа аналитики", development, kind="group", heads=("kovaleva",))
+    quality = unit("Группа тестирования", development, kind="group")
+    finance = unit("Финансовая служба", vector, kind="service", heads=("volkov",))
+    for login, dep in (("egorova", vector), ("sokolova", office), ("morozov", office), ("lebedev", development),
+                       ("kovaleva", analysis), ("nikitina", quality), ("volkov", finance)):
+        admin.call("PATCH", f"/users/{users[login]}", {"departmentId": dep})
+    admin.call("POST", "/access/departments", {"departmentIds": [development], "directionIds": [directions["prod"]],
+                                               "level": "view"})
+    if os.environ.get("DEMO_JIRA_URL"):
+        admin.call("PUT", "/settings/jira", {"baseUrl": JIRA, "instanceType": "server", "token": "demo-token"})
 
     # Работа команды: правки, комментарии и сохранённая версия
     morozov.call("POST", f"/plans/{portal_plan}/snapshots", {"label": "Согласованный график"})

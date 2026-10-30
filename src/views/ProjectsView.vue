@@ -7,6 +7,7 @@ import { useUiStore } from '../stores/ui'
 import { useDialogs } from '../composables/useDialogs'
 import { api } from '../api/client'
 import AppIcon from '../components/common/AppIcon.vue'
+import HelpLink from '../components/common/HelpLink.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PopupMenu from '../components/common/PopupMenu.vue'
 import { countLabel, formatDate, formatDateTime } from '../utils/format'
@@ -193,6 +194,7 @@ function onDragEnd() {
           <template v-else>{{ countLabel(total, 'проект', 'проекта', 'проектов') }}</template>
         </div>
       </div>
+      <HelpLink topic="projects" />
       <div class="spacer" />
       <label class="search">
         <AppIcon name="search" :size="15" class="search-icon" />

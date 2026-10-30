@@ -191,7 +191,9 @@ async function svgToCanvas(svg, width, height) {
 }
 
 function csvCell(value) {
-  const text = String(value ?? '')
+  let text = String(value ?? '')
+  // Текст, который Excel принял бы за формулу (=, +, -, @), — с апострофом; числа («-3») не трогаем
+  if (/^[=+\-@\t\r]/.test(text) && !/^-?\d+([.,]\d+)?$/.test(text)) text = `'${text}`
   return /[;"\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 

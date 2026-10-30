@@ -4,7 +4,7 @@
  *
  *   npm run build && npm run e2e
  * Переменные: PYTHON (по умолчанию python3), E2E_KEEP=1 — не останавливать стенд,
- * E2E_API_PORT / E2E_WEB_PORT — другие порты (несколько прогонов на одной машине).
+ * E2E_API_PORT и E2E_WEB_PORT — порты стенда (по умолчанию 5055 и 4173).
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readdirSync } from 'node:fs'
@@ -33,7 +33,8 @@ function start(cmd, args, options) {
   return child
 }
 start(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--host', '127.0.0.1', '--port', apiPort], { cwd: join(root, 'backend'), env })
-start('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port', webPort, '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: `http://127.0.0.1:${apiPort}` } })
+// vite — напрямую, а не через npx: иначе SIGTERM получает npx, а сервер остаётся работать после тестов
+start(process.execPath, [join(root, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', webPort, '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: `http://127.0.0.1:${apiPort}` } })
 
 async function waitFor(url) {
   for (let i = 0; i < 120; i += 1) {

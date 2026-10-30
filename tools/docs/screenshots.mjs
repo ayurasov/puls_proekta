@@ -4,11 +4,13 @@
  *   npm run build && node tools/docs/screenshots.mjs [user|admin ...]
  *
  * Стенд: временная база SQLite с демо-данными, Flask на :5077 и собранный клиент (vite preview)
- * на :4177. Снимки 1440×900 при масштабе 1,5 сохраняются в docs/manuals/images/{user,admin}/ и
- * затем сжимаются `python3 tools/docs/optimize_png.py docs/manuals/images/user docs/manuals/images/admin`.
- * Переменные: PYTHON (по умолчанию python3), SHOTS_API_PORT и SHOTS_WEB_PORT — другие порты.
+ * на :4177, заглушка Jira на :5098 (задачи проекта «Портал поставщиков»). Снимки 1440×900 при масштабе
+ * 1,5 сохраняются в docs/manuals/images/{user,admin}/ и затем сжимаются
+ * `python3 tools/docs/optimize_png.py docs/manuals/images/user docs/manuals/images/admin`.
+ * Переменные: PYTHON (по умолчанию python3), SHOTS_API_PORT, SHOTS_WEB_PORT, SHOTS_JIRA_PORT — другие порты.
  */
 import { spawn, spawnSync } from 'node:child_process'
+import { createServer } from 'node:http'
 import { mkdirSync, mkdtempSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
@@ -21,11 +23,47 @@ const root = resolve(fileURLToPath(import.meta.url), '../../..')
 const python = process.env.PYTHON || 'python3'
 const API_PORT = process.env.SHOTS_API_PORT || '5077'
 const WEB_PORT = process.env.SHOTS_WEB_PORT || '4177'
+const JIRA_PORT = Number(process.env.SHOTS_JIRA_PORT || 5098)
 const BASE = `http://127.0.0.1:${WEB_PORT}`
+const JIRA = `http://127.0.0.1:${JIRA_PORT}`
 const PASSWORD = 'demo-password-1'
 const only = process.argv.slice(2)
 const dir = mkdtempSync(join(tmpdir(), 'puls-shots-'))
-const env = { ...process.env, SQLALCHEMY_DATABASE_URI: `sqlite:///${join(dir, 'demo.db')}`, FLASK_ENV: 'e2e', RATELIMIT_ENABLED: 'false' }
+const env = {
+  ...process.env, SQLALCHEMY_DATABASE_URI: `sqlite:///${join(dir, 'demo.db')}`, FLASK_ENV: 'e2e', RATELIMIT_ENABLED: 'false',
+  DEMO_JIRA_URL: JIRA,
+}
+
+// Заглушка Jira Server: задачи портала поставщиков (сегодня по сценарию — 30.10.2026, как в seed_demo.py)
+const day = (offset) => new Date(Date.UTC(2026, 9, 30 + offset)).toISOString().slice(0, 10)
+const status = (name, key) => ({ name, statusCategory: { key } })
+const JIRA_ISSUES = {
+  'MER-12': { summary: 'Техническое задание', status: status('Готово', 'done'), assignee: { displayName: 'Ковалёва Мария' }, duedate: day(-25), resolutiondate: `${day(-22)}T17:40:00.000+0300`, issuetype: { name: 'Задача' } },
+  'MER-31': { summary: 'Личный кабинет поставщика', status: status('В работе', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(30), timespent: 3600 * 132, timeestimate: 3600 * 68, issuetype: { name: 'История' } },
+  'MER-32': { summary: 'Интеграция с ERP заказчика', status: status('Ожидание заказчика', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(54), timespent: 3600 * 40, timeestimate: 3600 * 120, issuetype: { name: 'Задача' }, priority: { name: 'Высокий' } },
+  'MER-35': { summary: 'Электронная подпись документов (КЭП)', status: status('В работе', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(35), timespent: 3600 * 10, timeestimate: 3600 * 70, issuetype: { name: 'История' } },
+  'MER-40': { summary: 'Отчёт о поставках для заказчика', status: status('Открыта', 'new'), duedate: day(48), issuetype: { name: 'История' } },
+  'MER-41': { summary: 'Уведомления поставщиков по почте', status: status('Открыта', 'new'), duedate: day(52), issuetype: { name: 'История' } },
+  'MER-42': { summary: 'Нагрузочное тестирование портала', status: status('Открыта', 'new'), duedate: day(60), issuetype: { name: 'Задача' } },
+}
+const jira = createServer((req, res) => {
+  let body = ''
+  req.on('data', (chunk) => { body += chunk })
+  req.on('end', () => {
+    const send = (code, data) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
+    const path = req.url.split('?')[0].replace('/rest/api/2/', '')
+    if (path === 'myself') return send(200, { displayName: 'svc-puls (только чтение)' })
+    if (path === 'field') return send(200, [{ id: 'duedate', name: 'Срок', schema: { type: 'date' } }, { id: 'customfield_10015', name: 'Start date', custom: true, schema: { type: 'date' } }])
+    if (path === 'search') {
+      const { jql } = JSON.parse(body || '{}')
+      const keys = jql.startsWith('key in') ? jql.slice(jql.indexOf('(') + 1, jql.lastIndexOf(')')).split(',').map((k) => k.trim()) : Object.keys(JIRA_ISSUES)
+      const found = keys.filter((k) => JIRA_ISSUES[k]).map((key) => ({ key, fields: JIRA_ISSUES[key] }))
+      return send(200, { issues: found, total: found.length })
+    }
+    return send(404, { errorMessages: ['Not found'] })
+  })
+})
+await new Promise((resolveListen) => jira.listen(JIRA_PORT, '127.0.0.1', resolveListen))
 
 const seed = spawnSync(python, [join(root, 'tools/demo/seed_demo.py')], { cwd: join(root, 'backend'), env, stdio: 'inherit' })
 if (seed.status !== 0) process.exit(seed.status || 1)
@@ -192,6 +230,32 @@ async function userGuide() {
   await viewer.click('.user-card')
   await viewer.waitForSelector('.modal')
   await shot(viewer, '23-profile')
+
+  // Jira: задача в карточке строки, сверка, задачи из Jira
+  await openProject(page, PORTAL)
+  await page.locator('.grid-row', { hasText: 'Интеграция с ERP заказчика' }).locator('.open-btn').click()
+  await page.waitForSelector('[data-testid=jira-card] .summary')
+  await shot(page, '24-jira-card')
+  await closeOverlays(page)
+  await page.click('[data-testid=jira-menu]')
+  await page.click('[data-testid=jira-sync-open]')
+  await page.waitForSelector('[data-testid=jira-sync-table]')
+  await shot(page, '25-jira-sync')
+  await closeOverlays(page)
+  await page.click('[data-testid=jira-menu]')
+  await page.click('[data-testid=jira-import-open]')
+  await page.fill('[data-testid=jira-import-keys]', 'MER-40, MER-41, MER-42, MER-31')
+  await page.click('[data-testid=jira-import-search]')
+  await page.waitForSelector('[data-testid=jira-import-list]')
+  await shot(page, '26-jira-import')
+  await closeOverlays(page)
+
+  // Структура компании
+  await page.goto(BASE + '/org')
+  await page.locator('.node-name', { hasText: 'Разработка' }).click()
+  await page.locator('[data-testid=org-unit] .person-row', { hasText: 'Лебедев' }).first().click()
+  await page.waitForSelector('[data-testid=org-person]')
+  await shot(page, '27-org')
 }
 
 async function adminGuide() {
@@ -235,6 +299,25 @@ async function adminGuide() {
   await page.goto(BASE + '/about')
   await page.waitForTimeout(600)
   await shot(page, '10-about')
+
+  await page.goto(BASE + '/admin/structure')
+  await page.waitForSelector('[data-testid=dep-row]')
+  await shot(page, '11-structure')
+
+  await page.goto(BASE + '/admin/org-transfer')
+  await page.waitForTimeout(800)
+  await shot(page, '12-org-transfer')
+
+  await page.goto(BASE + '/admin/integrations')
+  await page.waitForSelector('[data-testid=jira-settings]')
+  await page.click('[data-testid=jira-test]')
+  await page.locator('[data-testid=jira-status]', { hasText: 'Соединение установлено' }).waitFor()
+  await shot(page, '13-integrations')
+
+  await page.goto(BASE + '/admin/access')
+  await page.click('.segmented button:has-text("Правила")')
+  await page.waitForSelector('[data-testid=dep-rule]')
+  await shot(page, '14-access-departments')
 }
 
 let code = 0
@@ -255,5 +338,6 @@ try {
 } finally {
   if (browser) await browser.close()
   for (const child of children) child.kill('SIGTERM')
+  jira.close()
 }
 process.exit(code)

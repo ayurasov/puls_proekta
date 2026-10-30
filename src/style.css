@@ -52,6 +52,7 @@ h1, h2, h3, h4 { margin: 0; }
   border: 1px solid var(--color-border); background: var(--color-surface); border-radius: var(--radius-sm);
   padding: 6px 12px; font-size: 13px; line-height: 1.2; white-space: nowrap; color: var(--color-text); text-decoration: none;
   transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s; min-height: 32px;
+  text-decoration: none;
 }
 .btn:hover:not(:disabled) { background: var(--color-hover); border-color: var(--color-border-strong); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -233,3 +234,9 @@ h1, h2, h3, h4 { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Jira: статус задачи (цвета категорий как в Jira) ---------- */
+.jira-status { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.jira-status.cat-new { background: #e9ebef; color: #44546f; }
+.jira-status.cat-indeterminate { background: #e9f2ff; color: #0055cc; }
+.jira-status.cat-done { background: #dcfff1; color: #216e4e; }

@@ -5,6 +5,7 @@ import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import { formatDate } from '../../utils/format'
 
 const ui = useUiStore()
@@ -92,6 +93,7 @@ async function removeDay(day) {
   <div class="page">
     <div class="page-header">
       <h1 class="page-title">Настройки</h1>
+      <HelpLink :topic="tab === 'calendar' ? 'admin-calendar' : 'admin-ldap'" />
       <div class="spacer" />
       <div class="segmented">
         <button type="button" :class="{ 'is-active': tab === 'ldap' }" @click="tab = 'ldap'">Вход через домен</button>

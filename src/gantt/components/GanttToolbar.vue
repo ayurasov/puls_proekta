@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, onBeforeUnmount, ref } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
 import { SCALES, nextZoom } from '../domain/layout'
 import { STATUSES, resolveColor } from '../domain/colors'
@@ -11,6 +12,7 @@ import { useUiStore } from '../../stores/ui'
 const emit = defineEmits(['open-modal', 'scroll-today', 'fit'])
 const editor = inject('gantt')
 const actions = inject('ganttActions')
+const jira = inject('jira')
 const ui = useUiStore()
 const state = editor.state
 const view = state.view
@@ -132,6 +134,19 @@ async function runExport(format) {
   }
 }
 
+const columnLabels = computed(() => ({
+  start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Исполнитель', progress: 'Прогресс',
+  ...(jira.state.connected ? { jira: 'Задача Jira' } : {}),
+}))
+const jiraLinked = computed(() => (jira.state.connected ? jira.linkedItems().length : 0))
+// Число на кнопке J — строки, где в Jira иной статус, сроки или прогресс (одно лишь название не считается)
+const jiraDiffering = computed(() => (jira.state.loaded ? jira.linkedItems().filter((item) => jira.differs(item)).length : 0))
+function jiraAction(name) {
+  menu.value = null
+  if (name === 'refresh') jira.load({ refresh: true })
+  else emit('open-modal', name)
+}
+
 function toggleColumn(column) {
   view.columns[column] = !view.columns[column]
   editor.saveView()
@@ -190,8 +205,9 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /><span class="today-label">Сегодня</span></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Вид" @click="open('view', $event)"><AppIcon name="layers" /></button>
       <button ref="shortcutsButton" class="btn btn-ghost btn-icon btn-sm" type="button" title="Клавиши (?)" aria-label="Сочетания клавиш" data-testid="shortcuts" @click="showShortcuts">
-        <AppIcon name="help" />
+        <AppIcon name="keyboard" />
       </button>
+      <HelpLink topic="plan" />
     </div>
 
     <!-- Действия с планом целиком — в строке вкладок планов, рядом с выбранным планом -->
@@ -200,6 +216,10 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Статистика" @click="emit('open-modal', 'stats')"><AppIcon name="chart" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="История и сохранённые версии" data-testid="history" @click="emit('open-modal', 'history')"><AppIcon name="history" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Настройки графика" @click="emit('open-modal', 'settings')"><AppIcon name="settings" /></button>
+      <button v-if="jira.state.connected" class="btn btn-ghost btn-sm jira-btn" :class="{ 'has-diff': jiraDiffering }" type="button"
+              :title="jiraDiffering ? `Jira: в ${jiraDiffering} строках данные расходятся` : 'Jira'" data-testid="jira-menu" @click="open('jira', $event)">
+        <span class="jira-mark" aria-hidden="true">J</span><span v-if="jiraDiffering" class="count">{{ jiraDiffering }}</span>
+      </button>
       <button class="btn btn-sm" type="button" :disabled="exporting" title="Экспорт" @click="open('export', $event)">
         <AppIcon name="download" :size="14" /> <span class="export-label">{{ exporting ? 'Готовим…' : 'Экспорт' }}</span>
       </button>
@@ -210,6 +230,22 @@ function toggleColumn(column) {
       <button class="menu-item" type="button" @click="addRow('milestone')"><AppIcon name="diamond" /> Веха</button>
       <button class="menu-item" type="button" @click="addRow('group')"><AppIcon name="folder" /> Группа</button>
       <button class="menu-item" type="button" @click="addRow('note')"><AppIcon name="note" /> Пометка на шкале</button>
+      <template v-if="jira.state.connected">
+        <div class="menu-separator" />
+        <button class="menu-item" type="button" @click="jiraAction('jira-import')"><span class="jira-mark small" aria-hidden="true">J</span> Задачи из Jira…</button>
+      </template>
+    </PopupMenu>
+
+    <PopupMenu v-if="menu?.type === 'jira'" :anchor="menu.anchor" align="end" @close="menu = null">
+      <div class="menu-label">Jira · строк с задачами: {{ jiraLinked }}</div>
+      <button class="menu-item" type="button" :disabled="jira.state.loading || !jiraLinked" @click="jiraAction('refresh')">
+        <AppIcon name="refresh" /> {{ jira.state.loading ? 'Обновляем…' : 'Обновить из Jira' }}
+      </button>
+      <button class="menu-item" type="button" :disabled="!jiraLinked" data-testid="jira-sync-open" @click="jiraAction('jira-sync')">
+        <AppIcon name="checklist" /> Сверка с Jira…<span v-if="jiraDiffering" class="menu-hint">расходится: {{ jiraDiffering }}</span>
+      </button>
+      <button v-if="editor.canEdit" class="menu-item" type="button" data-testid="jira-import-open" @click="jiraAction('jira-import')"><AppIcon name="plus" /> Задачи из Jira…</button>
+      <div v-if="jira.state.error" class="menu-note small">{{ jira.state.error }}</div>
     </PopupMenu>
 
     <PopupMenu v-if="menu?.type === 'filters'" :anchor="menu.anchor" :min-width="560" @close="menu = null">
@@ -235,7 +271,7 @@ function toggleColumn(column) {
 
     <PopupMenu v-if="menu?.type === 'view'" :anchor="menu.anchor" align="end" @close="menu = null">
       <div class="menu-label">Колонки слева</div>
-      <label v-for="(label, column) in { start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Исполнитель', progress: 'Прогресс' }" :key="column" class="menu-item">
+      <label v-for="(label, column) in columnLabels" :key="column" class="menu-item">
         <input type="checkbox" :checked="view.columns[column]" @change="toggleColumn(column)" /> {{ label }}
       </label>
       <div class="menu-separator" />
@@ -274,6 +310,10 @@ function toggleColumn(column) {
 </template>
 
 <style scoped>
+.jira-btn { gap: 4px; }
+.jira-btn.has-diff { color: #0052cc; }
+.jira-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: #0052cc; color: #fff; font-size: 11px; font-weight: 800; font-style: italic; line-height: 1; }
+.menu-note { padding: 6px 10px; color: var(--color-danger); max-width: 320px; line-height: 1.4; }
 .toolbar-wrap { flex-shrink: 0; background: var(--color-surface); border-bottom: 1px solid var(--color-border); container-type: inline-size; }
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; }
 .group { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }

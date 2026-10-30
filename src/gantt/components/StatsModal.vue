@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject } from 'vue'
 import BaseModal from '../../components/common/BaseModal.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import { planStatistics } from '../domain/stats'
 import { STATUSES } from '../domain/colors'
 import { formatDay } from '../domain/dates'
@@ -19,6 +20,7 @@ function select(key) {
 
 <template>
   <BaseModal :title="`Статистика: ${editor.state.plan?.title}`" size="wide" @close="emit('close')">
+    <template #header-actions><HelpLink topic="plan-stats" /></template>
     <div class="cards">
       <div class="card stat"><span class="muted small">Задач</span><strong>{{ stats.total }}</strong></div>
       <div class="card stat"><span class="muted small">Средний прогресс</span><strong>{{ stats.avgProgress }}%</strong></div>

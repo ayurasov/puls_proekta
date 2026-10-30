@@ -73,6 +73,9 @@ class BaseConfig:
     # Кто считается «на плане» в индикаторе присутствия
     PRESENCE_TTL_SECONDS = _int("PRESENCE_TTL_SECONDS", 45)
 
+    # Задачи Jira (ADR-0007): сколько секунд данные задачи считаются свежими при открытии плана
+    JIRA_CACHE_SECONDS = _int("JIRA_CACHE_SECONDS", 300)
+
     # Часовой пояс площадки: в нём выражены даты прежней версии (комментарии, история)
     # и «сегодня» в журналах.
     APP_TIMEZONE = os.environ.get("APP_TIMEZONE", "Europe/Moscow")
