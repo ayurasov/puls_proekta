@@ -16,6 +16,14 @@ const routes = [
   { path: '/admin/settings', name: 'admin-settings', component: () => import('../views/admin/SettingsView.vue'), meta: { admin: true, title: 'Настройки' } },
   { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { admin: true, title: 'Корзина' } },
   { path: '/about', name: 'about', component: () => import('../views/AboutView.vue'), meta: { title: 'О программе' } },
+  // Руководства внутри приложения (docs/guides.js); раздел — в #…: /guide#экран-плана
+  { path: '/guide', name: 'guide', component: () => import('../views/GuideView.vue'), meta: { title: 'Руководство пользователя', guide: 'user' } },
+  {
+    path: '/guide/admin', name: 'guide-admin', component: () => import('../views/GuideView.vue'),
+    meta: { admin: true, fallback: '/guide', title: 'Руководство администратора', guide: 'admin' },
+  },
+  // PDF руководства в 0.2.0 лежал по адресу /user-guide.pdf — старые ссылки ведут к руководству
+  { path: '/user-guide.pdf', redirect: '/guide' },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../views/NotFoundView.vue'), meta: { title: 'Не найдено' } },
 ]
 
@@ -45,7 +53,7 @@ router.beforeEach((to) => {
     return true
   }
   if (!auth.user) return { name: 'login', query: to.fullPath !== '/' ? { next: to.fullPath } : {} }
-  if (to.meta.admin && !auth.isAdmin) return { name: 'projects' }
+  if (to.meta.admin && !auth.isAdmin) return to.meta.fallback ? { path: to.meta.fallback, replace: true } : { name: 'projects' }
   return true
 })
 

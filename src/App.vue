@@ -10,6 +10,8 @@ const route = useRoute()
 const auth = useAuthStore()
 const isPublic = computed(() => route.meta?.public === true)
 const fill = computed(() => route.meta?.layout === 'fill')
+// Страница пересоздаётся при смене адреса, но не #…: переход по разделам руководства — та же страница
+const viewKey = computed(() => (route.name === 'project' ? route.params.projectId : route.fullPath.replace(/#.*$/, '')))
 </script>
 
 <template>
@@ -17,7 +19,7 @@ const fill = computed(() => route.meta?.layout === 'fill')
   <div v-else class="app-shell">
     <AppSidebar />
     <main class="app-main" :class="{ 'is-fill': fill }">
-      <router-view :key="route.name === 'project' ? route.params.projectId : route.fullPath" />
+      <router-view :key="viewKey" />
     </main>
   </div>
   <DialogHost />

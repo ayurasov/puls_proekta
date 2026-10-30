@@ -52,6 +52,7 @@ h1, h2, h3, h4 { margin: 0; }
   border: 1px solid var(--color-border); background: var(--color-surface); border-radius: var(--radius-sm);
   padding: 6px 12px; font-size: 13px; line-height: 1.2; white-space: nowrap; color: var(--color-text);
   transition: background 0.15s, border-color 0.15s, color 0.15s, box-shadow 0.15s; min-height: 32px;
+  text-decoration: none;
 }
 .btn:hover:not(:disabled) { background: var(--color-hover); border-color: var(--color-border-strong); }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }

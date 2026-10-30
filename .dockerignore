@@ -3,8 +3,17 @@ dist
 backend
 legacy
 docs
-# Руководство пользователя открывается из приложения (/user-guide.pdf)
+# Руководства пользователя и администратора читаются и скачиваются из приложения: сборка клиента
+# (src/docs/guides.js) берёт их текст, снимки экранов, PDF и DOCX — остальное из docs образу не нужно
+!docs/manuals/user-guide.md
 !docs/manuals/user-guide.pdf
+!docs/manuals/user-guide.docx
+!docs/manuals/admin-guide.md
+!docs/manuals/admin-guide.pdf
+!docs/manuals/admin-guide.docx
+!docs/manuals/images/user
+!docs/manuals/images/admin
+docs/**/*.build.html
 e2e
 .git
 *.log
