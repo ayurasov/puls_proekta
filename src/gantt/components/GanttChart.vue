@@ -5,7 +5,7 @@ import PopupMenu from '../../components/common/PopupMenu.vue'
 import { createChartContext, dependencyPaths, legendEntries, rowModel } from '../chartModel'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { dayX, fitZoom, nextZoom } from '../domain/layout'
-import { EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, resolveColor } from '../domain/colors'
+import { EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, resolveColor, textColorOnWhite } from '../domain/colors'
 import { descendantKeys, parentOf } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
 import { countLabel } from '../../utils/format'
@@ -637,7 +637,7 @@ function noteLabel(note) {
                 <span v-else class="caret-space" />
                 <span class="mark">
                   <AppIcon v-if="row.item.type === 'group'" name="folder" :size="14" />
-                  <AppIcon v-else-if="row.item.type === 'milestone'" name="diamond" :size="13" />
+                  <AppIcon v-else-if="row.item.type === 'milestone'" name="diamond" :size="13" :style="{ color: textColorOnWhite(resolveColor(row.item.lineColor || row.item.color, 'teal').color) }" />
                   <span v-else class="status-dot" :style="{ background: STATUS_BY_KEY[row.item.status || 'new'].color }" />
                 </span>
                 <div class="name-block">

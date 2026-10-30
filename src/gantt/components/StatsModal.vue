@@ -86,7 +86,8 @@ function select(key) {
 
 <style scoped>
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
-.stat { padding: 12px; display: flex; flex-direction: column; gap: 4px; box-shadow: none; }
+.stat { padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 4px; box-shadow: none; }
+.stat > span { line-height: 1.3; }
 .stat strong { font-size: 22px; }
 .bad { color: #c62933; }
 section { margin-bottom: 16px; display: flex; flex-direction: column; gap: 6px; }

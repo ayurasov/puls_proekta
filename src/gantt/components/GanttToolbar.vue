@@ -211,7 +211,7 @@ function toggleColumn(column) {
         <div v-for="group in filterGroups" :key="group.key" class="filter-col">
           <div class="menu-label">{{ group.label }}</div>
           <div class="filter-options scroll-thin">
-            <label v-for="option in group.options" :key="option.value" class="filter-option">
+            <label v-for="option in group.options" :key="option.value" class="filter-option" :title="option.label">
               <input type="checkbox" :checked="view[group.key].has(option.value)" @change="toggleFilter(group.key, option.value)" />
               <span v-if="option.color" class="status-dot" :style="{ background: option.color }" />
               <span class="ellipsis">{{ option.label }}</span>
