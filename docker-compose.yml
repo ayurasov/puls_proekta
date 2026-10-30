@@ -40,6 +40,12 @@ services:
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-}
       ACCESS_LOG: ${ACCESS_LOG:-false}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+      # Jira (ADR-0007): разрешённые хосты, свежесть данных задач; прокси сервера для выхода к Jira
+      JIRA_ALLOWED_HOSTS: ${JIRA_ALLOWED_HOSTS:-}
+      JIRA_CACHE_SECONDS: ${JIRA_CACHE_SECONDS:-300}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
       TZ: ${TZ:-Europe/Moscow}
     depends_on:
       db:
