@@ -3,6 +3,8 @@
 Модель данных (ADR-0002):
 
 * сотрудники, их фото и серверные сессии;
+* структура компании: подразделения, их руководители, место сотрудника и его руководитель
+  (как в todo-planner «По Делу», ADR-0008);
 * направления (группы проектов) и проекты;
 * планы — бывшие «вкладки-версии» диаграммы Ганта 1.0.x: у проекта их может быть
   несколько, закрытая вкладка становится архивным планом, а не исчезает;
@@ -44,6 +46,14 @@ class User(db.Model):
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     auth_source = db.Column(db.String(20), nullable=False, default="local")
     avatar_version = db.Column(db.Integer, nullable=False, default=0)
+    # Структура компании (ADR-0008): подразделение, явный руководитель (иначе — по структуре),
+    # «первое лицо» (никому не подчиняется), источник записи и внешний идентификатор (табельный, objectGUID)
+    department_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="SET NULL"), nullable=True,
+                              index=True)
+    manager_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    reports_to_none = db.Column(db.Boolean, nullable=False, default=False)
+    org_source = db.Column(db.String(20), nullable=True)
+    external_id = db.Column(db.String(255), nullable=True, index=True)
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)
@@ -78,6 +88,37 @@ class UserSession(db.Model):
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
     ip = db.Column(db.String(64), nullable=True)
     user_agent = db.Column(db.String(300), nullable=True)
+
+
+class Department(db.Model):
+    """Подразделение структуры компании (ADR-0008). Идентификатор — UUID, как в todo-planner: структура
+    переносится между инструментами файлом podelu.org-structure."""
+
+    __tablename__ = "departments"
+
+    id = db.Column(db.String(36), primary_key=True)
+    name = db.Column(db.Text, nullable=False)
+    parent_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="RESTRICT"), nullable=True,
+                          index=True)
+    kind = db.Column(db.String(32), nullable=False, default="department")
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    org_source = db.Column(db.String(20), nullable=False, default="manual")
+    external_id = db.Column(db.String(255), nullable=True, index=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+    __table_args__ = (db.Index("ix_departments_parent_name", "parent_id", "name"),)
+
+
+class DepartmentHead(db.Model):
+    """Руководитель подразделения; у подразделения может быть несколько, основной — непосредственный
+    руководитель его сотрудников."""
+
+    __tablename__ = "department_heads"
+
+    department_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="CASCADE"), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    is_primary = db.Column(db.Boolean, nullable=False, default=False)
 
 
 class Direction(db.Model):

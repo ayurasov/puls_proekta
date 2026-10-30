@@ -35,6 +35,11 @@ def user_full(user):
         "createdAt": iso(user.created_at),
         "updatedAt": iso(user.updated_at),
         "lastLoginAt": iso(user.last_login_at),
+        "departmentId": user.department_id,
+        "managerId": user.manager_id,
+        "reportsToNone": bool(user.reports_to_none),
+        "externalId": user.external_id,
+        "orgSource": user.org_source,
     }
 
 

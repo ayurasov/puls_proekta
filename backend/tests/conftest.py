@@ -1,6 +1,7 @@
 import os
 
 import pytest
+from sqlalchemy import text
 
 from app import create_app
 from app.cli import seed_calendar
@@ -23,6 +24,9 @@ def app(tmp_path):
     yield app
     with app.app_context():
         db.session.remove()
+        # Подразделение-родитель защищено от удаления (RESTRICT): SQLite проверяет это и при DROP TABLE
+        with db.engine.begin() as conn:
+            conn.execute(text("UPDATE departments SET parent_id = NULL"))
         db.drop_all()
         db.engine.dispose()
 

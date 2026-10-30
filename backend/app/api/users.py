@@ -50,6 +50,10 @@ class UserUpdate(BaseModel):
     role: Optional[Role] = None
     isActive: Optional[bool] = None
     authSource: Optional[Literal["local", "ldap"]] = None
+    # Структура компании (ADR-0008); пустая строка / 0 — снять
+    departmentId: Optional[str] = Field(default=None, max_length=36)
+    managerId: Optional[int] = None
+    reportsToNone: Optional[bool] = None
 
     @field_validator("login", "name", "email", "position")
     @classmethod
@@ -157,6 +161,8 @@ def update_user(user_id):
             if attr == "auth_source" and value == "ldap":
                 user.password_hash = None
 
+    changes += _apply_org_fields(user, payload)
+
     if payload.password:
         if user.auth_source == "ldap":
             raise ApiError(400, "directory_password", "У учётной записи домена нет пароля системы")
@@ -180,6 +186,45 @@ def update_user(user_id):
     if revoke:
         revoke_user_sessions(user.id, keep_token=session.token if user.id == me.id else None)
     return jsonify(user_full(user))
+
+
+def _apply_org_fields(user, payload):
+    """Подразделение, явный руководитель и «первое лицо» (ADR-0008)."""
+    from app.models import Department
+    from app.services.org import OrgSnapshot, would_cycle
+
+    changes = []
+    fields = payload.model_fields_set
+    snap = None
+    if "departmentId" in fields:
+        dep_id = payload.departmentId or None
+        if dep_id and db.session.get(Department, dep_id) is None:
+            raise ApiError(400, "validation_error", "Подразделение не найдено")
+        if dep_id != user.department_id:
+            snap = OrgSnapshot()
+            changes.append(("department", " / ".join(snap.path(user.department_id)), " / ".join(snap.path(dep_id))))
+            user.department_id = dep_id
+    if "managerId" in fields:
+        manager_id = payload.managerId or None
+        if manager_id is not None:
+            manager = db.session.get(User, manager_id)
+            if manager is None or not manager.is_active:
+                raise ApiError(400, "validation_error", "Руководитель не найден или отключён")
+            if would_cycle(user.id, manager_id):
+                raise ApiError(409, "org_cycle", "Цикл подчинения: руководитель подчиняется этому сотруднику")
+        if manager_id != user.manager_id:
+            old = db.session.get(User, user.manager_id).name if user.manager_id else "по структуре"
+            new = db.session.get(User, manager_id).name if manager_id else "по структуре"
+            changes.append(("manager", old, new))
+            user.manager_id = manager_id
+            if manager_id:
+                user.reports_to_none = False
+    if payload.reportsToNone is not None and payload.reportsToNone != bool(user.reports_to_none):
+        changes.append(("reportsToNone", "нет" if payload.reportsToNone else "да", "да" if payload.reportsToNone else "нет"))
+        user.reports_to_none = payload.reportsToNone
+        if payload.reportsToNone:
+            user.manager_id = None
+    return changes
 
 
 @bp.delete("/<int:user_id>")
