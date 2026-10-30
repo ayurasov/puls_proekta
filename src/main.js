@@ -20,6 +20,12 @@ setAuthLostHandler(() => {
   router.push({ name: 'login', query: { next: router.currentRoute.value.fullPath, expired: '1' } })
 })
 
+// Старая ссылка, открытая в уже загруженном приложении (меняется только #…)
+window.addEventListener('hashchange', () => {
+  const target = legacyHashTarget(window.location.hash)
+  if (target) router.replace(target)
+})
+
 auth.bootstrap().finally(() => {
   app.use(router)
   app.mount('#app')

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../../api/client'
 import { ACCESS_LABELS, useProjectsStore } from '../../stores/projects'
 import { ROLE_LABELS } from '../../stores/auth'
@@ -16,13 +16,12 @@ const rules = ref([])
 const matrix = ref(null)
 const userSearch = ref('')
 const projectSearch = ref('')
-const selectedUsers = ref(new Set())
-const selectedProjects = ref(new Set())
-const selectedDirections = ref(new Set())
+// Выбор — реактивные множества (передавать ref с множеством в шаблон нельзя: шаблон
+// разворачивает ref, и изменения не доходили до счётчиков — ошибка найдена e2e-тестом)
+const selected = reactive({ users: new Set(), projects: new Set(), directions: new Set(), rules: new Set() })
 const level = ref('view')
 const mode = ref('replace')
 const ruleSearch = ref('')
-const selectedRules = ref(new Set())
 const busy = ref(false)
 
 async function load() {
@@ -45,29 +44,30 @@ const groupedProjects = computed(() => {
   return projects.grouped.map((g) => ({ ...g, projects: g.projects.filter((p) => !q || p.title.toLowerCase().includes(q)) }))
     .filter((g) => g.projects.length || (g.direction && !q))
 })
-const grantCount = computed(() => selectedUsers.value.size * (selectedProjects.value.size + selectedDirections.value.size))
+const grantCount = computed(() => selected.users.size * (selected.projects.size + selected.directions.size))
 
-function toggle(setRef, id) {
-  const next = new Set(setRef.value)
-  if (next.has(id)) next.delete(id)
-  else next.add(id)
-  setRef.value = next
+function toggle(kind, id) {
+  const set = selected[kind]
+  if (set.has(id)) set.delete(id)
+  else set.add(id)
 }
 function toggleAllUsers() {
-  selectedUsers.value = selectedUsers.value.size === candidates.value.length ? new Set() : new Set(candidates.value.map((u) => u.id))
+  const all = selected.users.size === candidates.value.length
+  selected.users.clear()
+  if (!all) for (const u of candidates.value) selected.users.add(u.id)
 }
 
 async function grant() {
   busy.value = true
   try {
     const res = await api.post('/access', {
-      userIds: [...selectedUsers.value], projectIds: [...selectedProjects.value], directionIds: [...selectedDirections.value],
+      userIds: [...selected.users], projectIds: [...selected.projects], directionIds: [...selected.directions],
       level: level.value, mode: mode.value,
     })
     ui.success('Доступы выданы', `Новых правил: ${res.created}, изменено: ${res.updated}, без изменений: ${res.unchanged}`)
-    selectedUsers.value = new Set()
-    selectedProjects.value = new Set()
-    selectedDirections.value = new Set()
+    selected.users.clear()
+    selected.projects.clear()
+    selected.directions.clear()
     rules.value = await api.get('/access')
   } catch (err) { ui.error(err) } finally { busy.value = false }
 }
@@ -90,7 +90,7 @@ async function removeRules(ids) {
   try {
     await api.post('/access/delete', { ids })
     rules.value = rules.value.filter((r) => !ids.includes(r.id))
-    selectedRules.value = new Set()
+    selected.rules.clear()
   } catch (err) { ui.error(err) }
 }
 
@@ -118,27 +118,27 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
 
     <div v-if="tab === 'grant'" class="grant">
       <section class="card pane">
-        <header><h2 class="section-title">Сотрудники · {{ selectedUsers.size }}</h2><button class="btn btn-ghost btn-sm" type="button" @click="toggleAllUsers">{{ selectedUsers.size === candidates.length && candidates.length ? 'Снять все' : 'Выбрать все' }}</button></header>
+        <header><h2 class="section-title">Сотрудники · {{ selected.users.size }}</h2><button class="btn btn-ghost btn-sm" type="button" @click="toggleAllUsers">{{ selected.users.size === candidates.length && candidates.length ? 'Снять все' : 'Выбрать все' }}</button></header>
         <input v-model="userSearch" class="input input-sm" placeholder="Поиск" />
         <div class="options scroll-thin">
           <label v-for="u in candidates" :key="u.id" class="option">
-            <input type="checkbox" :checked="selectedUsers.has(u.id)" @change="toggle(selectedUsers, u.id)" />
+            <input type="checkbox" :checked="selected.users.has(u.id)" @change="toggle('users', u.id)" />
             <span class="ellipsis">{{ u.name }}</span><span class="muted small">{{ ROLE_LABELS[u.role] }}</span>
           </label>
         </div>
       </section>
       <section class="card pane">
-        <header><h2 class="section-title">Проекты · {{ selectedProjects.size + selectedDirections.size }}</h2></header>
+        <header><h2 class="section-title">Проекты · {{ selected.projects.size + selected.directions.size }}</h2></header>
         <input v-model="projectSearch" class="input input-sm" placeholder="Поиск" />
         <div class="options scroll-thin">
           <template v-for="g in groupedProjects" :key="g.direction ? g.direction.id : 'none'">
             <label v-if="g.direction" class="option group">
-              <input type="checkbox" :checked="selectedDirections.has(g.direction.id)" @change="toggle(selectedDirections, g.direction.id)" />
+              <input type="checkbox" :checked="selected.directions.has(g.direction.id)" @change="toggle('directions', g.direction.id)" />
               <span class="ellipsis"><b>{{ g.direction.name }}</b> — всё направление, включая будущие проекты</span>
             </label>
             <div v-else class="group-title muted small">Без направления</div>
-            <label v-for="p in g.projects" :key="p.id" class="option nested" :class="{ dim: g.direction && selectedDirections.has(g.direction.id) }">
-              <input type="checkbox" :checked="selectedProjects.has(p.id)" @change="toggle(selectedProjects, p.id)" />
+            <label v-for="p in g.projects" :key="p.id" class="option nested" :class="{ dim: g.direction && selected.directions.has(g.direction.id) }">
+              <input type="checkbox" :checked="selected.projects.has(p.id)" @change="toggle('projects', p.id)" />
               <span class="ellipsis">{{ p.title }}</span>
             </label>
           </template>
@@ -160,7 +160,7 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
           </select>
         </label>
         <button class="btn btn-primary" type="button" :disabled="!grantCount || busy" @click="grant">
-          Выдать доступ ({{ selectedUsers.size }} × {{ selectedProjects.size + selectedDirections.size }})
+          Выдать доступ ({{ selected.users.size }} × {{ selected.projects.size + selected.directions.size }})
         </button>
         <p class="muted small">Повторная выдача не создаёт дублей (в 1.0 одинаковые правила копились).</p>
       </section>
@@ -170,14 +170,14 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
       <div class="rules-bar">
         <input v-model="ruleSearch" class="input input-sm" placeholder="Сотрудник или проект" style="max-width: 320px" />
         <span class="spacer" />
-        <button v-if="selectedRules.size" class="btn btn-sm btn-text-danger" type="button" @click="removeRules([...selectedRules])"><AppIcon name="trash" :size="14" /> Отозвать выбранные ({{ selectedRules.size }})</button>
+        <button v-if="selected.rules.size" class="btn btn-sm btn-text-danger" type="button" @click="removeRules([...selected.rules])"><AppIcon name="trash" :size="14" /> Отозвать выбранные ({{ selected.rules.size }})</button>
       </div>
       <div class="table-wrap" style="max-height: 65vh">
         <table class="table">
           <thead><tr><th style="width:32px" /><th>Сотрудник</th><th>Проект / направление</th><th>Уровень</th><th /></tr></thead>
           <tbody>
             <tr v-for="r in visibleRules" :key="r.id">
-              <td><input type="checkbox" :checked="selectedRules.has(r.id)" @change="toggle(selectedRules, r.id)" /></td>
+              <td><input type="checkbox" :checked="selected.rules.has(r.id)" @change="toggle('rules', r.id)" /></td>
               <td><div>{{ r.userName }}</div><div class="muted small">@{{ r.userLogin }} · {{ ROLE_LABELS[r.userRole] }}</div></td>
               <td><span class="badge">{{ r.projectId ? 'Проект' : 'Направление' }}</span> {{ r.targetName }}</td>
               <td>

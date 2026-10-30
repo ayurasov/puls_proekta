@@ -1,5 +1,6 @@
 # CI «Пульса Проекта»: сервер (ruff, pytest на SQLite и PostgreSQL, миграции, перенос
-# реальной базы 1.0.1 со сверкой) и клиент (eslint, vitest, сборка), e2e на Playwright.
+# реальной базы 1.0.1 со сверкой), клиент (eslint, vitest, сборка), e2e на Playwright
+# и репетиция установки в Docker Compose (сборка образов, перенос базы, запуск, копия).
 name: CI
 
 on:
@@ -103,3 +104,66 @@ jobs:
           python scripts/migrate_on_start.py
           python scripts/import_legacy.py ../legacy/snapshot/puls-2026-10-30.db --report /tmp/import-report.md
           cat /tmp/import-report.md >> "$GITHUB_STEP_SUMMARY"
+
+  e2e:
+    name: 'E2E: Playwright на перенесённых данных 1.0.1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+      - run: pip install -r backend/requirements-dev.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - name: Playwright и Chromium
+        run: |
+          npm install --no-save playwright@1.63.0
+          npx playwright install --with-deps chromium
+      - name: E2E
+        env:
+          PYTHON: python
+          E2E_SHOTS: ${{ runner.temp }}/e2e-shots
+        run: npm run e2e
+      - name: Снимки экранов
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: ${{ runner.temp }}/e2e-shots
+          if-no-files-found: ignore
+          retention-days: 14
+
+  docker:
+    name: 'Docker: сборка, перенос базы 1.0.1, запуск стека, резервная копия'
+    runs-on: ubuntu-latest
+    env:
+      SECRET_KEY: ci-only-secret-key-0123456789abcdef-0123456789
+      POSTGRES_PASSWORD: ci-only-password
+      HTTP_PORT: '8080'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Сборка образов
+        run: docker compose build
+      - name: База и перенос снимка 1.0.1
+        run: |
+          cp legacy/snapshot/puls-2026-10-30.db import/puls.db
+          docker compose up -d --wait db
+          docker compose --profile migrate run --rm legacy-import
+          cat import/import-report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Запуск и проверка
+        run: |
+          docker compose up -d --wait
+          curl -fsS http://127.0.0.1:8080/api/health/ready
+          curl -fsSI http://127.0.0.1:8080/ | grep -i '^content-security-policy'
+          docker compose exec -T backup sh /usr/local/bin/backup.sh now ci
+          docker compose exec -T backup sh /usr/local/bin/backup.sh list
+      - name: Журналы контейнеров
+        if: failure()
+        run: docker compose logs --tail 200

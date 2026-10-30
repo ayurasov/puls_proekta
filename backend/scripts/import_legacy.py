@@ -58,9 +58,12 @@ def main(argv=None):
         text = render_report(stats, report, errors, args.sqlite_path)
         if args.dry_run:
             text = text.replace("# Отчёт о переносе", "# Репетиция переноса (без записи)", 1)
-        if args.report:
-            Path(args.report).write_text(text, encoding="utf-8")
         print(text)
+        if args.report:
+            try:
+                Path(args.report).write_text(text, encoding="utf-8")
+            except OSError as exc:
+                print(f"Внимание: отчёт не записан в {args.report}: {exc}", file=sys.stderr)
         return 2 if errors else 0
 
 

@@ -36,3 +36,5 @@ backend/instance/
 
 # Temporary HTML of the manuals build (tools/docs/build_manuals.py)
 docs/**/*.build.html
+/import/*
+!/import/README.md

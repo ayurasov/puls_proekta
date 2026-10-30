@@ -11,7 +11,7 @@ const facets = ref({ users: [], sections: [], projects: [], actions: [] })
 const rows = ref([])
 const total = ref(0)
 const nextBefore = ref(null)
-const loading = ref(false)
+const loading = ref(true)
 const expanded = ref(null)
 const ACTIONS = { create: 'создание', update: 'изменение', delete: 'удаление', restore: 'восстановление', purge: 'удаление навсегда', archive: 'в архив', unarchive: 'из архива', snapshot: 'версия' }
 

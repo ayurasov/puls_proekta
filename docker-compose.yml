@@ -1,0 +1,92 @@
+# Пульс Проекта — развёртывание (см. docs/manuals/deployment-guide.md).
+#   docker compose up -d --build
+# Перенос базы 1.0.x (один раз, в пустую базу; файл puls.db — в каталог ./import):
+#   docker compose --profile migrate run --rm legacy-import
+name: puls
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-puls}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Задайте POSTGRES_PASSWORD в .env}
+      POSTGRES_DB: ${POSTGRES_DB:-puls}
+      TZ: ${TZ:-Europe/Moscow}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-puls} -d ${POSTGRES_DB:-puls}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build:
+      context: ./backend
+    restart: unless-stopped
+    environment: &backend-env
+      FLASK_ENV: production
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-puls}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-puls}
+      SECRET_KEY: ${SECRET_KEY:?Задайте SECRET_KEY в .env (не короче 32 символов)}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SESSION_LIFETIME_DAYS: ${SESSION_LIFETIME_DAYS:-30}
+      LOGIN_RATE_LIMIT: ${LOGIN_RATE_LIMIT:-10 per minute;50 per hour}
+      SNAPSHOT_INTERVAL_MINUTES: ${SNAPSHOT_INTERVAL_MINUTES:-30}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-3}
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
+      TZ: ${TZ:-Europe/Moscow}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: .
+    restart: unless-stopped
+    environment:
+      BACKEND_UPSTREAM: backend:5000
+    ports:
+      - "${HTTP_BIND:-0.0.0.0}:${HTTP_PORT:-39663}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-puls}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${POSTGRES_DB:-puls}
+      BACKUP_HOUR: ${BACKUP_HOUR:-03}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      TZ: ${TZ:-Europe/Moscow}
+    volumes:
+      - ${BACKUP_DIR:-./backups}:/backups
+      - ./deploy/backup.sh:/usr/local/bin/backup.sh:ro
+    entrypoint: ["sh", "/usr/local/bin/backup.sh"]
+    command: ["loop"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Одноразовый перенос базы 1.0.x: положите puls.db (и puls.db-wal, если есть) в ./import
+  legacy-import:
+    profiles: ["migrate"]
+    build:
+      context: ./backend
+    # Пишет отчёт в смонтированный каталог ./import, владелец которого — пользователь сервера
+    user: "0:0"
+    environment: *backend-env
+    volumes:
+      - ./import:/import
+    command: ["python", "scripts/import_legacy.py", "/import/puls.db", "--report", "/import/import-report.md"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db_data:

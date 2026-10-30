@@ -1,0 +1,8 @@
+node_modules
+dist
+backend
+legacy
+docs
+e2e
+.git
+*.log

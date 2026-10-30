@@ -18,12 +18,20 @@ NAMING_CONVENTION = {
 
 
 @event.listens_for(Engine, "connect")
-def _enable_sqlite_foreign_keys(dbapi_connection, connection_record):
+def _configure_sqlite(dbapi_connection, connection_record):
+    """SQLite (разработка, тесты, e2e): внешние ключи, WAL и ожидание блокировки.
+
+    WAL позволяет читать во время записи: сессия сохраняется отдельным соединением,
+    пока транзакция запроса ещё открыта на чтение (в PostgreSQL это не нужно).
+    """
     if dbapi_connection.__class__.__module__.split(".")[0] != "sqlite3":
         return
     cursor = dbapi_connection.cursor()
     try:
         cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
     finally:
         cursor.close()
 
