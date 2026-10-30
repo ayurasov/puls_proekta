@@ -80,10 +80,11 @@ def _default_plans(project_ids):
 
 
 def _task_stats(project_ids):
-    """Задачи основного плана по статусам, средний прогресс и ближайшая веха — для карточек на главной.
+    """Задачи основного плана по статусам, средний прогресс, сроки и ближайшая веха — для карточек на главной.
 
     Средний прогресс считается так же, как «Средний прогресс» в окне «Статистика» плана:
-    среднее поля «Прогресс» по всем задачам плана.
+    среднее поля «Прогресс» по всем задачам плана. Сроки (start, end) — самое раннее начало и самое
+    позднее плановое окончание задач: по ним главная сортирует проекты «по сроку окончания».
     """
     if not project_ids:
         return {}
@@ -101,6 +102,8 @@ def _task_stats(project_ids):
             func.sum(case((PlanItem.status == "blocked", 1), else_=0)),
             func.sum(case((and_(PlanItem.status != "done", PlanItem.end_date < func.current_date()), 1), else_=0)),
             func.sum(func.coalesce(PlanItem.progress, 0)),
+            func.min(PlanItem.start_date),
+            func.max(PlanItem.end_date),
         )
         .join(Plan, Plan.id == PlanItem.plan_id)
         .where(PlanItem.type == "task", alive)
@@ -110,15 +113,16 @@ def _task_stats(project_ids):
     def empty(pid):
         plan_id, title = default_plans[pid]
         return {"total": 0, "done": 0, "inwork": 0, "blocked": 0, "overdue": 0, "progress": 0,
-                "planId": plan_id, "planTitle": title}
+                "start": None, "end": None, "planId": plan_id, "planTitle": title}
 
     stats = {}
-    for pid, total, done, inwork, blocked, overdue, progress_sum in rows:
+    for pid, total, done, inwork, blocked, overdue, progress_sum, start, end in rows:
         entry = empty(pid)
         total = int(total or 0)
         entry.update({"total": total, "done": int(done or 0), "inwork": int(inwork or 0), "blocked": int(blocked or 0),
                       "overdue": int(overdue or 0),
-                      "progress": round(float(progress_sum or 0) / total) if total else 0})
+                      "progress": round(float(progress_sum or 0) / total) if total else 0,
+                      "start": _day(start), "end": _day(end)})
         stats[pid] = entry
     milestones = db.session.execute(
         select(Plan.project_id, PlanItem.name, PlanItem.start_date)
@@ -130,6 +134,10 @@ def _task_stats(project_ids):
         entry = stats.setdefault(pid, empty(pid))
         entry.setdefault("nextMilestone", {"name": name, "date": day.isoformat()})
     return stats
+
+
+def _day(value):
+    return value.isoformat() if value is not None else None
 
 
 def serialize_project(project, level, plans=None, stats=None, creator=None):

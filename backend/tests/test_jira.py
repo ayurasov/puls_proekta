@@ -59,6 +59,8 @@ class FakeJira:
                 {"id": "duedate", "name": "Срок", "custom": False, "schema": {"type": "date"}},
                 {"id": "customfield_10015", "name": "Start date", "custom": True, "schema": {"type": "date"}},
                 {"id": "summary", "name": "Тема", "schema": {"type": "string"}},
+                {"id": "customfield_10008", "name": "Epic Link", "custom": True,
+                 "schema": {"type": "any", "custom": "com.pyxis.greenhopper.jira:gh-epic-link"}},
             ])
         if path == "serverInfo":
             return FakeResponse(200, {"version": "8.20.10", "deploymentType": "Server", "serverTitle": "Jira"})
@@ -97,6 +99,7 @@ def jira(monkeypatch):
     monkeypatch.setattr(requests.Session, "request", lambda self, method, url, **kw: fake(self, method, url, **kw))
     monkeypatch.setattr(jira_service, "_down_until", 0.0)
     monkeypatch.setattr(jira_service, "_down_since", 0.0)
+    monkeypatch.setattr(jira_service, "_epic_fields", {})
     return fake
 
 
@@ -424,3 +427,79 @@ def test_v031_missing_issue_is_rechecked_sooner_than_found(app, admin, jira, mon
     data = admin.get(f"/api/plans/{plan_id}/jira").get_json()
     assert data["issues"]["ABC-2"]["key"] == "ABC-2"
     assert [c[2]["jql"] for c in _searches(jira)] == ["key in (ABC-2)"]
+
+
+def test_v040_plan_jira_auto_fields_are_validated(app, admin):
+    """Автоперенос из Jira — настройка плана: только известные поля, по умолчанию выключен."""
+    _, plan_id = create_project(admin)
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraAuto"] == []
+    ok_ops(admin, plan_id, [{"op": "plan.update", "fields": {"settings": {"jiraAuto": ["dates", "мусор", "status", "status"]}}}])
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraAuto"] == ["status", "dates"]
+
+
+
+def test_v040_import_groups_by_epics(app, admin, jira):
+    """«Задачи из Jira» по эпикам: Epic Link (Server/DC) у задач и названия эпиков отдельным запросом."""
+    _connect(admin)
+    jira.add("ABC-100", summary="Эпик: Личный кабинет", issuetype={"name": "Epic"})
+    jira.add("ABC-1", customfield_10008="ABC-100")
+    jira.add("ABC-2", customfield_10008="ABC-100")
+    jira.add("ABC-3")
+    _, plan_id = create_project(admin)
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "keys": "ABC-1 ABC-2 ABC-3 NOPE-1", "epics": True})
+    data = res.get_json()
+    assert res.status_code == 200, data
+    assert {i["key"]: i["epic"] for i in data["issues"]} == {"ABC-1": "ABC-100", "ABC-2": "ABC-100", "ABC-3": None}
+    assert data["missing"] == ["NOPE-1"]
+    assert data["epics"]["ABC-100"]["summary"] == "Эпик: Личный кабинет"
+    requested = [c[2]["fields"] for c in _searches(jira) if "ABC-1" in c[2]["jql"]][0]
+    assert "customfield_10008" in requested and "parent" in requested
+    # Эпик в результатах запроса — сам эпик, а не задача
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "jql": "project = ABC", "epics": True}).get_json()
+    assert [i["key"] for i in res["issues"] if i["isEpic"]] == ["ABC-100"] and "ABC-100" in res["epics"]
+
+
+def test_v040_cloud_epic_is_parent():
+    from app.jira_client import epic_key
+    story = {"parent": {"key": "web-7", "fields": {"issuetype": {"name": "Epic", "hierarchyLevel": 1}}}}
+    subtask = {"parent": {"key": "WEB-8", "fields": {"issuetype": {"name": "Story", "hierarchyLevel": 0}}}}
+    assert epic_key(story, {}) == "WEB-7"
+    assert epic_key(subtask, {}) is None
+    assert epic_key({"customfield_1": "abc-5"}, {"epicField": "customfield_1"}) == "ABC-5"
+
+
+def test_v040_review_milestone_and_group_return_jira_link(app, admin, jira):
+    """Ссылка вехи на Jira возвращалась только в /jira плана — клиент не считал веху связанной."""
+    _connect(admin)
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [
+        {"op": "item.create", "item": {"key": "m1", "type": "milestone", "name": "Релиз", "date": "2026-11-20",
+                                       "jiraUrl": f"{BASE}/browse/ABC-9"}},
+        {"op": "item.create", "item": {"key": "g1", "type": "group", "name": "Эпик", "jiraUrl": f"{BASE}/browse/ABC-8"}},
+    ])
+    items = {i["key"]: i for i in admin.get(f"/api/plans/{plan_id}").get_json()["items"]}
+    assert items["m1"]["jiraUrl"] == f"{BASE}/browse/ABC-9" and items["g1"]["jiraUrl"] == f"{BASE}/browse/ABC-8"
+
+
+def test_review_epic_link_field_is_cached_per_connection(app, admin, jira):
+    """Поле «Epic Link» — не GET /field при каждом поиске с эпиками: запоминается на 10 минут, сохранение
+    подключения сбрасывает его."""
+    _connect(admin)
+    jira.add("ABC-100", summary="Эпик", issuetype={"name": "Epic"})
+    jira.add("ABC-1", customfield_10008="ABC-100")
+    _, plan_id = create_project(admin)
+
+    def search():
+        res = admin.post("/api/jira/search", json={"planId": plan_id, "keys": "ABC-1", "epics": True})
+        assert res.status_code == 200, res.get_json()
+        assert res.get_json()["issues"][0]["epic"] == "ABC-100"
+
+    def field_requests():
+        return sum(1 for call in jira.calls if call[1].endswith("/rest/api/2/field"))
+
+    for _ in range(3):
+        search()
+    assert field_requests() == 1
+    _connect(admin, token="новый-секрет")
+    search()
+    assert field_requests() == 2

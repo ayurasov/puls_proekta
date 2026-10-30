@@ -21,6 +21,8 @@ DEFAULT_CATEGORIES = [
 
 PALETTE = ("blue", "teal", "green", "orange", "red", "purple", "amber", "pink", "slate", "indigo", "cyan", "lime")
 TOOLTIP_FIELDS = ("status", "dates", "progress", "dependency", "assignee", "lastChange")
+# Что переносится из Jira в строки плана само — при открытии плана и обновлении из Jira (ADR-0007)
+JIRA_AUTO_FIELDS = ("status", "dates", "progress", "name")
 
 DEFAULT_SETTINGS = {
     "range": {"start": "2026-04-01", "end": "2026-12-31"},
@@ -46,6 +48,7 @@ DEFAULT_SETTINGS = {
     },
     "categories": list(DEFAULT_CATEGORIES),
     "defaultCollapsed": [],
+    "jiraAuto": [],
 }
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
@@ -164,6 +167,8 @@ def normalize_settings(raw, base=None):
         result["categories"] = cats[:200]
     if isinstance(raw.get("defaultCollapsed"), list):
         result["defaultCollapsed"] = [k for k in raw["defaultCollapsed"] if isinstance(k, str) and _KEY.match(k)][:5000]
+    if isinstance(raw.get("jiraAuto"), list):
+        result["jiraAuto"] = [f for f in JIRA_AUTO_FIELDS if f in raw["jiraAuto"]]
     if isinstance(raw.get("legacy"), dict):
         result["legacy"] = raw["legacy"]
     return result
@@ -327,7 +332,12 @@ def item_to_api(item):
             "comment": item.comment,
             "lineStyle": item.line_style or "dashed",
             "lineColor": item.line_color or item.color,
+            # Веха может быть связана с задачей Jira: её срок — дата вехи (сверка и автоперенос)
+            "jiraUrl": item.jira_url,
         })
+    elif item.type == "group":
+        # Группа может быть эпиком Jira («Задачи из Jira» группами по эпикам)
+        data["jiraUrl"] = item.jira_url
     if item.deleted_at is not None:
         data["deleted"] = True
     return data

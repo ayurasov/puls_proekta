@@ -40,6 +40,7 @@ def user_full(user):
         "reportsToNone": bool(user.reports_to_none),
         "externalId": user.external_id,
         "orgSource": user.org_source,
+        "podeluId": user.podelu_id,
     }
 
 

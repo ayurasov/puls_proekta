@@ -1,4 +1,4 @@
-# Пульс Проекта — v0.3.1
+# Пульс Проекта — v0.4.0
 
 Корпоративная on-premise система планирования проектов на диаграммах Ганта: направления и проекты, несколько
 планов у проекта, задачи, вехи, группы, связи, пометки, исполнители, комментарии, история изменений и
@@ -42,9 +42,9 @@
 | Переход с 1.0.1 (runbook) | [MD](docs/runbooks/v0.2.0-migration-from-1.0.1.md) |
 | Ревизия 1.0.1: найденные дефекты и решения | [MD](docs/review/v0.2.0-revision-1.0.1.md) |
 | Нагрузочное тестирование | [MD](docs/performance/loadtest-v0.2.0.md) |
-| Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0008](docs/architecture/adr-0008-company-structure.md) |
-| Независимые проверки 0.2.1 и 0.3.0 | [MD](docs/review/v0.3.0-independent-checks.md) |
-| Release notes | [v0.3.1](docs/release-notes/v0.3.1.md), [v0.3.0](docs/release-notes/v0.3.0.md), [v0.2.1](docs/release-notes/v0.2.1.md), [v0.2.0](docs/release-notes/v0.2.0.md) |
+| Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0009](docs/architecture/adr-0009-podelu-integration.md) |
+| Независимые проверки | [0.4.0](docs/review/v0.4.0-independent-checks.md), [0.2.1 и 0.3.0](docs/review/v0.3.0-independent-checks.md) |
+| Release notes | [v0.4.0](docs/release-notes/v0.4.0.md), [v0.3.1](docs/release-notes/v0.3.1.md), [v0.3.0](docs/release-notes/v0.3.0.md), [v0.2.1](docs/release-notes/v0.2.1.md), [v0.2.0](docs/release-notes/v0.2.0.md) |
 
 Руководства пользователя и администратора открываются и в самом приложении — пункт «Руководство» в боковом
 меню (`/guide`, `/guide/admin`), значок «?» у инструментов ведёт к нужному разделу. Источник — те же
@@ -53,6 +53,12 @@
 DOCX и PDF собираются из Markdown командой `python3 tools/docs/build_manuals.py` (pandoc, python-docx, pypdf,
 Chromium из Playwright). Снимки экранов — `node tools/docs/screenshots.mjs` на демонстрационных данных
 вымышленной компании (`tools/demo/seed_demo.py`).
+
+## Что нового в 0.4.0
+
+Интеграция с «По Делу» (структура и сотрудники, ссылки), автоперенос из Jira и задачи группами по эпикам,
+четыре вида структуры компании, расширенные и сохраняемые фильтры, статистика с главной, новый вид настроек
+графика, исполнителей и карточки задачи ([release notes](docs/release-notes/v0.4.0.md)).
 
 ## Что нового в 0.3.1
 
@@ -240,7 +246,7 @@ docker compose start backend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.3.1   # копия pre-update → git → сборка → миграции → проверка готовности
+sudo sh deploy/update.sh v0.4.0   # копия pre-update → git → сборка → миграции → проверка готовности
 ```
 
 При ошибке скрипт печатает команды отката (прежняя версия и восстановление копии `pre-update`). Порядок и

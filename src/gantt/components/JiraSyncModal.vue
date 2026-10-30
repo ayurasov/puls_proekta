@@ -16,6 +16,18 @@ const FIELDS = [
   { key: 'date', label: 'Дата' }, { key: 'progress', label: 'Прогресс' },
 ]
 const enabled = reactive(Object.fromEntries(FIELDS.map((f) => [f.key, f.key !== 'name'])))
+// Автоперенос — настройка плана: выбранные поля переносятся сами при открытии плана и обновлении из Jira
+const AUTO = [
+  { key: 'status', label: 'Статус' }, { key: 'dates', label: 'Сроки' }, { key: 'progress', label: 'Прогресс' },
+  { key: 'name', label: 'Название' },
+]
+const auto = computed(() => new Set(jira.autoFields()))
+function toggleAuto(key) {
+  const next = new Set(auto.value)
+  if (next.has(key)) next.delete(key)
+  else next.add(key)
+  jira.setAutoFields(AUTO.map((f) => f.key).filter((k) => next.has(k)))
+}
 const excluded = ref(new Set())
 const refreshing = ref(false)
 
@@ -70,6 +82,19 @@ function open(key) {
         <AppIcon name="refresh" :size="13" /> {{ refreshing ? 'Обновляем…' : 'Обновить из Jira' }}
       </button>
     </div>
+    <section class="auto" :class="{ on: auto.size }" data-testid="jira-auto">
+      <div class="auto-text">
+        <strong>Переносить из Jira автоматически <HelpLink topic="jira-auto" /></strong>
+        <span class="muted small">Выбранное переносится в строки само — при открытии плана, обновлении из Jira и привязке
+          строки — одной правкой, которую можно отменить. Настройка плана: действует у всех, кто его правит.</span>
+      </div>
+      <div class="auto-fields">
+        <label v-for="f in AUTO" :key="f.key" class="chip-check" :class="{ checked: auto.has(f.key) }">
+          <input type="checkbox" :checked="auto.has(f.key)" :disabled="!editor.canEdit" :data-testid="`jira-auto-${f.key}`" @change="toggleAuto(f.key)" />
+          {{ f.label }}
+        </label>
+      </div>
+    </section>
     <p v-if="jira.state.error" class="error small"><AppIcon name="warning" :size="13" /> {{ jira.state.error }}</p>
     <p v-else-if="jira.state.fetchedAt" class="muted small">Данные Jira {{ formatRelative(jira.state.fetchedAt) }}</p>
 
@@ -117,6 +142,11 @@ function open(key) {
 .top p { margin: 0; line-height: 1.5; }
 .error { color: var(--color-danger); display: flex; align-items: center; gap: 6px; }
 .fields { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.auto { display: flex; align-items: center; gap: 12px; justify-content: space-between; flex-wrap: wrap; margin: 12px 0 8px; padding: 10px 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface-2); }
+.auto.on { border-color: #b3c7f5; background: #f3f6ff; }
+.auto-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; line-height: 1.45; }
+.auto-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-check.checked { border-color: #0052cc; color: #0052cc; background: #fff; }
 .chip-check { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 20px; font-size: 12.5px; cursor: pointer; }
 .table { max-height: 52vh; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 .row-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px 4px; border-top: 1px solid var(--color-border); background: var(--color-surface-2); position: sticky; top: 0; }

@@ -13,7 +13,7 @@ import { computed, reactive, toRaw } from 'vue'
 import { api, AuthRequiredError, NetworkError } from '../api/client'
 import { applyBatch, touchedKeys } from './domain/ops'
 import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree'
-import { hasActiveFilters, visibilityPredicate } from './domain/filters'
+import { hasActiveFilters, myAssigneeKeys, visibilityPredicate } from './domain/filters'
 import { computeDependencyShifts } from './domain/dependencies'
 import { createCalendar } from './domain/calendar'
 import { STEP, insertPosition } from './domain/positions'
@@ -105,6 +105,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     view: {
       scale: 'day', zoom: 1, gridWidth: 300, collapsed: new Set(), search: '',
       categories: new Set(), statuses: new Set(), assignees: new Set(),
+      dates: new Set(), period: { from: '', to: '' }, jira: new Set(), traits: new Set(), mine: false,
       selectedKey: null, panelKey: null, columns: { start: false, end: false, duration: false, assignee: false, progress: false, jira: false },
     },
     previewSnapshot: null,
@@ -131,12 +132,26 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     workdays: state.calendarDays.workdays,
     useRuCalendar: settings.value.display.useRuCalendar,
   }))
-  const filtersActive = computed(() => hasActiveFilters(state.view))
+  const assigneeList = computed(() => Object.values(source.value.assignees).sort((a, b) => a.position - b.position))
+  // Для фильтров: Jira плана и текущий сотрудник (задаёт рабочая область — setFilterEnv)
+  const filterEnv = reactive({ jira: null, user: null })
+  const filterContext = computed(() => {
+    const jira = filterEnv.jira
+    return {
+      today: state.today,
+      jira: jira?.state.connected ? {
+        linked: (item) => Boolean(jira.keyFor(item)),
+        differs: (item) => jira.differs(item),
+        category: (item) => jira.issueFor(item)?.statusCategory || null,
+      } : null,
+      mine: myAssigneeKeys(assigneeList.value, filterEnv.user),
+    }
+  })
+  const filtersActive = computed(() => hasActiveFilters(state.view, filterContext.value))
   const visibleRows = computed(() => {
-    const predicate = visibilityPredicate(index.value, state.view)
+    const predicate = visibilityPredicate(index.value, state.view, filterContext.value)
     return flattenTree(index.value, { collapsed: state.view.collapsed, expandAll: Boolean(predicate), isVisible: predicate })
   })
-  const assigneeList = computed(() => Object.values(source.value.assignees).sort((a, b) => a.position - b.position))
   const noteList = computed(() => Object.values(source.value.notes))
   const todayMarker = computed(() => {
     const t = settings.value.today || {}
@@ -489,7 +504,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   // ---------- правки ----------
-  function commit(ops, label, { undoable = true } = {}) {
+  function commit(ops, label, { undoable = true, keepRedo = false } = {}) {
     if (!ops.length) return null
     if (!canEdit.value) {
       ui.error(state.plan?.isArchived ? 'План в архиве — изменения недоступны' : 'У вас доступ только для просмотра')
@@ -501,7 +516,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       entry = { label, inverse }
       state.undo.push(entry)
       if (state.undo.length > 100) state.undo.shift()
-      state.redo = []
+      // Правка не по действию сотрудника (автоперенос из Jira) не отнимает у него «Повторить»
+      if (!keepRedo) state.redo = []
     }
     enqueue(ops, label, entry)
     return entry
@@ -539,7 +555,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
    * них зависят (по связи или как подзадачи). Несогласованные сроки в других местах плана не трогаются:
    * их выравнивает сотрудник кнопкой «Выровнять по связям».
    */
-  function cascadeOps(changes, { all = false } = {}) {
+  function cascadeOps(changes, { all = false, fixed = null } = {}) {
     if (!settings.value.display.autoShift) return []
     const hypothetical = itemList.value.map((item) => (changes.has(item.key) ? { ...item, ...changes.get(item.key) } : item))
     for (const [key, fields] of changes) {
@@ -557,15 +573,27 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         }
       }
     }
-    const shifts = computeDependencyShifts(hypothetical, { only })
-    return [...shifts].map(([key, dates]) => ({ op: 'item.update', key, fields: dates }))
+    const shifts = computeDependencyShifts(hypothetical, { only, fixed })
+    return [...shifts].map(([key, dates]) => {
+      const item = state.items[key]
+      const fields = { ...dates }
+      // Растянутая задача с окончанием «по длительности»: длительность — по новым срокам
+      if (fixed?.has(key) && item?.endMode === 'duration') {
+        fields.duration = item.durationType === 'working' ? calendar.value.countWorkingDays(dates.start, dates.end) : diffDays(dates.start, dates.end) + 1
+      }
+      return { op: 'item.update', key, fields }
+    })
   }
 
   function updateItem(key, fields, label = 'Изменение') {
     return updateItems([{ key, fields }], label)
   }
 
-  function updateItems(list, label = 'Изменение') {
+  /**
+   * keepFreeDates — даты строк из этой правки, которые связь не задаёт, не перезаписываются автосдвигом (перенос
+   * из Jira: срок последующей задачи — из Jira, начало — по связи). keepRedo — правка не по действию сотрудника.
+   */
+  function updateItems(list, label = 'Изменение', { keepFreeDates = false, keepRedo = false } = {}) {
     const ops = []
     const changes = new Map()
     for (const { key, fields } of list) {
@@ -588,7 +616,10 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       changes.set(key, { ...(changes.get(key) || {}), ...diff })
     }
     if (!ops.length) return
-    commit([...ops, ...cascadeOps(changes)], label)
+    const fixed = keepFreeDates
+      ? new Map([...changes].filter(([, f]) => 'start' in f || 'end' in f).map(([key, f]) => [key, { start: f.start, end: f.end }]))
+      : null
+    commit([...ops, ...cascadeOps(changes, { fixed })], label, { keepRedo })
   }
 
   function siblingsOf(parentKey) {
@@ -649,16 +680,32 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   /** Несколько строк в конец родителя одной правкой (отменяется целиком); возвращает их ключи. */
+  /**
+   * Несколько строк одной правкой: [{ type, data, children?, parentKey? }]. children — вложенные строки новой
+   * группы; parentKey у строки — положить её в другую (уже существующую) группу. Новые строки — в конец уровня.
+   */
   function createItems(list, { parentKey = null, label = 'Новые строки' } = {}) {
-    const siblings = siblingsOf(parentKey)
-    let position = siblings.length ? siblings[siblings.length - 1].position : 0
+    const last = new Map()
+    const nextPositionIn = (parent) => {
+      if (!last.has(parent)) {
+        const siblings = siblingsOf(parent)
+        last.set(parent, siblings.length ? siblings[siblings.length - 1].position : 0)
+      }
+      last.set(parent, last.get(parent) + STEP)
+      return last.get(parent)
+    }
     const keys = []
-    const ops = list.map(({ type, data }) => {
-      position += STEP
-      const key = randomKey('i')
-      keys.push(key)
-      return { op: 'item.create', item: newItem(type, data || {}, key, parentKey, position) }
-    })
+    const ops = []
+    const add = (entries, parent) => {
+      for (const entry of entries) {
+        const target = entry.parentKey !== undefined ? entry.parentKey : parent
+        const key = randomKey('i')
+        keys.push(key)
+        ops.push({ op: 'item.create', item: newItem(entry.type, entry.data || {}, key, target, nextPositionIn(target)) })
+        if (entry.children?.length) add(entry.children, key)
+      }
+    }
+    add(list, parentKey)
     return commit(ops, label) ? keys : []
   }
 
@@ -792,6 +839,11 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     commit([{ op: 'plan.update', fields }], label)
   }
 
+  function setFilterEnv({ jira = filterEnv.jira, user = filterEnv.user } = {}) {
+    filterEnv.jira = jira
+    filterEnv.user = user ? { id: user.id, name: user.name } : null
+  }
+
   // ---------- выбор и сворачивание ----------
   function select(key, { openPanel = false } = {}) {
     state.view.selectedKey = key
@@ -821,9 +873,9 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   return reactive({
-    state, settings, range, canEdit, itemList, index, calendar, visibleRows, filtersActive, assigneeList, noteList,
+    state, settings, range, canEdit, itemList, index, calendar, visibleRows, filtersActive, filterContext, assigneeList, noteList,
     todayMarker, pendingCount, categories, source,
-    load, start, stop, flushNow, poll, saveView,
+    load, start, stop, flushNow, poll, saveView, setFilterEnv,
     commit, undo, redo, updateItem, updateItems, createItem, createItems, duplicateItem, deleteItems, moveItem, setStatus,
     createNote, updateNote, deleteNote, createAssignee, updateAssignee, deleteAssignee, updatePlan,
     select, toggleCollapse, collapseAll, revealItem, cascadeOps,

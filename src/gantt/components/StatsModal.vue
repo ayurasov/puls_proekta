@@ -1,17 +1,58 @@
 <script setup>
-import { computed, inject } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
+import { api } from '../../api/client'
 import BaseModal from '../../components/common/BaseModal.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import { planStatistics } from '../domain/stats'
 import { STATUSES } from '../domain/colors'
-import { formatDay } from '../domain/dates'
+import { formatDay, todayLocal } from '../domain/dates'
 import { formatNumber } from '../../utils/format'
 
+/**
+ * Окно «Статистика» плана. Внутри проекта считает по открытому плану (редактор); с главной (planId) —
+ * по данным GET /plans/<id>/stats, не открывая план: строка из списков ведёт в план и открывает её карточку.
+ */
+const props = defineProps({
+  planId: { type: Number, default: null },
+})
 const emit = defineEmits(['close'])
-const editor = inject('gantt')
-const stats = computed(() => planStatistics(editor.itemList, editor.assigneeList, editor.state.today))
+const router = useRouter()
+const editor = props.planId ? null : inject('gantt')
+const remote = ref(null)
+const loadError = ref(null)
+
+const source = computed(() => {
+  if (editor) return { items: editor.itemList, assignees: editor.assigneeList, today: editor.state.today }
+  return remote.value && { items: remote.value.items, assignees: remote.value.assignees, today: todayLocal() }
+})
+const stats = computed(() => source.value && planStatistics(source.value.items, source.value.assignees, source.value.today))
+const title = computed(() => {
+  if (editor) return `Статистика: ${editor.state.plan?.title}`
+  return remote.value ? `Статистика: ${remote.value.plan.projectTitle}` : 'Статистика'
+})
 const pct = (n, total) => (total ? Math.round((n / total) * 100) : 0)
+
+async function load() {
+  loadError.value = null
+  try {
+    remote.value = await api.get(`/plans/${props.planId}/stats`)
+  } catch (err) {
+    loadError.value = err
+  }
+}
+onMounted(() => { if (!editor) load() })
+
+function planLink(key = null) {
+  const plan = remote.value?.plan
+  if (!plan) return '/'
+  return { name: 'project', params: { projectId: plan.projectId, planId: plan.id }, query: key ? { item: key } : {} }
+}
 function select(key) {
+  if (!editor) {
+    router.push(planLink(key))
+    return
+  }
   editor.revealItem(key)
   editor.select(key, { openPanel: true })
   emit('close')
@@ -19,74 +60,88 @@ function select(key) {
 </script>
 
 <template>
-  <BaseModal :title="`Статистика: ${editor.state.plan?.title}`" size="wide" @close="emit('close')">
+  <BaseModal :title="title" size="wide" @close="emit('close')">
     <template #header-actions><HelpLink topic="plan-stats" /></template>
-    <div class="cards">
-      <div class="card stat"><span class="muted small">Задач</span><strong>{{ stats.total }}</strong></div>
-      <div class="card stat"><span class="muted small">Средний прогресс</span><strong>{{ stats.avgProgress }}%</strong></div>
-      <div class="card stat"><span class="muted small">Просрочено сейчас</span><strong :class="{ bad: stats.overdueNow.length }">{{ stats.overdueNow.length }}</strong></div>
-      <div class="card stat"><span class="muted small">Групп / вех</span><strong>{{ stats.groups }} / {{ stats.milestones }}</strong></div>
-      <div class="card stat"><span class="muted small">Средняя длительность</span><strong>{{ formatNumber(stats.avgDuration) }} дн.</strong></div>
+    <div v-if="loadError" class="state">
+      <p>{{ loadError.status === 404 ? 'План не найден или доступ к нему закрыт.' : loadError.message || 'Не удалось загрузить статистику' }}</p>
+      <button v-if="loadError.status !== 404" class="btn btn-sm" type="button" @click="load">Повторить</button>
     </div>
-
-    <section>
-      <h3>Статусы</h3>
-      <div class="stack">
-        <span v-for="s in STATUSES" :key="s.key" :style="{ width: pct(stats.byStatus[s.key], stats.total) + '%', background: s.color }" :title="`${s.label}: ${stats.byStatus[s.key]}`" />
+    <div v-else-if="!stats" class="state muted">Загрузка статистики…</div>
+    <template v-else>
+      <p v-if="remote && remote.plan.title !== remote.plan.projectTitle" class="muted small plan-note">Основной план проекта: «{{ remote.plan.title }}»</p>
+      <div class="cards">
+        <div class="card stat"><span class="muted small">Задач</span><strong>{{ stats.total }}</strong></div>
+        <div class="card stat"><span class="muted small">Средний прогресс</span><strong>{{ stats.avgProgress }}%</strong></div>
+        <div class="card stat"><span class="muted small">Просрочено сейчас</span><strong :class="{ bad: stats.overdueNow.length }">{{ stats.overdueNow.length }}</strong></div>
+        <div class="card stat"><span class="muted small">Групп / вех</span><strong>{{ stats.groups }} / {{ stats.milestones }}</strong></div>
+        <div class="card stat"><span class="muted small">Средняя длительность</span><strong>{{ formatNumber(stats.avgDuration) }} дн.</strong></div>
       </div>
-      <div class="legend">
-        <span v-for="s in STATUSES" :key="s.key"><span class="status-dot" :style="{ background: s.color }" /> {{ s.label }}: <b>{{ stats.byStatus[s.key] }}</b> ({{ pct(stats.byStatus[s.key], stats.total) }}%)</span>
-      </div>
-    </section>
 
-    <div class="two">
       <section>
-        <h3>Сдвиги сроков</h3>
-        <dl class="kv">
-          <dt>Задач со сдвигом</dt><dd>{{ stats.withOffset }} из {{ stats.total }}</dd>
-          <dt>Среднее отклонение</dt><dd>{{ stats.avgOffset > 0 ? '+' : '' }}{{ formatNumber(stats.avgOffset) }} дн.</dd>
-          <dt>Максимальная просрочка</dt><dd>{{ stats.maxOverdue ? '+' + formatNumber(stats.maxOverdue) : 0 }} дн.</dd>
-          <dt>Средняя просрочка</dt><dd>{{ stats.avgOverdue ? '+' + formatNumber(stats.avgOverdue) : 0 }} дн.</dd>
-          <dt>Среднее опережение</dt><dd>{{ formatNumber(stats.avgEarly) }} дн.</dd>
-        </dl>
-        <template v-if="stats.topShifted.length">
-          <div class="muted small sub">Больше всего сдвинуты</div>
-          <button v-for="t in stats.topShifted" :key="t.key" class="link-row" type="button" @click="select(t.key)"><b class="bad">+{{ t.offset }} дн.</b> {{ t.name }}</button>
-        </template>
-      </section>
-      <section>
-        <h3>Просрочено на сегодня</h3>
-        <p v-if="!stats.overdueNow.length" class="muted small">Незавершённых задач с прошедшим сроком нет.</p>
-        <button v-for="t in stats.overdueNow.slice(0, 12)" :key="t.key" class="link-row" type="button" @click="select(t.key)">
-          <span class="muted">{{ formatDay(t.end) }}</span> {{ t.name }}
-        </button>
-        <template v-if="stats.upcomingMilestones.length">
-          <h3 class="sub">Ближайшие вехи</h3>
-          <button v-for="m in stats.upcomingMilestones" :key="m.key" class="link-row" type="button" @click="select(m.key)">◆ <span class="muted">{{ formatDay(m.date) }}</span> {{ m.name }}</button>
-        </template>
-      </section>
-    </div>
-
-    <div class="two">
-      <section v-if="stats.byAssignee.length">
-        <h3>По исполнителям</h3>
-        <div v-for="a in stats.byAssignee" :key="a.name" class="bar-row">
-          <div class="bar-head"><span>{{ a.name }}</span><span><b>{{ a.total }}</b> · завершено {{ a.done }}<span v-if="a.overdue" class="bad"> · просрочено {{ a.overdue }}</span></span></div>
-          <div class="bar"><span :style="{ width: pct(a.total, stats.total) + '%' }" /></div>
+        <h3>Статусы</h3>
+        <div class="stack">
+          <span v-for="s in STATUSES" :key="s.key" :style="{ width: pct(stats.byStatus[s.key], stats.total) + '%', background: s.color }" :title="`${s.label}: ${stats.byStatus[s.key]}`" />
+        </div>
+        <div class="legend">
+          <span v-for="s in STATUSES" :key="s.key"><span class="status-dot" :style="{ background: s.color }" /> {{ s.label }}: <b>{{ stats.byStatus[s.key] }}</b> ({{ pct(stats.byStatus[s.key], stats.total) }}%)</span>
         </div>
       </section>
-      <section v-if="stats.groupStats.length">
-        <h3>По группам</h3>
-        <div v-for="g in stats.groupStats" :key="g.key" class="bar-row">
-          <div class="bar-head"><button class="link" type="button" @click="select(g.key)">{{ g.name }}</button><span>{{ g.done }}/{{ g.count }} · {{ g.progress }}%</span></div>
-          <div class="bar green"><span :style="{ width: g.progress + '%' }" /></div>
-        </div>
-      </section>
-    </div>
+
+      <div class="two">
+        <section>
+          <h3>Сдвиги сроков</h3>
+          <dl class="kv">
+            <dt>Задач со сдвигом</dt><dd>{{ stats.withOffset }} из {{ stats.total }}</dd>
+            <dt>Среднее отклонение</dt><dd>{{ stats.avgOffset > 0 ? '+' : '' }}{{ formatNumber(stats.avgOffset) }} дн.</dd>
+            <dt>Максимальная просрочка</dt><dd>{{ stats.maxOverdue ? '+' + formatNumber(stats.maxOverdue) : 0 }} дн.</dd>
+            <dt>Средняя просрочка</dt><dd>{{ stats.avgOverdue ? '+' + formatNumber(stats.avgOverdue) : 0 }} дн.</dd>
+            <dt>Среднее опережение</dt><dd>{{ formatNumber(stats.avgEarly) }} дн.</dd>
+          </dl>
+          <template v-if="stats.topShifted.length">
+            <div class="muted small sub">Больше всего сдвинуты</div>
+            <button v-for="t in stats.topShifted" :key="t.key" class="link-row" type="button" @click="select(t.key)"><b class="bad">+{{ t.offset }} дн.</b> {{ t.name }}</button>
+          </template>
+        </section>
+        <section>
+          <h3>Просрочено на сегодня</h3>
+          <p v-if="!stats.overdueNow.length" class="muted small">Незавершённых задач с прошедшим сроком нет.</p>
+          <button v-for="t in stats.overdueNow.slice(0, 12)" :key="t.key" class="link-row" type="button" @click="select(t.key)">
+            <span class="muted">{{ formatDay(t.end) }}</span> {{ t.name }}
+          </button>
+          <template v-if="stats.upcomingMilestones.length">
+            <h3 class="sub">Ближайшие вехи</h3>
+            <button v-for="m in stats.upcomingMilestones" :key="m.key" class="link-row" type="button" @click="select(m.key)">◆ <span class="muted">{{ formatDay(m.date) }}</span> {{ m.name }}</button>
+          </template>
+        </section>
+      </div>
+
+      <div class="two">
+        <section v-if="stats.byAssignee.length">
+          <h3>По исполнителям</h3>
+          <div v-for="a in stats.byAssignee" :key="a.name" class="bar-row">
+            <div class="bar-head"><span>{{ a.name }}</span><span><b>{{ a.total }}</b> · завершено {{ a.done }}<span v-if="a.overdue" class="bad"> · просрочено {{ a.overdue }}</span></span></div>
+            <div class="bar"><span :style="{ width: pct(a.total, stats.total) + '%' }" /></div>
+          </div>
+        </section>
+        <section v-if="stats.groupStats.length">
+          <h3>По группам</h3>
+          <div v-for="g in stats.groupStats" :key="g.key" class="bar-row">
+            <div class="bar-head"><button class="link" type="button" @click="select(g.key)">{{ g.name }}</button><span>{{ g.done }}/{{ g.count }} · {{ g.progress }}%</span></div>
+            <div class="bar green"><span :style="{ width: g.progress + '%' }" /></div>
+          </div>
+        </section>
+      </div>
+    </template>
+    <template v-if="!editor" #footer>
+      <button class="btn btn-ghost" type="button" @click="emit('close')">Закрыть</button>
+      <router-link v-if="remote" :to="planLink()" class="btn btn-primary" data-testid="stats-open-project">Открыть проект</router-link>
+    </template>
   </BaseModal>
 </template>
 
 <style scoped>
+.state { padding: 24px 0; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.plan-note { margin: -4px 0 10px; }
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }
 .stat { padding: 12px; display: flex; flex-direction: column; justify-content: space-between; gap: 4px; box-shadow: none; }
 .stat > span { line-height: 1.3; }

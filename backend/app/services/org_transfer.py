@@ -29,6 +29,7 @@ from sqlalchemy import select
 from app import audit
 from app.extensions import db
 from app.models import Department, DepartmentHead, User
+from app.podelu_client import is_uuid
 from app.services import org
 from app.services.org import OrgSnapshot, norm
 from app.services.org_import import clean
@@ -200,10 +201,12 @@ class StructurePlan:
     settings_patch: dict = field(default_factory=dict)
     targets: dict = field(default_factory=dict)        # ключ файла → id существующего подразделения | None
     items: list = field(default_factory=list)
+    podelu: bool = False                               # структура из «По Делу» (ADR-0009)
+    removed: list = field(default_factory=list)        # связаны с «По Делу», но там их больше нет
 
     def as_dict(self):
         actions = [item["action"] for item in self.departments]
-        return {
+        data = {
             "summary": {
                 "departments": len(self.departments),
                 "create": actions.count("create"),
@@ -223,10 +226,20 @@ class StructurePlan:
             "notes": self.notes,
             "canApply": not self.errors,
         }
+        if self.podelu:
+            data["summary"]["removedInPodelu"] = len(self.removed)
+            data["removedInPodelu"] = self.removed
+        return data
 
 
-def plan_structure(bundle, *, apply_settings=True):
-    plan = StructurePlan()
+def plan_structure(bundle, *, apply_settings=True, podelu=False):
+    """План загрузки без записи в БД. Подразделения сопоставляются по пути от корня.
+
+    podelu=True — структура из подключённой «По Делу» (ADR-0009): подразделение, уже связанное с «По Делу»
+    (podelu_id = ключ файла), сопоставляется по этой связи — переименование и перенос в «По Делу» меняют его на
+    месте (тот же id, руководители, сотрудники, правила доступа). По пути сопоставляются только подразделения без
+    действующей связи (связи нет или подразделения с таким UUID в «По Делу» больше нет)."""
+    plan = StructurePlan(podelu=podelu)
     settings, departments, foreign = parse_bundle(bundle)
     plan.items = departments
     current = org.get_settings()
@@ -260,9 +273,16 @@ def plan_structure(bundle, *, apply_settings=True):
             max_depth = depth
     kind_values = {item["value"] for item in kinds}
 
-    # Подразделения: путь от корня → существующее или новое
+    # Подразделения: связь с «По Делу» (podelu=True), затем путь от корня → существующее или новое
     snap = OrgSnapshot()
     children = {(dep.parent_id, norm(dep.name)): dep for dep in snap.departments.values()}
+    keys = {item.key for item in departments}
+    linked = {}
+    if podelu:
+        for dep in sorted(snap.departments.values(), key=lambda d: d.id):
+            if dep.podelu_id and dep.podelu_id in keys:
+                linked.setdefault(dep.podelu_id, dep)
+    claimed = {dep.id for dep in linked.values()}
     paths, depth_of, matched_ids, siblings = {}, {}, set(), {}
     for item in departments:
         parent_target = plan.targets.get(item.parent) if item.parent else None
@@ -276,7 +296,11 @@ def plan_structure(bundle, *, apply_settings=True):
         if sibling in siblings:
             plan.errors.append(f"{label}: на этом уровне файла уже есть подразделение с таким названием")
         siblings[sibling] = item.key
-        row = children.get((parent_target, norm(item.name))) if (item.parent is None or parent_target) else None
+        row = linked.get(item.key)
+        if row is None:
+            row = children.get((parent_target, norm(item.name))) if (item.parent is None or parent_target) else None
+            if row is not None and (row.id in claimed or row.id in matched_ids):
+                row = None   # уже сопоставлено с другим подразделением «По Делу»
         if row is None:
             plan.targets[item.key] = None
             plan.departments.append({"key": item.key, "path": label, "action": "create", "changes": []})
@@ -284,19 +308,38 @@ def plan_structure(bundle, *, apply_settings=True):
         plan.targets[item.key] = row.id
         matched_ids.add(row.id)
         changes = []
+        # «По Делу» ведёт название: и у связанного, и у совпавшего по пути без учёта регистра и пробелов
+        if podelu and row.name != item.name:
+            changes.append({"field": "name", "old": row.name, "new": item.name})
+        if row.id in claimed:
+            # Перенос в «По Делу» — то же подразделение «Пульса»
+            # parent_target None при родителе из файла — родитель новый: перенос в него
+            moved = row.parent_id is not None if item.parent is None \
+                else parent_target is None or parent_target != row.parent_id
+            if moved:
+                changes.append({"field": "parent", "old": " / ".join(snap.path(row.parent_id)) or "верхний уровень",
+                                "new": " / ".join(path[:-1]) or "верхний уровень"})
         if (row.kind or "department") != item.kind:
             changes.append({"field": "kind", "old": row.kind, "new": item.kind})
         if (row.sort_order or 0) != item.sort_order:
             changes.append({"field": "sortOrder", "old": row.sort_order or 0, "new": item.sort_order})
         plan.departments.append({"key": item.key, "path": label, "action": "update" if changes else "unchanged",
                                  "changes": changes})
-    deepest = max(depth_of.values(), default=0)
-    existing_depth = max((snap.depth(dep_id) for dep_id in snap.departments), default=0)
-    if max(deepest, existing_depth) > max_depth:
-        plan.errors.append(f"Вложенность после загрузки — {max(deepest, existing_depth)} уровней, а допустимо "
-                           f"{max_depth}: увеличьте «Глубину вложенности»")
-    plan.missing_in_file = sorted((" / ".join(snap.path(dep_id)) for dep_id in snap.departments
-                                   if dep_id not in matched_ids), key=str.casefold)
+    if podelu:
+        _check_final_structure(plan, departments, snap, paths, max_depth)
+        unmatched = [snap.departments[dep_id] for dep_id in snap.departments if dep_id not in matched_ids]
+        plan.removed = sorted((" / ".join(snap.path(dep.id)) for dep in unmatched
+                               if dep.podelu_id and dep.podelu_id not in keys), key=str.casefold)
+        plan.missing_in_file = sorted((" / ".join(snap.path(dep.id)) for dep in unmatched
+                                       if not dep.podelu_id or dep.podelu_id in keys), key=str.casefold)
+    else:
+        deepest = max(depth_of.values(), default=0)
+        existing_depth = max((snap.depth(dep_id) for dep_id in snap.departments), default=0)
+        if max(deepest, existing_depth) > max_depth:
+            plan.errors.append(f"Вложенность после загрузки — {max(deepest, existing_depth)} уровней, а допустимо "
+                               f"{max_depth}: увеличьте «Глубину вложенности»")
+        plan.missing_in_file = sorted((" / ".join(snap.path(dep_id)) for dep_id in snap.departments
+                                       if dep_id not in matched_ids), key=str.casefold)
 
     # Руководители: по email (если его нет — по логину); кого нет в системе — назначит загрузка сотрудников
     by_email, by_login = {}, {}
@@ -323,24 +366,82 @@ def plan_structure(bundle, *, apply_settings=True):
     return plan
 
 
-def apply_structure(bundle, *, apply_settings=True):
-    """(план, применён ли). При ошибках ничего не меняется."""
-    plan = plan_structure(bundle, apply_settings=apply_settings)
+def _check_final_structure(plan, departments, snap, paths, max_depth):
+    """Структура после переименований и переносов из «По Делу»: названия соседних не повторяются, глубина — в
+    пределах настройки. Циклов не бывает: родитель подразделения из файла — тоже подразделение из файла, а файл —
+    дерево (и всё равно проверяется перед сохранением, org.assert_consistent)."""
+    parent_of = {dep_id: dep.parent_id for dep_id, dep in snap.departments.items()}
+    name_of = {dep_id: dep.name for dep_id, dep in snap.departments.items()}
+    labels = {}
+    for item in departments:
+        ref = plan.targets.get(item.key) or f"new:{item.key}"
+        parent_of[ref] = (plan.targets.get(item.parent) or f"new:{item.parent}") if item.parent else None
+        name_of[ref] = item.name
+        labels[ref] = " / ".join(paths[item.key])
+    groups = {}
+    for ref, parent in parent_of.items():
+        groups.setdefault((parent, norm(name_of[ref])), []).append(ref)
+    for refs in groups.values():
+        others = [ref for ref in refs if ref not in labels]
+        if len(refs) > 1 and others:
+            for ref in refs:
+                if ref in labels:
+                    plan.errors.append(f"{labels[ref]}: на этом уровне в «Пульсе» уже есть подразделение "
+                                       f"«{name_of[others[0]]}», которого нет в «По Делу», — переименуйте или "
+                                       "перенесите его")
+
+    def depth(ref):
+        level, seen = 0, set()
+        while ref is not None and ref not in seen:
+            seen.add(ref)
+            level += 1
+            ref = parent_of.get(ref)
+        return level
+
+    deepest = max((depth(ref) for ref in parent_of), default=0)
+    if deepest > max_depth:
+        plan.errors.append(f"Вложенность после загрузки — {deepest} уровней, а допустимо {max_depth}: увеличьте "
+                           "«Глубину вложенности»")
+
+
+def apply_structure(bundle, *, apply_settings=True, podelu=False):
+    """(план, применён ли). При ошибках ничего не меняется.
+
+    podelu=True — структура получена из подключённой «По Делу» (ADR-0009): ключ подразделения в файле — его UUID
+    в «По Делу». Он записывается в podelu_id сопоставленного подразделения, а новое подразделение получает его же
+    как id, если такой id в «Пульсе» свободен. Связанное подразделение переименовывается и переносится на месте."""
+    plan = plan_structure(bundle, apply_settings=apply_settings, podelu=podelu)
     if plan.errors:
         return plan.as_dict(), False
-    ids = {}
+    changes = {entry["key"]: {c["field"]: c for c in entry["changes"]} for entry in plan.departments}
+    ids, used = {}, set()
     for item in plan.items:
         target = plan.targets.get(item.key)
         if target is None:
-            row = Department(id=org.new_id(), name=item.name, parent_id=ids.get(item.parent) if item.parent else None,
-                             kind=item.kind, sort_order=item.sort_order, org_source="transfer",
+            dep_id = org.new_id()
+            if podelu and is_uuid(item.key) and item.key not in used and db.session.get(Department, item.key) is None:
+                dep_id = item.key
+            used.add(dep_id)
+            row = Department(id=dep_id, name=item.name, parent_id=ids.get(item.parent) if item.parent else None,
+                             kind=item.kind, sort_order=item.sort_order, org_source="podelu" if podelu else "transfer",
                              external_id=item.external_id)
             db.session.add(row)
+            if podelu:
+                db.session.flush()   # подразделение, перенесённое в новое, ссылается на него в том же сохранении
             ids[item.key] = row.id
-            audit.record("Структура", "create", item.name, "", "", "загрузка структуры из файла")
+            audit.record("Структура", "create", item.name, "", "",
+                         "загрузка структуры из «По Делу»" if podelu else "загрузка структуры из файла")
             continue
         ids[item.key] = target
+        used.add(target)
         row = db.session.get(Department, target)
+        moved = changes.get(item.key, {})
+        if "name" in moved:
+            audit.record("Структура", "update", row.name, "name", row.name, item.name)
+            row.name = item.name
+        if "parent" in moved:
+            audit.record("Структура", "update", item.name, "parent", moved["parent"]["old"], moved["parent"]["new"])
+            row.parent_id = ids.get(item.parent) if item.parent else None
         if (row.kind or "department") != item.kind:
             audit.record("Структура", "update", row.name, "kind", row.kind, item.kind)
             row.kind = item.kind
@@ -349,6 +450,8 @@ def apply_structure(bundle, *, apply_settings=True):
         if item.external_id and not row.external_id:
             row.external_id = item.external_id
     db.session.flush()
+    if podelu:
+        link_departments({ids[item.key]: item.key for item in plan.items if is_uuid(item.key)})
     primaries = set(db.session.execute(
         select(DepartmentHead.department_id).where(DepartmentHead.is_primary.is_(True))).scalars())
     names = {user.id: user.name for user in db.session.execute(select(User)).scalars()}
@@ -368,3 +471,21 @@ def apply_structure(bundle, *, apply_settings=True):
                      f"из файла: типов {len(settings['unitKinds'])}, уровней {settings['maxDepth']}")
     db.session.flush()
     return plan.as_dict(), True
+
+
+def link_departments(links):
+    """{id подразделения «Пульса»: UUID в «По Делу»} → podelu_id. Ссылка, которая была у другого подразделения
+    (например, переименованного в «Пульсе»), переходит к сопоставленному сейчас. Возвращает число новых ссылок."""
+    wanted = set(links.values())
+    for row in db.session.execute(select(Department).where(Department.podelu_id.is_not(None))).scalars():
+        if row.podelu_id in wanted and links.get(row.id) != row.podelu_id:
+            row.podelu_id = None
+    db.session.flush()
+    changed = 0
+    for dep_id, key in links.items():
+        row = db.session.get(Department, dep_id)
+        if row is not None and row.podelu_id != key:
+            row.podelu_id = key
+            changed += 1
+    db.session.flush()
+    return changed

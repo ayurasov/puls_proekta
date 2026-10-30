@@ -184,3 +184,66 @@ describe('сдвиг завершённой задачи', () => {
     expect(editor.state.items.a.offset).toBe(3)
   })
 })
+
+describe('0.4.0: несколько строк одной правкой', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
+  it('новая группа с задачами внутри и строка в существующую группу — одна правка', async () => {
+    const editor = await openEditor([{ ...task('g', 'Эпик'), type: 'group' }, { ...task('t', 'Старая'), parentKey: 'g' }])
+    const keys = editor.createItems([
+      { type: 'group', data: { name: 'Новый эпик' }, children: [{ type: 'task', data: { name: 'A' } }, { type: 'task', data: { name: 'B' } }] },
+      { type: 'task', data: { name: 'C' }, parentKey: 'g' },
+      { type: 'task', data: { name: 'D' } },
+    ], { label: 'Задачи из Jira (4)' })
+    expect(keys).toHaveLength(5)
+    const [group, a, b, c, d] = keys.map((k) => editor.state.items[k])
+    expect([a.parentKey, b.parentKey]).toEqual([group.key, group.key])
+    expect(a.position).toBeLessThan(b.position)
+    expect(c.parentKey).toBe('g')
+    expect(c.position).toBeGreaterThan(editor.state.items.t.position)
+    expect(group.parentKey).toBeNull()
+    expect(d.parentKey).toBeNull()
+    editor.undo()
+    expect(keys.every((k) => !editor.state.items[k])).toBe(true)
+  })
+})
+
+describe('0.4.0: перенос из Jira в цепочке связей', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
+  const chain = () => [
+    { ...task('a', 'A'), start: '2026-11-02', end: '2026-11-06' },
+    { ...task('b', 'B'), start: '2026-11-09', end: '2026-11-13', dependencyKey: 'a', dependencyType: 'FS' },
+    { ...task('c', 'C'), start: '2026-11-16', end: '2026-11-20', dependencyKey: 'b', dependencyType: 'FS' },
+  ]
+
+  it('срок последующей задачи из Jira не перезаписывается сдвигом за предшественником', async () => {
+    const editor = await openEditor(chain())
+    editor.updateItems([
+      { key: 'a', fields: { start: '2026-11-02', end: '2026-11-10' } },
+      { key: 'b', fields: { start: '2026-11-09', end: '2026-11-20' } },
+    ], 'Из Jira', { keepFreeDates: true })
+    expect([editor.state.items.b.start, editor.state.items.b.end]).toEqual(['2026-11-11', '2026-11-20'])
+    // Следующая по цепочке — сдвигается от нового окончания B, длительность сохраняется
+    expect([editor.state.items.c.start, editor.state.items.c.end]).toEqual(['2026-11-21', '2026-11-25'])
+  })
+
+  it('обычная правка сдвигает последующую задачу целиком, как раньше', async () => {
+    const editor = await openEditor(chain())
+    editor.updateItems([{ key: 'a', fields: { end: '2026-11-10' } }, { key: 'b', fields: { end: '2026-11-20' } }], 'Правка')
+    expect([editor.state.items.b.start, editor.state.items.b.end]).toEqual(['2026-11-11', '2026-11-22'])
+  })
+
+  it('автоперенос не отнимает «Повторить»', async () => {
+    const editor = await openEditor(chain())
+    editor.updateItem('c', { name: 'C2' }, 'Переименование')
+    editor.undo()
+    expect(editor.state.redo).toHaveLength(1)
+    editor.updateItems([{ key: 'a', fields: { progress: 30 } }], 'Из Jira автоматически (1)', { keepRedo: true })
+    expect(editor.state.redo).toHaveLength(1)
+    editor.updateItems([{ key: 'a', fields: { progress: 40 } }], 'Правка')
+    expect(editor.state.redo).toHaveLength(0)
+  })
+})

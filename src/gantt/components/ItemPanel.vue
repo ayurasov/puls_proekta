@@ -2,17 +2,20 @@
 import { computed, inject, reactive, ref, watch } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
+import SegmentedControl from '../../components/common/SegmentedControl.vue'
+import UserAvatar from '../../components/common/UserAvatar.vue'
 import ColorPicker from './ColorPicker.vue'
 import ItemComments from './ItemComments.vue'
 import ItemHistory from './ItemHistory.vue'
 import JiraIssueCard from './JiraIssueCard.vue'
 import { issueKeyFromUrl, jiraLinkFromInput } from '../jira'
-import { STATUSES, DEPENDENCY_TYPES } from '../domain/colors'
-import { addDays, diffDays, formatDay } from '../domain/dates'
+import { STATUSES, STATUS_BY_KEY, DEPENDENCY_TYPES, resolveColor } from '../domain/colors'
+import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { resolveEnd } from '../domain/calendar'
 import { dependencyConstraints, dependentKeys } from '../domain/dependencies'
 import { descendantKeys, groupSpan } from '../domain/tree'
 import { useDialogs } from '../../composables/useDialogs'
+import { useDirectoryStore } from '../../stores/directory'
 import { useUiStore } from '../../stores/ui'
 import { formatDateTime } from '../../utils/format'
 
@@ -23,6 +26,7 @@ const actions = inject('ganttActions')
 const jira = inject('jira')
 const { prompt } = useDialogs()
 const ui = useUiStore()
+const directory = useDirectoryStore()
 const tab = ref('main')
 const readonly = computed(() => !editor.canEdit)
 const item = computed(() => props.item)
@@ -66,6 +70,36 @@ function commitText(field) {
 }
 
 const typeLabel = computed(() => ({ task: 'Задача', milestone: 'Веха', group: 'Группа' })[item.value.type])
+const status = computed(() => STATUS_BY_KEY[item.value.status || 'new'] || STATUS_BY_KEY.new)
+const STATUS_OPTIONS = STATUSES.map((s) => ({ value: s.key, label: s.label, color: s.color, text: s.text }))
+const tabs = computed(() => [
+  { value: 'main', label: 'Основное' },
+  ...(item.value.type === 'task' ? [{ value: 'comments', label: 'Комментарии', badge: item.value.commentCount || null }] : []),
+  { value: 'history', label: 'История' },
+])
+const END_MODES = [
+  { value: 'date', label: 'По дате', title: 'Окончание — датой' },
+  { value: 'duration', label: 'По длительности', title: 'Окончание считается от начала по числу дней' },
+]
+const DURATION_TYPES = [
+  { value: 'calendar', label: 'Календарные' },
+  { value: 'working', label: 'Рабочие', title: 'Рабочие дни по производственному календарю' },
+]
+const LINE_STYLES = [
+  { value: 'dashed', label: 'Пунктирная', sample: 'dashed' },
+  { value: 'solid', label: 'Сплошная', sample: 'solid' },
+  { value: 'dotted', label: 'Точечная', sample: 'dotted' },
+]
+const parentName = computed(() => (item.value.parentKey ? editor.index.byKey.get(item.value.parentKey)?.name : ''))
+// Исполнитель — аватаром на его цвете (фото, если связан с сотрудником системы)
+const assignee = computed(() => (item.value.assigneeKey ? editor.assigneeList.find((a) => a.key === item.value.assigneeKey) : null))
+const assigneeUser = computed(() => {
+  const a = assignee.value
+  return a ? (a.userId && directory.byId[a.userId]) || { name: a.name } : null
+})
+// Ползунок прогресса: заливка следует за ним при перетаскивании, сохраняется — как раньше, по отпусканию
+const progressDraft = ref(null)
+const progressShown = computed(() => (progressDraft.value !== null ? Number(progressDraft.value) : item.value.progress || 0))
 const byKey = computed(() => editor.index.byKey)
 const descendants = computed(() => descendantKeys(editor.index, item.value.key))
 const parentOptions = computed(() => editor.itemList
@@ -116,11 +150,16 @@ function setEndMode(mode) {
   if (mode === 'duration') fields.duration = it.durationType === 'working' ? workingDays.value : duration.value
   save(fields, 'Режим завершения')
 }
+/** Тип дней раньше выбирался из списка — сохраняется только при смене, как у списка. */
+function setDurationType(type) {
+  if (type !== (item.value.durationType || 'calendar')) setDuration(item.value.duration || duration.value, type)
+}
 function setDuration(value, type = item.value.durationType) {
   const n = Math.max(1, Math.min(5000, parseInt(value, 10) || 1))
   save({ duration: n, durationType: type, end: resolveEnd(editor.calendar, item.value.start, 'duration', item.value.end, n, type) }, 'Длительность')
 }
 function setProgress(value) {
+  progressDraft.value = null
   const n = Math.max(0, Math.min(100, parseInt(value, 10) || 0))
   save({ progress: n }, 'Прогресс')
 }
@@ -134,6 +173,9 @@ function setCompletedDate(value) {
 }
 function setStatus(status) {
   actions.setStatus(item.value.key, status)
+}
+function setLineStyle(style) {
+  if (style !== (item.value.lineStyle || 'dashed')) save({ lineStyle: style }, 'Стиль линии')
 }
 function setParent(key) {
   editor.moveItem(item.value.key, { parentKey: key || null })
@@ -165,12 +207,14 @@ function duplicate() {
 }
 </script>
 
+
 <template>
   <aside class="panel" aria-label="Карточка строки">
     <header class="panel-head">
       <span class="type-badge" :class="`t-${item.type}`">
         <AppIcon :name="item.type === 'group' ? 'folder' : item.type === 'milestone' ? 'diamond' : 'gantt'" :size="13" /> {{ typeLabel }}
       </span>
+      <span v-if="item.type === 'task'" class="status-pill" :style="{ '--c': status.color, '--t': status.text }"><span class="status-pill-dot" />{{ status.label }}</span>
       <span class="spacer" />
       <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm" type="button" title="Дублировать (Ctrl+D)" @click="duplicate"><AppIcon name="copy" :size="15" /></button>
       <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm btn-text-danger" type="button" title="Удалить (Delete)" @click="actions.deleteRows([item.key])"><AppIcon name="trash" :size="15" /></button>
@@ -184,207 +228,238 @@ function duplicate() {
         data-testid="panel-name"
         @focus="focused = 'name'" @blur="commitText('name')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('name', $event)"
       />
+      <div class="title-meta">
+        <span v-if="item.type === 'task'"><AppIcon name="calendar" :size="12" /> {{ formatDayNoYear(item.start) }} — {{ formatDay(item.end) }} · {{ duration }} дн.</span>
+        <span v-else-if="item.type === 'milestone'"><AppIcon name="calendar" :size="12" /> {{ formatDay(item.date) }}</span>
+        <span v-else-if="span"><AppIcon name="calendar" :size="12" /> {{ formatDayNoYear(span.start) }} — {{ formatDay(span.end) }}</span>
+        <span v-if="parentName" class="crumb" :title="`Входит в «${parentName}»`"><AppIcon name="folder" :size="12" /> <span class="ellipsis">{{ parentName }}</span></span>
+      </div>
     </div>
 
-    <div class="tabs segmented">
-      <button type="button" :class="{ 'is-active': tab === 'main' }" @click="tab = 'main'">Основное</button>
-      <button v-if="item.type === 'task'" type="button" :class="{ 'is-active': tab === 'comments' }" @click="tab = 'comments'">Комментарии<span v-if="item.commentCount" class="tab-count">{{ item.commentCount }}</span></button>
-      <button type="button" :class="{ 'is-active': tab === 'history' }" @click="tab = 'history'">История</button>
+    <div class="tabs-wrap">
+      <SegmentedControl class="tabs" kind="tabs" block fit="content" aria-label="Разделы карточки" :model-value="tab" :options="tabs" @update:model-value="(value) => (tab = value)" />
     </div>
 
     <div v-if="tab === 'main'" class="panel-body scroll-thin">
       <!-- Задача -->
       <template v-if="item.type === 'task'">
-        <div class="field">
-          <span class="field-label">Статус</span>
-          <div class="segmented statuses" role="radiogroup" aria-label="Статус">
-            <button v-for="s in STATUSES" :key="s.key" type="button" class="status-option" :class="{ 'is-active': (item.status || 'new') === s.key }"
-                    role="radio" :aria-checked="(item.status || 'new') === s.key" :style="{ '--c': s.color }" :disabled="readonly" @click="setStatus(s.key)">
-              <span class="status-dot" :style="{ background: s.color }" /> {{ s.label }}
-            </button>
-          </div>
-        </div>
-        <label v-if="item.status === 'done'" class="field">
-          <span class="field-label">Дата завершения</span>
-          <input class="input" type="date" :value="item.completedDate || item.end" :min="item.start" :disabled="readonly" @change="setCompletedDate($event.target.value)" />
-          <span class="field-hint">Сдвиг считается от планового окончания: {{ item.offset > 0 ? '+' : '' }}{{ item.offset || 0 }} дн.</span>
-        </label>
+        <section class="sec">
+          <div class="sec-head"><span class="sec-title">Статус</span></div>
+          <SegmentedControl class="statuses" :columns="2" aria-label="Статус" :model-value="item.status || 'new'" :options="STATUS_OPTIONS" :disabled="readonly" @update:model-value="setStatus" />
+          <label v-if="item.status === 'done'" class="field done-card">
+            <span class="field-label"><AppIcon name="calendarCheck" :size="13" /> Дата завершения</span>
+            <input class="input" type="date" :value="item.completedDate || item.end" :min="item.start" :disabled="readonly" @change="setCompletedDate($event.target.value)" />
+            <span class="field-hint">Сдвиг считается от планового окончания: {{ item.offset > 0 ? '+' : '' }}{{ item.offset || 0 }} дн.</span>
+          </label>
+        </section>
         <JiraIssueCard v-if="jira.keyFor(item)" :item="item" />
 
-        <div class="field">
-          <div class="field-head">
-            <span class="field-label">Сроки</span>
-            <div class="segmented mini" role="group" aria-label="Окончание задаётся">
-              <button type="button" :class="{ 'is-active': item.endMode !== 'duration' }" :disabled="readonly" title="Окончание — датой" @click="setEndMode('date')">По дате</button>
-              <button type="button" :class="{ 'is-active': item.endMode === 'duration' }" :disabled="readonly" title="Окончание считается от начала по числу дней" @click="setEndMode('duration')">По длительности</button>
+        <section class="sec">
+          <div class="sec-head">
+            <span class="sec-title">Сроки</span>
+            <SegmentedControl size="sm" aria-label="Окончание задаётся" :model-value="item.endMode === 'duration' ? 'duration' : 'date'" :options="END_MODES" :disabled="readonly" @update:model-value="setEndMode" />
+          </div>
+          <div class="sec-card">
+            <div class="form-grid">
+              <label class="field">
+                <span class="field-label">Начало</span>
+                <input class="input" type="date" :value="item.start" :min="constraints?.minStart || undefined" :max="constraints?.maxStart || undefined" :disabled="readonly" data-testid="panel-start" @change="setStart($event.target.value)" />
+              </label>
+              <label v-if="item.endMode !== 'duration'" class="field">
+                <span class="field-label">Окончание</span>
+                <input class="input" type="date" :value="item.end" :min="item.start" :max="constraints?.maxEnd || undefined" :disabled="readonly" data-testid="panel-end" @change="setEnd($event.target.value)" />
+              </label>
+              <label v-else class="field">
+                <span class="field-label">Дней</span>
+                <input class="input" type="number" min="1" max="5000" :value="item.duration || duration" :disabled="readonly" @change="setDuration($event.target.value)" />
+              </label>
+            </div>
+            <div v-if="item.endMode === 'duration'" class="field">
+              <span class="field-label">Тип дней</span>
+              <SegmentedControl block size="sm" aria-label="Тип дней" :model-value="item.durationType || 'calendar'" :options="DURATION_TYPES" :disabled="readonly" @update:model-value="setDurationType" />
+            </div>
+            <div class="facts">
+              <span v-if="item.endMode === 'duration'" class="fact is-strong"><AppIcon name="flag" :size="12" /> Окончание: {{ formatDay(item.end) }}</span>
+              <span class="fact">{{ duration }} кал. дн.</span>
+              <span class="fact">{{ workingDays }} раб. дн.</span>
+            </div>
+            <ul v-if="constraints?.hints.length" class="hints">
+              <li v-for="(hint, i) in constraints.hints" :key="i"><AppIcon name="link" :size="12" /> {{ hintText(hint) }}</li>
+            </ul>
+          </div>
+        </section>
+
+        <section class="sec">
+          <div class="sec-head"><span class="sec-title">Ход работ</span></div>
+          <div class="sec-card">
+            <label class="field">
+              <span class="field-label">Прогресс</span>
+              <div class="progress-input">
+                <input
+                  class="range" type="range" min="0" max="100" step="5" :value="item.progress || 0" :disabled="readonly" :style="{ '--p': progressShown + '%' }"
+                  @input="progressDraft = $event.target.value" @change="setProgress($event.target.value)"
+                />
+                <span class="number-suffix">
+                  <input class="input input-sm" type="number" min="0" max="100" :value="progressShown" :disabled="readonly" aria-label="Прогресс в процентах" @change="setProgress($event.target.value)" />
+                  <span class="suffix" aria-hidden="true">%</span>
+                </span>
+              </div>
+            </label>
+            <label class="field">
+              <span class="field-label">Временной сдвиг, дн.</span>
+              <div class="offset-input">
+                <input class="input" type="number" :value="item.offset || 0" :disabled="readonly" @change="setOffset($event.target.value)" @keydown.esc.stop="$event.target.value = item.offset || 0; $event.target.blur()" />
+                <span v-if="item.offset" class="offset-pill" :class="item.offset > 0 ? 'is-late' : 'is-early'">{{ item.offset > 0 ? 'просрочка' : 'ранняя сдача' }} · фактически до {{ formatDay(addDays(item.end, item.offset)) }}</span>
+                <span v-else class="field-hint">+ просрочка, − ранняя сдача</span>
+              </div>
+            </label>
+          </div>
+        </section>
+
+        <section class="sec">
+          <div class="sec-head"><span class="sec-title">Исполнитель и связь</span></div>
+          <div class="sec-card">
+            <label class="field">
+              <span class="field-label">Исполнитель</span>
+              <span class="with-avatar">
+                <UserAvatar v-if="assignee" class="avatar-adorn" :user="assigneeUser" :color="resolveColor(assignee.color).color" :size="22" />
+                <span v-else class="avatar-adorn avatar-empty"><AppIcon name="user" :size="13" /></span>
+                <select class="select" :value="item.assigneeKey || ''" :disabled="readonly" @change="save({ assigneeKey: $event.target.value || null }, 'Исполнитель')">
+                  <option value="">— не назначен —</option>
+                  <option v-for="a in editor.assigneeList" :key="a.key" :value="a.key">{{ a.name }}{{ a.role ? ' · ' + a.role : '' }}</option>
+                </select>
+              </span>
+            </label>
+            <div class="field">
+              <span class="field-label">Предшественник</span>
+              <input v-if="!readonly && dependencyOptions.length > LONG_LIST" v-model="dependencyQuery" class="input input-sm list-search" type="search" placeholder="Найти задачу или веху…" aria-label="Поиск предшественника" />
+              <select class="select" :value="item.dependencyKey || ''" :disabled="readonly" aria-label="Предшественник" @change="save({ dependencyKey: $event.target.value || null }, 'Предшественник'); dependencyQuery = ''">
+                <option value="">— нет —</option>
+                <option v-for="o in shownDependencyOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
+              </select>
+              <span v-if="dependencyQuery && shownDependencyOptions.length <= (item.dependencyKey ? 1 : 0)" class="field-hint">Ничего не найдено</span>
+            </div>
+            <div v-if="item.dependencyKey" class="form-grid">
+              <label class="field">
+                <span class="field-label">Тип связи</span>
+                <select class="select" :value="item.dependencyType || 'FS'" :disabled="readonly" @change="save({ dependencyType: $event.target.value }, 'Тип связи')">
+                  <option v-for="t in DEPENDENCY_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+                </select>
+              </label>
+              <label class="field">
+                <span class="field-label">Лаг, дн.</span>
+                <input class="input" type="number" :value="item.dependencyLag || 0" :disabled="readonly" @change="save({ dependencyLag: parseInt($event.target.value, 10) || 0 }, 'Лаг связи')" />
+                <span class="field-hint">+ задержка, − опережение</span>
+              </label>
             </div>
           </div>
-          <div class="form-grid">
-            <label class="field">
-              <span class="field-sublabel">Начало</span>
-              <input class="input" type="date" :value="item.start" :min="constraints?.minStart || undefined" :max="constraints?.maxStart || undefined" :disabled="readonly" data-testid="panel-start" @change="setStart($event.target.value)" />
-            </label>
-            <label v-if="item.endMode !== 'duration'" class="field">
-              <span class="field-sublabel">Окончание</span>
-              <input class="input" type="date" :value="item.end" :min="item.start" :max="constraints?.maxEnd || undefined" :disabled="readonly" data-testid="panel-end" @change="setEnd($event.target.value)" />
-            </label>
-            <label v-else class="field">
-              <span class="field-sublabel">Дней</span>
-              <input class="input" type="number" min="1" max="5000" :value="item.duration || duration" :disabled="readonly" @change="setDuration($event.target.value)" />
-            </label>
-          </div>
-          <label v-if="item.endMode === 'duration'" class="field">
-            <span class="field-sublabel">Тип дней</span>
-            <select class="select" :value="item.durationType || 'calendar'" :disabled="readonly" @change="setDuration(item.duration || duration, $event.target.value)">
-              <option value="calendar">Календарные</option>
-              <option value="working">Рабочие (производственный календарь)</option>
-            </select>
-          </label>
-          <span class="field-hint">
-            <template v-if="item.endMode === 'duration'">Окончание: {{ formatDay(item.end) }} · </template>
-            {{ duration }} кал. дн. · {{ workingDays }} раб. дн.
-          </span>
-        </div>
-        <ul v-if="constraints?.hints.length" class="hints">
-          <li v-for="(hint, i) in constraints.hints" :key="i"><AppIcon name="link" :size="12" /> {{ hintText(hint) }}</li>
-        </ul>
-
-        <label class="field">
-          <span class="field-label">Прогресс</span>
-          <div class="progress-input">
-            <input type="range" min="0" max="100" step="5" :value="item.progress || 0" :disabled="readonly" @change="setProgress($event.target.value)" />
-            <input class="input input-sm" type="number" min="0" max="100" :value="item.progress || 0" :disabled="readonly" @change="setProgress($event.target.value)" />
-            <span class="muted small">%</span>
-          </div>
-        </label>
-        <label class="field">
-          <span class="field-label">Временной сдвиг, дн.</span>
-          <div class="offset-input">
-            <input class="input" type="number" :value="item.offset || 0" :disabled="readonly" @change="setOffset($event.target.value)" @keydown.esc.stop="$event.target.value = item.offset || 0; $event.target.blur()" />
-            <span class="field-hint">{{ item.offset ? `${item.offset > 0 ? 'просрочка' : 'ранняя сдача'} · фактически до ${formatDay(addDays(item.end, item.offset))}` : '+ просрочка, − ранняя сдача' }}</span>
-          </div>
-        </label>
-
-        <label class="field">
-          <span class="field-label">Исполнитель</span>
-          <select class="select" :value="item.assigneeKey || ''" :disabled="readonly" @change="save({ assigneeKey: $event.target.value || null }, 'Исполнитель')">
-            <option value="">— не назначен —</option>
-            <option v-for="a in editor.assigneeList" :key="a.key" :value="a.key">{{ a.name }}{{ a.role ? ' · ' + a.role : '' }}</option>
-          </select>
-        </label>
-
-        <div class="section-label">Связь</div>
-        <div class="field">
-          <span class="field-label">Предшественник</span>
-          <input v-if="!readonly && dependencyOptions.length > LONG_LIST" v-model="dependencyQuery" class="input input-sm list-search" type="search" placeholder="Найти задачу или веху…" aria-label="Поиск предшественника" />
-          <select class="select" :value="item.dependencyKey || ''" :disabled="readonly" aria-label="Предшественник" @change="save({ dependencyKey: $event.target.value || null }, 'Предшественник'); dependencyQuery = ''">
-            <option value="">— нет —</option>
-            <option v-for="o in shownDependencyOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
-          </select>
-          <span v-if="dependencyQuery && shownDependencyOptions.length <= (item.dependencyKey ? 1 : 0)" class="field-hint">Ничего не найдено</span>
-        </div>
-        <div v-if="item.dependencyKey" class="form-grid">
-          <label class="field">
-            <span class="field-label">Тип связи</span>
-            <select class="select" :value="item.dependencyType || 'FS'" :disabled="readonly" @change="save({ dependencyType: $event.target.value }, 'Тип связи')">
-              <option v-for="t in DEPENDENCY_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
-            </select>
-          </label>
-          <label class="field">
-            <span class="field-label">Лаг, дн.</span>
-            <input class="input" type="number" :value="item.dependencyLag || 0" :disabled="readonly" @change="save({ dependencyLag: parseInt($event.target.value, 10) || 0 }, 'Лаг связи')" />
-            <span class="field-hint">+ задержка, − опережение</span>
-          </label>
-        </div>
+        </section>
       </template>
 
       <!-- Веха -->
       <template v-if="item.type === 'milestone'">
-        <div class="form-grid">
-          <label class="field">
-            <span class="field-label">Дата</span>
-            <input class="input" type="date" :value="item.date" :disabled="readonly" @change="$event.target.value && save({ date: $event.target.value }, 'Дата вехи')" />
-          </label>
-          <label class="field">
-            <span class="field-label">Линия</span>
-            <select class="select" :value="item.lineStyle || 'dashed'" :disabled="readonly" @change="save({ lineStyle: $event.target.value }, 'Стиль линии')">
-              <option value="dashed">Пунктирная</option>
-              <option value="solid">Сплошная</option>
-              <option value="dotted">Точечная</option>
-            </select>
-          </label>
-        </div>
-        <label class="field">
-          <span class="field-label">Подпись над линией</span>
-          <input v-model="drafts.comment" class="input" :readonly="readonly" maxlength="500" placeholder="По умолчанию — название вехи"
-                 @focus="focused = 'comment'" @blur="commitText('comment')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('comment', $event)" />
-        </label>
-        <label class="field">
-          <span class="field-label">Исполнитель</span>
-          <select class="select" :value="item.assigneeKey || ''" :disabled="readonly" @change="save({ assigneeKey: $event.target.value || null }, 'Исполнитель')">
-            <option value="">— не назначен —</option>
-            <option v-for="a in editor.assigneeList" :key="a.key" :value="a.key">{{ a.name }}</option>
-          </select>
-        </label>
+        <!-- Веха, связанная с задачей Jira: срок задачи — дата вехи -->
+        <JiraIssueCard v-if="jira.keyFor(item)" :item="item" />
+        <section class="sec">
+          <div class="sec-head"><span class="sec-title">Параметры вехи</span></div>
+          <div class="sec-card">
+            <label class="field">
+              <span class="field-label">Дата</span>
+              <input class="input" type="date" :value="item.date" :disabled="readonly" @change="$event.target.value && save({ date: $event.target.value }, 'Дата вехи')" />
+            </label>
+            <div class="field">
+              <span class="field-label">Линия</span>
+              <SegmentedControl block stacked aria-label="Линия" :model-value="item.lineStyle || 'dashed'" :options="LINE_STYLES" :disabled="readonly" @update:model-value="setLineStyle" />
+            </div>
+            <label class="field">
+              <span class="field-label">Подпись над линией</span>
+              <input v-model="drafts.comment" class="input" :readonly="readonly" maxlength="500" placeholder="По умолчанию — название вехи"
+                     @focus="focused = 'comment'" @blur="commitText('comment')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('comment', $event)" />
+            </label>
+            <label class="field">
+              <span class="field-label">Исполнитель</span>
+              <span class="with-avatar">
+                <UserAvatar v-if="assignee" class="avatar-adorn" :user="assigneeUser" :color="resolveColor(assignee.color).color" :size="22" />
+                <span v-else class="avatar-adorn avatar-empty"><AppIcon name="user" :size="13" /></span>
+                <select class="select" :value="item.assigneeKey || ''" :disabled="readonly" @change="save({ assigneeKey: $event.target.value || null }, 'Исполнитель')">
+                  <option value="">— не назначен —</option>
+                  <option v-for="a in editor.assigneeList" :key="a.key" :value="a.key">{{ a.name }}</option>
+                </select>
+              </span>
+            </label>
+          </div>
+        </section>
       </template>
 
-      <!-- Группа -->
-      <template v-if="item.type === 'group' || span">
+      <!-- Группа и задача с вложенными: сроки и ход работ по вложенным -->
+      <section v-if="item.type === 'group' || span" class="sec">
+        <div class="sec-head"><span class="sec-title">{{ item.type === 'group' ? 'Сводка' : 'Вложенные задачи' }}</span></div>
         <div v-if="span" class="span-card">
-          <div><span class="muted small">Начало</span><strong>{{ formatDay(span.start) }}</strong></div>
-          <div><span class="muted small">Окончание</span><strong>{{ formatDay(span.end) }}</strong></div>
-          <div v-if="span.offset"><span class="muted small">Со сдвигами</span><strong :class="span.offset > 0 ? 'late' : 'early'">{{ formatDay(span.shiftedEnd) }} ({{ span.offset > 0 ? '+' : '' }}{{ span.offset }} дн.)</strong></div>
-          <div><span class="muted small">Задач</span><strong>{{ span.done }} / {{ span.count }} · {{ span.progress }}%</strong></div>
+          <div class="span-cell"><span class="muted small">Начало</span><strong>{{ formatDay(span.start) }}</strong></div>
+          <div class="span-cell"><span class="muted small">Окончание</span><strong>{{ formatDay(span.end) }}</strong></div>
+          <div v-if="span.offset" class="span-cell"><span class="muted small">Со сдвигами</span><strong :class="span.offset > 0 ? 'late' : 'early'">{{ formatDay(span.shiftedEnd) }} ({{ span.offset > 0 ? '+' : '' }}{{ span.offset }} дн.)</strong></div>
+          <div class="span-cell"><span class="muted small">Задач</span><strong>{{ span.done }} / {{ span.count }} · {{ span.progress }}%</strong></div>
+          <div class="span-progress" :title="`Прогресс: ${span.progress}%`"><span :style="{ width: span.progress + '%' }" /></div>
         </div>
-        <p v-else-if="item.type === 'group'" class="muted small">В группе пока нет задач — сроки появятся автоматически.</p>
-      </template>
+        <p v-else class="empty-note muted small">В группе пока нет задач — сроки появятся автоматически.</p>
+      </section>
 
-      <div class="field">
-        <span class="field-label">Входит в</span>
-        <input v-if="!readonly && parentOptions.length > LONG_LIST" v-model="parentQuery" class="input input-sm list-search" type="search" placeholder="Найти группу или задачу…" aria-label="Поиск родителя" />
-        <select class="select" :value="item.parentKey || ''" :disabled="readonly" aria-label="Входит в" @change="setParent($event.target.value); parentQuery = ''">
-          <option value="">— верхний уровень —</option>
-          <option v-for="o in shownParentOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
-        </select>
-      </div>
-
-      <template v-if="item.type === 'task'">
-        <div class="form-grid">
-          <label class="field">
-            <span class="field-label">Категория</span>
-            <select class="select" :value="item.category || ''" :disabled="readonly" @change="onCategory">
-              <option value="">— без категории —</option>
-              <option v-for="c in editor.categories" :key="c" :value="c">{{ c }}</option>
-              <option v-if="!readonly" value="__add__">+ Новая категория…</option>
+      <section class="sec">
+        <div class="sec-head"><span class="sec-title">{{ item.type === 'task' ? 'Подробности' : 'В плане' }}</span></div>
+        <div class="sec-card">
+          <div class="field">
+            <span class="field-label">Входит в</span>
+            <input v-if="!readonly && parentOptions.length > LONG_LIST" v-model="parentQuery" class="input input-sm list-search" type="search" placeholder="Найти группу или задачу…" aria-label="Поиск родителя" />
+            <select class="select" :value="item.parentKey || ''" :disabled="readonly" aria-label="Входит в" @change="setParent($event.target.value); parentQuery = ''">
+              <option value="">— верхний уровень —</option>
+              <option v-for="o in shownParentOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
             </select>
-          </label>
+          </div>
+
+          <div v-if="item.type === 'task'" class="form-grid">
+            <label class="field">
+              <span class="field-label">Категория</span>
+              <select class="select" :value="item.category || ''" :disabled="readonly" @change="onCategory">
+                <option value="">— без категории —</option>
+                <option v-for="c in editor.categories" :key="c" :value="c">{{ c }}</option>
+                <option v-if="!readonly" value="__add__">+ Новая категория…</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field-label">Текст на полосе</span>
+              <input v-model="drafts.barText" class="input" :readonly="readonly" maxlength="500" placeholder="По умолчанию — даты"
+                     @focus="focused = 'barText'" @blur="commitText('barText')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('barText', $event)" />
+            </label>
+          </div>
+
+          <div class="field">
+            <span class="field-label">{{ item.type === 'milestone' ? 'Цвет линии' : 'Цвет' }}</span>
+            <ColorPicker
+              :model-value="item.type === 'milestone' ? (item.lineColor || item.color) : item.color" :disabled="readonly"
+              @update:model-value="(c) => save(item.type === 'milestone' ? { lineColor: c, color: c } : { color: c }, 'Цвет')"
+            />
+          </div>
+        </div>
+      </section>
+
+      <!-- Задача, веха (срок) или группа (эпик) могут быть связаны с задачей Jira -->
+      <section class="sec">
+        <div class="sec-head"><span class="sec-title">Jira</span></div>
+        <div class="sec-card">
           <label class="field">
-            <span class="field-label">Текст на полосе</span>
-            <input v-model="drafts.barText" class="input" :readonly="readonly" maxlength="500" placeholder="По умолчанию — даты"
-                   @focus="focused = 'barText'" @blur="commitText('barText')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('barText', $event)" />
+            <span class="field-label">Задача в Jira</span>
+            <span class="with-action">
+              <input v-model="drafts.jiraUrl" class="input" :readonly="readonly" maxlength="2000" data-testid="item-jira"
+                     :placeholder="jira.state.connected ? 'ABC-123 или ссылка на задачу' : 'https://jira.example.com/browse/PROJ-123'"
+                     @focus="focused = 'jiraUrl'" @blur="commitText('jiraUrl')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('jiraUrl', $event)" />
+              <a v-if="item.jiraUrl" class="btn btn-icon" :href="item.jiraUrl" target="_blank" rel="noopener noreferrer" title="Открыть в Jira"><AppIcon name="external" :size="15" /></a>
+            </span>
           </label>
         </div>
-        <label class="field">
-          <span class="field-label">Задача в Jira</span>
-          <span class="with-action">
-            <input v-model="drafts.jiraUrl" class="input" :readonly="readonly" maxlength="2000" data-testid="item-jira"
-                   :placeholder="jira.state.connected ? 'ABC-123 или ссылка на задачу' : 'https://jira.example.com/browse/PROJ-123'"
-                   @focus="focused = 'jiraUrl'" @blur="commitText('jiraUrl')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('jiraUrl', $event)" />
-            <a v-if="item.jiraUrl" class="btn btn-icon" :href="item.jiraUrl" target="_blank" rel="noopener noreferrer" title="Открыть в Jira"><AppIcon name="external" :size="15" /></a>
-          </span>
-        </label>
-      </template>
-
-      <div class="field">
-        <span class="field-label">{{ item.type === 'milestone' ? 'Цвет линии' : 'Цвет' }}</span>
-        <ColorPicker
-          :model-value="item.type === 'milestone' ? (item.lineColor || item.color) : item.color" :disabled="readonly"
-          @update:model-value="(c) => save(item.type === 'milestone' ? { lineColor: c, color: c } : { color: c }, 'Цвет')"
-        />
-      </div>
+      </section>
 
       <p v-if="item.updatedAt" class="updated muted small">
-        Изменено {{ formatDateTime(item.updatedAt) }}<template v-if="updatedBy"> · {{ updatedBy }}</template>
+        <AppIcon name="clock" :size="12" /> Изменено {{ formatDateTime(item.updatedAt) }}<template v-if="updatedBy"> · {{ updatedBy }}</template>
       </p>
     </div>
 
@@ -394,52 +469,98 @@ function duplicate() {
 </template>
 
 <style scoped>
-.panel { width: 400px; max-width: 100%; border-left: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; min-height: 0; box-shadow: -8px 0 24px rgba(20, 25, 40, 0.06); z-index: 10; animation: slide-in 0.16s ease; }
+.panel { width: 420px; max-width: 100%; border-left: 1px solid var(--color-border); background: var(--color-surface); display: flex; flex-direction: column; min-height: 0; box-shadow: -8px 0 24px rgba(20, 25, 40, 0.06); z-index: 10; animation: slide-in 0.18s cubic-bezier(0.32, 0.72, 0, 1); }
 @keyframes slide-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
-.panel-head { display: flex; align-items: center; gap: 4px; padding: 10px 12px 4px 16px; }
-.type-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
-.type-badge.t-milestone { color: #0f766e; }
-.type-badge.t-group { color: #64748b; }
-.title-wrap { padding: 0 16px 8px; }
-.title-input { width: 100%; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 16px; font-weight: 700; padding: 4px 6px; margin-left: -6px; resize: none; field-sizing: content; min-height: 32px; font-family: inherit; color: var(--color-text); background: transparent; line-height: 1.35; }
-.title-input:hover:not([readonly]) { border-color: var(--color-border); }
+
+/* Шапка (тип, статус, действия), название и вкладки не прокручиваются вместе с полями */
+.panel-head { display: flex; align-items: center; gap: 6px; padding: 12px 12px 4px 18px; }
+.type-badge { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; background: var(--color-primary-soft); color: var(--color-primary-dark); white-space: nowrap; }
+.type-badge.t-milestone { background: #dcf5f1; color: #0f766e; }
+.type-badge.t-group { background: #eef1f7; color: #475569; }
+.status-pill { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 10px; border-radius: 999px; background: color-mix(in srgb, var(--c) 13%, white); color: var(--t); font-size: 11.5px; font-weight: 600; white-space: nowrap; min-width: 0; overflow: hidden; }
+.status-pill-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--c); flex-shrink: 0; }
+.title-wrap { padding: 6px 18px 12px; }
+.title-input { display: block; width: calc(100% + 8px); margin-left: -8px; padding: 4px 8px; border: 1px solid transparent; border-radius: 8px; font-family: inherit; font-size: 18px; font-weight: 700; line-height: 1.3; letter-spacing: -0.01em; color: var(--color-text); background: transparent; resize: none; field-sizing: content; min-height: 34px; transition: border-color 0.15s, box-shadow 0.15s, background 0.15s; }
+.title-input::placeholder { color: #b0b7c6; }
+.title-input:hover:not([readonly]) { border-color: var(--color-border); background: var(--color-surface-2); }
 .title-input:focus { outline: none; border-color: var(--color-primary); box-shadow: var(--focus-ring); background: #fff; }
-.tabs { margin: 0 16px 6px; align-self: flex-start; }
-.tab-count { margin-left: 5px; background: var(--color-primary); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 10px; }
-.panel-body { flex: 1; overflow-y: auto; padding: 10px 16px 18px; display: flex; flex-direction: column; gap: 12px; }
-.statuses { display: flex; width: 100%; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
-.statuses .status-option { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 4px 6px; font-size: 12px; white-space: nowrap; }
-.statuses .status-option.is-active { background: color-mix(in srgb, var(--c) 14%, white); color: var(--color-text); box-shadow: inset 0 0 0 1px var(--c); }
-.statuses .status-option.is-active:disabled { background: #eef1f7; box-shadow: inset 0 0 0 1px var(--color-border-strong); color: var(--color-text-secondary); }
-.field-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.field-sublabel { font-size: 11.5px; color: var(--color-text-secondary); }
+.title-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-top: 4px; font-size: 12px; color: var(--color-text-muted); }
+.title-meta:empty { display: none; }
+.title-meta > span { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: 100%; }
+.crumb { overflow: hidden; }
+.tabs-wrap { padding: 0 18px 12px; border-bottom: 1px solid var(--color-border); }
+
+.panel-body { flex: 1; overflow-y: auto; padding: 16px 18px 24px; display: flex; flex-direction: column; gap: 20px; }
+
+/* Разделы: заголовок прописными, поля — в мягкой карточке */
+.sec { display: flex; flex-direction: column; gap: 8px; }
+.sec-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 26px; }
+.sec-title { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--color-text-muted); }
+.sec-card { display: flex; flex-direction: column; gap: 14px; padding: 14px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface-2); }
+
+.done-card { padding: 12px; border-radius: 12px; background: var(--color-success-soft); border: 1px solid #c4ead5; }
+.done-card .field-label { display: inline-flex; align-items: center; gap: 6px; color: #1f7a4c; }
+
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.fact { display: inline-flex; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 999px; background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-border); font-size: 11.5px; color: var(--color-text-secondary); white-space: nowrap; }
+.fact.is-strong { color: var(--color-text); font-weight: 600; }
 .list-search { margin-bottom: 2px; }
-.segmented.mini { align-self: flex-start; }
-.segmented.mini button { padding: 4px 8px; }
-.hints { list-style: none; margin: -4px 0 0; padding: 8px 10px; background: #f3f6ff; border-radius: var(--radius-sm); display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #2b4db5; }
+.hints { list-style: none; margin: 0; padding: 8px 10px; background: #eef3ff; border-radius: 8px; display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #2b4db5; }
 .hints li { display: flex; align-items: center; gap: 6px; }
-.progress-input { display: flex; align-items: center; gap: 8px; }
-.progress-input input[type=range] { flex: 1; accent-color: var(--color-primary); }
-.progress-input .input { width: 64px; flex-shrink: 0; }
-.offset-input { display: flex; align-items: center; gap: 10px; }
-.offset-input .input { width: 90px; flex-shrink: 0; }
-.section-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); margin-top: 4px; }
-.span-card { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 10px 12px; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
-.span-card div { display: flex; flex-direction: column; gap: 2px; }
-.span-card strong { font-size: 13px; }
+
+/* Прогресс: ползунок с заливкой и число с «%» */
+.progress-input { display: flex; align-items: center; gap: 12px; }
+.range { flex: 1; min-width: 0; height: 6px; margin: 0; border-radius: 999px; appearance: none; -webkit-appearance: none; cursor: pointer; background: linear-gradient(to right, var(--color-primary) var(--p), #dfe4ee var(--p)); }
+.range::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 18px; height: 18px; border-radius: 50%; background: #fff; border: 2px solid var(--color-primary); box-shadow: 0 1px 3px rgba(20, 25, 40, 0.2); transition: transform 0.12s; }
+.range::-moz-range-thumb { width: 14px; height: 14px; border-radius: 50%; background: #fff; border: 2px solid var(--color-primary); box-shadow: 0 1px 3px rgba(20, 25, 40, 0.2); }
+.range:hover:not(:disabled)::-webkit-slider-thumb { transform: scale(1.1); }
+.range:focus-visible { outline: none; }
+.range:focus-visible::-webkit-slider-thumb { box-shadow: var(--focus-ring); }
+.range:disabled { cursor: not-allowed; background: linear-gradient(to right, #9aa6c4 var(--p), #e6e9f0 var(--p)); }
+.range:disabled::-webkit-slider-thumb { border-color: #9aa6c4; }
+.number-suffix { position: relative; flex-shrink: 0; width: 72px; }
+.number-suffix .input { padding-right: 22px; text-align: right; }
+.suffix { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); font-size: 12px; color: var(--color-text-muted); pointer-events: none; }
+.offset-input { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.offset-input .input { width: 96px; flex-shrink: 0; }
+.offset-pill { display: inline-flex; align-items: center; min-height: 24px; padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 600; }
+.offset-pill.is-late { background: var(--color-danger-soft); color: #c62933; }
+.offset-pill.is-early { background: var(--color-success-soft); color: #1f7a4c; }
+
+/* Исполнитель: аватар на цвете исполнителя внутри списка */
+.with-avatar { position: relative; display: block; }
+.with-avatar .select { padding-left: 40px; }
+.avatar-adorn { position: absolute; left: 8px; top: 50%; transform: translateY(-50%); pointer-events: none; }
+.avatar-empty { width: 22px; height: 22px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: #eef1f7; color: var(--color-text-muted); }
+
+/* Сводка группы */
+.span-card { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; padding: 14px; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 12px; }
+.span-cell { display: flex; flex-direction: column; gap: 2px; }
+.span-cell strong { font-size: 13px; }
+.span-progress { grid-column: 1 / -1; height: 6px; border-radius: 999px; background: #e3e7ef; overflow: hidden; }
+.span-progress span { display: block; height: 100%; border-radius: inherit; background: var(--color-success); }
+.empty-note { margin: 0; padding: 12px 14px; border: 1px dashed var(--color-border-strong); border-radius: 12px; }
 .late { color: #c62933; }
 .early { color: #1f7a4c; }
+/* Палитра в карточке компактнее — 13 образцов умещаются в одну строку */
+.sec-card .color-picker { --swatch-size: 22px; gap: 5px; }
 .with-action { display: flex; gap: 6px; }
-.updated { margin: 6px 0 0; }
+.with-action .input { flex: 1; min-width: 0; }
+.updated { display: flex; align-items: center; gap: 6px; margin: -4px 0 0; }
+
 /* Ноутбук и планшет: карточка открывается поверх диаграммы, а не сжимает её */
 @media (max-width: 1279px) {
-  .panel { position: absolute; inset: 0 0 0 auto; width: min(420px, 100%); box-shadow: -12px 0 32px rgba(20, 25, 40, 0.18); }
+  .panel { position: absolute; inset: 0 0 0 auto; width: min(440px, 100%); box-shadow: -12px 0 32px rgba(20, 25, 40, 0.18); }
 }
 /* Телефон: карточка — на весь экран поверх панели инструментов */
 @media (max-width: 768px) {
   .panel { position: fixed; inset: 0; z-index: 150; width: 100%; border-left: 0; padding-top: env(safe-area-inset-top); }
-  .panel-head { padding: 6px 8px 4px 16px; }
-  .tabs { align-self: stretch; overflow-x: auto; }
-  .tabs button { flex: 1; white-space: nowrap; }
+  .panel-head { padding: 6px 8px 2px 16px; gap: 2px; }
+  .title-wrap { padding: 4px 16px 10px; }
+  .tabs-wrap { padding: 0 16px 10px; }
+  .panel-body { padding: 14px 16px calc(24px + env(safe-area-inset-bottom)); }
+  .sec-card { padding: 12px; }
+  .number-suffix { width: 84px; }
+  .range::-webkit-slider-thumb { width: 24px; height: 24px; }
 }
 </style>

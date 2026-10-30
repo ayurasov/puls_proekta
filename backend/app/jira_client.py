@@ -31,6 +31,9 @@ _KEY_IN_TEXT = r"([A-Za-z][A-Za-z0-9_]{0,49}-\d{1,15})"
 FIELD_ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 BASE_FIELDS = ("summary", "status", "assignee", "issuetype", "priority", "duedate", "resolutiondate", "created",
                "updated", "timeoriginalestimate", "timespent", "timeestimate", "progress")
+# Поле «Epic Link» Jira Software (Server/DC); в Cloud эпик — родитель задачи (поле parent)
+EPIC_LINK_SCHEMA = "com.pyxis.greenhopper.jira:gh-epic-link"
+EPIC_TYPE_NAMES = {"epic", "эпик"}
 SEARCH_BATCH = 100
 SEARCH_LIMIT = 1000
 MAX_ATTEMPTS = 3
@@ -170,6 +173,26 @@ def issue_progress(fields):
     return None
 
 
+def epic_key(fields, field_map):
+    """Ключ эпика задачи: поле «Epic Link» (Server/DC) или родитель-эпик (Cloud); None — без эпика."""
+    epic_field = field_map.get("epicField")
+    value = fields.get(epic_field) if epic_field else None
+    if isinstance(value, str) and ISSUE_KEY_RE.match(value.upper()):
+        return value.upper()
+    parent = fields.get("parent")
+    if isinstance(parent, dict) and isinstance(parent.get("key"), str):
+        parent_type = (parent.get("fields") or {}).get("issuetype") or {}
+        if parent_type.get("hierarchyLevel") == 1 or str(parent_type.get("name") or "").lower() in EPIC_TYPE_NAMES:
+            key = parent["key"].upper()
+            return key if ISSUE_KEY_RE.match(key) else None
+    return None
+
+
+def is_epic(fields):
+    issue_type = fields.get("issuetype") if isinstance(fields.get("issuetype"), dict) else {}
+    return issue_type.get("hierarchyLevel") == 1 or str(issue_type.get("name") or "").lower() in EPIC_TYPE_NAMES
+
+
 def normalize_issue(key, fields, base_url, field_map):
     """Поля задачи Jira → данные для интерфейса «Пульса»."""
     status = fields.get("status") if isinstance(fields.get("status"), dict) else {}
@@ -195,12 +218,18 @@ def normalize_issue(key, fields, base_url, field_map):
         "spentHours": _hours(fields.get("timespent")),
         "remainingHours": _hours(fields.get("timeestimate")),
         "progress": issue_progress(fields),
+        "epic": epic_key(fields, field_map),
+        "isEpic": is_epic(fields),
     }
 
 
-def request_fields(field_map):
+def request_fields(field_map, epics=False):
+    """Поля для запроса; epics — ещё родитель и «Epic Link», чтобы разложить задачи по эпикам."""
     fields = list(BASE_FIELDS)
-    for name in (field_map.get("startField"), field_map.get("endField")):
+    names = [field_map.get("startField"), field_map.get("endField")]
+    if epics:
+        names += ["parent", field_map.get("epicField")]
+    for name in names:
         if name and name not in fields:
             fields.append(name)
     return fields
@@ -254,8 +283,10 @@ class JiraClient:
         resp = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
-                # без перенаправлений: запросы с токеном идут только на адрес из подключения
-                resp = self.session.request(method, url, timeout=self.timeout, allow_redirects=False, **kwargs)
+                # без перенаправлений: запросы с токеном идут только на адрес из подключения. verify — явно: иначе
+                # REQUESTS_CA_BUNDLE в окружении отменил бы «Не проверять TLS-сертификат»
+                resp = self.session.request(method, url, timeout=self.timeout, allow_redirects=False,
+                                            verify=self.session.verify, **kwargs)
             except requests.exceptions.SSLError as exc:
                 self.fail("Ошибка TLS/сертификата. Если Jira использует самоподписанный или корпоративный "
                           f"сертификат, включите «Не проверять TLS-сертификат». ({exc})", "Ошибка TLS-сертификата Jira")
@@ -403,6 +434,16 @@ class JiraClient:
                         out[key] = data
             checked.update(batch)
         return out, checked
+
+    def epic_link_field(self):
+        """Идентификатор поля «Epic Link» (Jira Software в Server/DC) или None — в Cloud эпик задаёт parent."""
+        if self.cloud:
+            return None
+        for f in self.json("GET", self.api("field"), kind=list):
+            if isinstance(f, dict) and (f.get("schema") or {}).get("custom") == EPIC_LINK_SCHEMA \
+                    and FIELD_ID_RE.match(f.get("id") or ""):
+                return f["id"]
+        return None
 
     def date_fields(self):
         """Поля Jira с датой — для выбора полей «начало» и «срок» задачи."""

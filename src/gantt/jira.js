@@ -1,5 +1,6 @@
 import { reactive } from 'vue'
 import { api } from '../api/client'
+import { localStorageGet, localStorageSet } from '../stores/ui'
 import { diffDays } from './domain/dates'
 
 /**
@@ -128,7 +129,8 @@ export function createJira(editor, ui) {
       state.error = res.error
       state.fetchedAt = res.fetchedAt
       state.loaded = true
-      if (refresh && !res.error) ui.success(`Данные Jira обновлены (${Object.keys(res.issues).length})`)
+      const applied = autoApply()
+      if (refresh && !res.error && !applied) ui.success(`Данные Jira обновлены (${Object.keys(res.issues).length})`)
       else if (refresh && res.error) ui.error(res.error)
     } catch (err) {
       if (seq === loadSeq) { state.error = err.message; if (refresh) ui.error(err) }
@@ -163,6 +165,7 @@ export function createJira(editor, ui) {
       for (const key of wanted) if (!(key in next) && res.error) failed[key] = res.error
       state.issues = next
       state.failed = failed
+      autoApply(wanted)
     } catch (err) {
       const failed = { ...state.failed }
       for (const key of wanted) if (!(key in state.issues) || refresh) failed[key] = err.message
@@ -184,14 +187,90 @@ export function createJira(editor, ui) {
     return changesFor(item).some((c) => c.field !== 'name')
   }
 
-  /** Перенести выбранные изменения: [{ key, fields }] — одна правка, отменяется целиком. */
-  function apply(list, label = 'Данные из Jira') {
+  /**
+   * Перенести выбранные изменения: [{ key, fields }] — одна правка, отменяется целиком. Сроки из Jira, которые
+   * связь не задаёт (окончание последующей задачи), автосдвиг не перезаписывает, даже если в той же правке
+   * сдвинулся предшественник. auto — автоперенос: не отнимает у сотрудника «Повторить».
+   */
+  function apply(list, label = 'Данные из Jira', { auto = false } = {}) {
     // Сдвиг завершённой задачи редактор пересчитывает сам от итоговых сроков и даты завершения
     const merged = new Map()
     for (const { key, fields } of list) merged.set(key, { ...(merged.get(key) || {}), ...fields })
     for (const fields of merged.values()) if (fields.status === undefined || fields.status === 'done') delete fields.offset
-    editor.updateItems([...merged].map(([key, fields]) => ({ key, fields })), label)
+    editor.updateItems([...merged].map(([key, fields]) => ({ key, fields })), label, { keepFreeDates: true, keepRedo: auto })
   }
 
-  return reactive({ state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, differs, apply })
+  /** Поля, которые план переносит из Jira сам (настройка плана «Автоперенос из Jira»). */
+  function autoFields() {
+    return editor.settings.jiraAuto || []
+  }
+
+  // Уже перенесённое автоматически в этом браузере (по плану): отменённый Ctrl+Z перенос не повторяется ни при
+  // обновлении, ни после перезагрузки, а правка, которую сразу изменил автосдвиг или коллега, не повторяется
+  // при каждом обновлении — расхождение остаётся видно в «Сверке с Jira». Новое значение в Jira — новая отметка.
+  const AUTO_DONE_LIMIT = 2000
+  let autoDone = null
+  function autoDoneKey() {
+    return `puls.jiraAuto.${editor.state.plan?.key || editor.state.plan?.id}`
+  }
+  function autoDoneSet() {
+    if (!autoDone) {
+      let saved = []
+      try { saved = JSON.parse(localStorageGet(autoDoneKey()) || '[]') } catch { saved = [] }
+      autoDone = new Set(Array.isArray(saved) ? saved.filter((m) => typeof m === 'string') : [])
+    }
+    return autoDone
+  }
+  function rememberAutoDone(marks) {
+    const set = autoDoneSet()
+    for (const mark of marks) set.add(mark)
+    const list = [...set].slice(-AUTO_DONE_LIMIT)
+    autoDone = new Set(list)
+    localStorageSet(autoDoneKey(), JSON.stringify(list))
+  }
+
+  /**
+   * Автоперенос: при открытии плана, обновлении из Jira и привязке строки выбранные в настройке поля переносятся
+   * из Jira одной правкой (отменяется Ctrl+Z, видна в истории как «Из Jira автоматически»). Только у того, кто
+   * может править план. keys — только эти задачи Jira (после привязки строк). Возвращает число строк.
+   */
+  function autoApply(keys = null) {
+    const fields = autoFields()
+    if (!fields.length || !editor.canEdit) return 0
+    const only = keys ? new Set(keys) : null
+    const list = []
+    const marks = []
+    const done = autoDoneSet()
+    for (const item of linkedItems()) {
+      const key = keyFor(item)
+      if (only && !only.has(key)) continue
+      if (!issueFor(item)) continue
+      for (const change of changesFor(item)) {
+        // Срок вехи («Дата») переносится вместе со сроками задач
+        const setting = change.field === 'date' ? 'dates' : change.field
+        if (!fields.includes(setting)) continue
+        const mark = `${item.key}:${change.field}:${JSON.stringify(change.to)}`
+        if (done.has(mark)) continue
+        marks.push(mark)
+        list.push({ key: item.key, fields: change.fields })
+      }
+    }
+    if (!list.length) return 0
+    rememberAutoDone(marks)
+    const count = new Set(list.map((c) => c.key)).size
+    apply(list, `Из Jira автоматически (${count})`, { auto: true })
+    ui.success(`Из Jira перенесено в строки: ${count}. Отменить — Ctrl+Z; выключить — в «Сверке с Jira»`)
+    return count
+  }
+
+  /** Включить или выключить автоперенос полей (одна правка настроек плана). */
+  function setAutoFields(list) {
+    editor.updatePlan({ settings: { jiraAuto: list } }, list.length ? 'Автоперенос из Jira' : 'Автоперенос из Jira выключен')
+    if (list.length) autoApply()
+  }
+
+  return reactive({
+    state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, differs, apply, autoFields, autoApply,
+    setAutoFields,
+  })
 }

@@ -1,13 +1,13 @@
 ---
 title: "Пульс Проекта — руководство по развёртыванию"
-subtitle: "Версия 0.3.1"
+subtitle: "Версия 0.4.0"
 date: "Октябрь 2026"
 lang: ru
 ---
 
 # О документе
 
-Руководство описывает установку «Пульса Проекта» версии 0.3.1 на сервер компании, переход с версии 1.0.1,
+Руководство описывает установку «Пульса Проекта» версии 0.4.0 на сервер компании, переход с версии 1.0.1,
 настройку HTTPS, резервное копирование и восстановление, обновление, наблюдение и диагностику. Документ
 предназначен для инженеров сопровождения. Работа в системе описана в руководствах пользователя и
 администратора.
@@ -54,7 +54,7 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Шаг 1. Получение дистрибутива
 
 ```bash
-sudo git clone --branch v0.3.1 <адрес репозитория puls_proekta> /opt/puls
+sudo git clone --branch v0.4.0 <адрес репозитория puls_proekta> /opt/puls
 cd /opt/puls
 ```
 
@@ -86,7 +86,7 @@ sudo docker compose ps
 
 ```bash
 curl -fsS http://127.0.0.1:39663/api/health/ready; echo
-# {"status":"ok","schema":"0004_department_access","version":"0.3.1"}
+# {"status":"ok","schema":"0005_podelu_links","version":"0.4.0"}
 curl -sI http://127.0.0.1:39663/ | grep -i content-security-policy
 ```
 
@@ -186,17 +186,23 @@ server {
 | `AUTO_MIGRATE` | `true` | Применять миграции при старте backend |
 | `ACCESS_LOG` | `false` | Журнал запросов backend |
 
-## Jira
+## Интеграции: Jira и «По Делу»
 
 | Переменная | По умолчанию | Назначение |
-| ---------------------- | ----------- | --------------------------------------------------- |
+| ------------------------ | ----------- | -------------------------------------------------------- |
 | `JIRA_ALLOWED_HOSTS` | — | Разрешённые адреса Jira через запятую: `jira.company.ru` или `.company.ru` (домен и поддомены); пусто — любой |
 | `JIRA_CACHE_SECONDS` | `300` | Сколько секунд данные задач Jira считаются свежими при открытии плана |
-| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | — | Прокси для выхода backend к Jira, если сервер ходит в сеть через прокси |
+| `PODELU_ALLOWED_HOSTS` | — | Разрешённые адреса «По Делу» — так же, как `JIRA_ALLOWED_HOSTS` |
+| `PODELU_TOTAL_TIMEOUT` | `50` | Сколько секунд одна загрузка из «По Делу» в интерфейсе может ждать её ответа целиком (вход, выгрузки, выход); меньше `GUNICORN_TIMEOUT` (60). Командная строка `sync-podelu` ждёт до 600 секунд |
+| `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | — | Прокси для выхода backend к Jira и «По Делу», если сервер ходит в сеть через прокси. «По Делу» на той же машине — в `NO_PROXY` |
 
-Само подключение (адрес, учётная запись, токен) задаёт администратор в интерфейсе: «Администрирование →
-Интеграции». Токен хранится в базе зашифрованным ключом из `SECRET_KEY`: после смены `SECRET_KEY` токен нужно
-ввести заново.
+Сами подключения (адрес, учётная запись, пароль или токен) задаёт администратор в интерфейсе:
+«Администрирование → Интеграции». Пароли хранятся в базе зашифрованными ключом из `SECRET_KEY`: после смены
+`SECRET_KEY` их нужно ввести заново.
+
+Если «По Делу» работает на той же машине, backend «Пульса» обращается к ней по тому же адресу, что и
+сотрудники (через HTTPS-прокси сервера или по `http://<адрес сервера>:39665`): контейнеры систем в разных сетях
+Docker и по внутренним именам друг друга не видят.
 
 ## Резервное копирование
 
@@ -281,7 +287,7 @@ sudo docker compose start backend frontend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.3.1
+sudo sh deploy/update.sh v0.4.0
 ```
 
 Скрипт: копия `pre-update` → получение версии из git (ветка — только перемоткой вперёд) → сборка и перезапуск
@@ -387,13 +393,13 @@ sudo docker compose logs backup              # резервные копии
 cd puls_proekta
 docker compose build
 docker pull postgres:16-alpine
-docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.3.1-images.tar.gz
+docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.4.0-images.tar.gz
 ```
 
 На сервере:
 
 ```bash
-gunzip -c puls-0.3.1-images.tar.gz | sudo docker load
+gunzip -c puls-0.4.0-images.tar.gz | sudo docker load
 cd /opt/puls
 sudo docker compose up -d          # без --build: используются загруженные образы
 ```

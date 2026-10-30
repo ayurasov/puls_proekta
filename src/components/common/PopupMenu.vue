@@ -40,7 +40,13 @@ async function place(initial = false) {
     left: Math.max(8, Math.min(left, maxLeft)) + 'px', top: Math.max(8, Math.min(top, maxTop)) + 'px',
     minWidth: `min(${props.minWidth}px, calc(100vw - 16px))`,
   }
-  if (initial === true) el.querySelector('.menu-item:not(:disabled)')?.focus({ preventScroll: true })
+  if (initial === true) {
+    // Фокус — после того как меню стало видимым: элемент со скрытым видом (visibility: hidden) фокус не принимает
+    await nextTick()
+    const first = el.querySelector('.menu-item:not(:disabled)')
+      || el.querySelector('button:not(:disabled), input:not(:disabled), select:not(:disabled), [tabindex]:not([tabindex="-1"])')
+    first?.focus({ preventScroll: true })
+  }
 }
 
 function onPointer(event) {
@@ -50,6 +56,8 @@ function onKey(event) {
   if (event.key === 'Escape') { event.stopPropagation(); emit('close'); return }
   // Стрелки, Home и End ходят по пунктам меню и дальше не уходят: строки диаграммы под меню не переключаются
   if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+    // В поле ввода меню (дата, название) стрелки и Home/End — клавиши самого поля
+    if (event.target?.closest?.('input:not([type=checkbox]):not([type=radio]), textarea, select') && menu.value?.contains(event.target)) return
     event.preventDefault()
     event.stopPropagation()
     const items = [...(menu.value?.querySelectorAll('.menu-item:not(:disabled)') || [])]
@@ -98,6 +106,11 @@ onMounted(() => {
   if (props.anchor) frame = requestAnimationFrame(follow)
 })
 onBeforeUnmount(() => {
+  // Фокус возвращается на кнопку, открывшую меню (Esc, выбор пункта), — если сотрудник не ушёл щелчком в другое место
+  const active = document.activeElement
+  if (props.anchor?.isConnected && (!active || active === document.body || menu.value?.contains(active))) {
+    props.anchor.focus?.({ preventScroll: true })
+  }
   clearTimeout(listenTimer)
   cancelAnimationFrame(frame)
   document.removeEventListener('mousedown', onPointer, true)

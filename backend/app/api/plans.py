@@ -100,6 +100,35 @@ def get_plan(plan_id):
     return jsonify(plan_document(plan, level))
 
 
+# Поля строк, по которым считается окно «Статистика» (src/gantt/domain/stats.js)
+STATS_ITEM_FIELDS = ("key", "type", "name", "parentKey", "position", "assigneeKey", "status", "start", "end", "date",
+                     "progress", "offset")
+
+
+@bp.get("/plans/<int:plan_id>/stats")
+@login_required
+def plan_stats(plan_id):
+    """Данные окна «Статистика» для карточки проекта на главной: строки плана (только нужные поля) и исполнители.
+
+    В отличие от GET /plans/<id> сотрудник не отмечается «сейчас на плане»: план он не открывал.
+    """
+    plan, project, level = _plan_with_access(plan_id)
+    items = db.session.execute(
+        select(PlanItem).where(PlanItem.plan_id == plan.id, PlanItem.deleted_at.is_(None))
+        .order_by(PlanItem.position, PlanItem.id)
+    ).scalars().all()
+    assignees = db.session.execute(
+        select(PlanAssignee).where(PlanAssignee.plan_id == plan.id, PlanAssignee.deleted_at.is_(None))
+        .order_by(PlanAssignee.position, PlanAssignee.id)
+    ).scalars().all()
+    return jsonify({
+        "plan": {"id": plan.id, "title": plan.title, "projectId": project.id, "projectTitle": project.title,
+                 "isArchived": bool(plan.is_archived), "access": level},
+        "items": [{k: v for k, v in item_to_api(i).items() if k in STATS_ITEM_FIELDS} for i in items],
+        "assignees": [{"key": a.key, "name": a.name, "position": a.position} for a in assignees],
+    })
+
+
 @bp.patch("/plans/<int:plan_id>")
 @login_required
 def update_plan(plan_id):
