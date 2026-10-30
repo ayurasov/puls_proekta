@@ -71,6 +71,9 @@ async function logout() {
       <router-link to="/" class="nav-item" :class="{ 'router-link-active': route.name === 'projects' }" exact-active-class="" title="Проекты">
         <AppIcon name="home" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Проекты</span>
       </router-link>
+      <router-link v-if="auth.user?.role === 'manager'" to="/admin/trash" class="nav-item" title="Корзина — удалённые планы ваших проектов">
+        <AppIcon name="trash" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Корзина</span>
+      </router-link>
     </nav>
 
     <div v-if="!ui.sidebarCollapsed" class="sidebar-section">

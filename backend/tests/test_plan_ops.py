@@ -127,15 +127,44 @@ def test_viewer_and_archived_plan_are_read_only(app, admin):
     assert admin.post(f"/api/plans/{plan_id}/archive").status_code == 400
 
 
-def test_plan_delete_requires_archive_and_goes_to_trash(app, admin):
+def test_plan_delete_goes_to_trash_and_restores(app, admin):
     project_id, plan_id = create_project(admin)
     second = admin.post(f"/api/projects/{project_id}/plans", json={"title": "Черновик"}).get_json()
-    assert admin.delete(f"/api/plans/{second['id']}").status_code == 409
-    admin.post(f"/api/plans/{second['id']}/archive")
+    # Открытый план удаляется сразу (вкладка «Удалить»), если в проекте остаётся другой открытый план
     assert admin.delete(f"/api/plans/{second['id']}").status_code == 200
     trash = admin.get("/api/trash").get_json()
     assert [p["id"] for p in trash["plans"]] == [second["id"]]
+    assert trash["plans"][0]["isArchived"] is False
+    # Единственный открытый план не удалить
+    assert admin.delete(f"/api/plans/{plan_id}").status_code == 400
+    # «Отменить» в уведомлении возвращает план во вкладки
     assert admin.post(f"/api/plans/{second['id']}/restore").status_code == 200
+    plans = admin.get(f"/api/projects/{project_id}").get_json()["plans"]
+    assert {p["id"]: p["isArchived"] for p in plans} == {plan_id: False, second["id"]: False}
+    # Архивный план удаляется всегда
+    admin.post(f"/api/plans/{second['id']}/archive")
+    assert admin.delete(f"/api/plans/{second['id']}").status_code == 200
+    assert admin.post(f"/api/plans/{second['id']}/restore").status_code == 200
+
+
+def test_manager_sees_own_deleted_plans_in_trash(app, admin):
+    from tests.conftest import new_client
+
+    manager = new_client(app, "pm", "manager")
+    project_id, plan_id = create_project(manager, "Проект менеджера")
+    second = manager.post(f"/api/projects/{project_id}/plans", json={"title": "Копия"}).get_json()
+    assert manager.delete(f"/api/plans/{second['id']}").status_code == 200
+    other_project, _ = create_project(admin, "Чужой")
+    other_second = admin.post(f"/api/projects/{other_project}/plans", json={"title": "Чужая копия"}).get_json()
+    assert admin.delete(f"/api/plans/{other_second['id']}").status_code == 200
+    trash = manager.get("/api/trash").get_json()
+    assert [p["id"] for p in trash["plans"]] == [second["id"]]
+    assert trash["projects"] == [] and trash["canPurge"] is False
+    assert manager.delete(f"/api/trash/plans/{second['id']}").status_code == 403
+    assert manager.post(f"/api/plans/{second['id']}/restore").status_code == 200
+    viewer = new_client(app, "v2", "viewer")
+    assert viewer.get("/api/trash").get_json()["plans"] == []
+    assert admin.get("/api/trash").get_json()["canPurge"] is True
 
 
 def test_duplicate_plan_copies_content(app, admin):
