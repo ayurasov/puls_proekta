@@ -408,6 +408,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       if (state.plan && res.isArchived !== undefined) state.plan.isArchived = res.isArchived
       if (res.unchanged || state.inFlight || state.queue.length) return
       const skip = pendingTags()
+      const openKey = state.view.panelKey
+      const openName = openKey ? state.items[openKey]?.name : null
       const changed = [
         ...mergeEntities('items', 'item', res.items, skip),
         ...mergeEntities('notes', 'note', res.notes, skip).map((k) => `note:${k}`),
@@ -416,6 +418,18 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       if (res.plan && !skip.has('plan')) state.plan = { ...res.plan, access: state.access }
       state.revision = res.revision
       const remoteEvents = res.events || []
+      if (state.view.selectedKey && !state.items[state.view.selectedKey]) state.view.selectedKey = null
+      if (openKey && !state.items[openKey]) {
+        // Открытую карточку удалил коллега: карточка закрывается не молча
+        const event = remoteEvents.find((e) => e.entityKey === openKey && e.action === 'delete')
+        const deleted = state.graveyard.items[openKey]
+        const who = event?.userName || (deleted?.updatedById && state.users[String(deleted.updatedById)]?.name) || 'Коллега'
+        state.view.panelKey = null
+        ui.toast({
+          title: `Строку «${openName || 'без названия'}» удалил(а) ${who}`,
+          body: 'Карточка закрыта. Вернуть строку можно из истории плана.', kind: 'info', timeout: 9000,
+        })
+      }
       if (remoteEvents.length) {
         const flashUntil = Date.now() + 2500
         for (const key of changed) state.remoteFlash[key] = flashUntil

@@ -75,7 +75,7 @@ async function preview(snap) {
     const res = await api.get(`/plans/${props.planId}/snapshots/${snap.id}`)
     const toMap = (list) => Object.fromEntries((list || []).map((e) => [e.key, e]))
     editor.state.previewSnapshot = {
-      id: snap.id, label: formatDateTime(snap.createdAt),
+      id: snap.id, label: formatDateTime(snap.createdAt), title: snap.label || REASONS[snap.reason] || 'Сохранённая версия',
       items: toMap(res.data.items), notes: toMap(res.data.notes), assignees: toMap(res.data.assignees),
     }
     editor.state.view.panelKey = null
