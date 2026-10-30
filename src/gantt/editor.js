@@ -504,7 +504,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   // ---------- правки ----------
-  function commit(ops, label, { undoable = true } = {}) {
+  function commit(ops, label, { undoable = true, keepRedo = false } = {}) {
     if (!ops.length) return null
     if (!canEdit.value) {
       ui.error(state.plan?.isArchived ? 'План в архиве — изменения недоступны' : 'У вас доступ только для просмотра')
@@ -516,7 +516,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       entry = { label, inverse }
       state.undo.push(entry)
       if (state.undo.length > 100) state.undo.shift()
-      state.redo = []
+      // Правка не по действию сотрудника (автоперенос из Jira) не отнимает у него «Повторить»
+      if (!keepRedo) state.redo = []
     }
     enqueue(ops, label, entry)
     return entry
@@ -554,7 +555,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
    * них зависят (по связи или как подзадачи). Несогласованные сроки в других местах плана не трогаются:
    * их выравнивает сотрудник кнопкой «Выровнять по связям».
    */
-  function cascadeOps(changes, { all = false } = {}) {
+  function cascadeOps(changes, { all = false, fixed = null } = {}) {
     if (!settings.value.display.autoShift) return []
     const hypothetical = itemList.value.map((item) => (changes.has(item.key) ? { ...item, ...changes.get(item.key) } : item))
     for (const [key, fields] of changes) {
@@ -572,15 +573,27 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         }
       }
     }
-    const shifts = computeDependencyShifts(hypothetical, { only })
-    return [...shifts].map(([key, dates]) => ({ op: 'item.update', key, fields: dates }))
+    const shifts = computeDependencyShifts(hypothetical, { only, fixed })
+    return [...shifts].map(([key, dates]) => {
+      const item = state.items[key]
+      const fields = { ...dates }
+      // Растянутая задача с окончанием «по длительности»: длительность — по новым срокам
+      if (fixed?.has(key) && item?.endMode === 'duration') {
+        fields.duration = item.durationType === 'working' ? calendar.value.countWorkingDays(dates.start, dates.end) : diffDays(dates.start, dates.end) + 1
+      }
+      return { op: 'item.update', key, fields }
+    })
   }
 
   function updateItem(key, fields, label = 'Изменение') {
     return updateItems([{ key, fields }], label)
   }
 
-  function updateItems(list, label = 'Изменение') {
+  /**
+   * keepFreeDates — даты строк из этой правки, которые связь не задаёт, не перезаписываются автосдвигом (перенос
+   * из Jira: срок последующей задачи — из Jira, начало — по связи). keepRedo — правка не по действию сотрудника.
+   */
+  function updateItems(list, label = 'Изменение', { keepFreeDates = false, keepRedo = false } = {}) {
     const ops = []
     const changes = new Map()
     for (const { key, fields } of list) {
@@ -603,7 +616,10 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       changes.set(key, { ...(changes.get(key) || {}), ...diff })
     }
     if (!ops.length) return
-    commit([...ops, ...cascadeOps(changes)], label)
+    const fixed = keepFreeDates
+      ? new Map([...changes].filter(([, f]) => 'start' in f || 'end' in f).map(([key, f]) => [key, { start: f.start, end: f.end }]))
+      : null
+    commit([...ops, ...cascadeOps(changes, { fixed })], label, { keepRedo })
   }
 
   function siblingsOf(parentKey) {

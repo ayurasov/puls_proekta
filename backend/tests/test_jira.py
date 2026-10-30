@@ -465,3 +465,16 @@ def test_v040_cloud_epic_is_parent():
     assert epic_key(story, {}) == "WEB-7"
     assert epic_key(subtask, {}) is None
     assert epic_key({"customfield_1": "abc-5"}, {"epicField": "customfield_1"}) == "ABC-5"
+
+
+def test_v040_review_milestone_and_group_return_jira_link(app, admin, jira):
+    """Ссылка вехи на Jira возвращалась только в /jira плана — клиент не считал веху связанной."""
+    _connect(admin)
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [
+        {"op": "item.create", "item": {"key": "m1", "type": "milestone", "name": "Релиз", "date": "2026-11-20",
+                                       "jiraUrl": f"{BASE}/browse/ABC-9"}},
+        {"op": "item.create", "item": {"key": "g1", "type": "group", "name": "Эпик", "jiraUrl": f"{BASE}/browse/ABC-8"}},
+    ])
+    items = {i["key"]: i for i in admin.get(f"/api/plans/{plan_id}").get_json()["items"]}
+    assert items["m1"]["jiraUrl"] == f"{BASE}/browse/ABC-9" and items["g1"]["jiraUrl"] == f"{BASE}/browse/ABC-8"

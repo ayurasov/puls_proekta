@@ -169,6 +169,14 @@ describe('группа «Тип и прочее» и «мои задачи»', (
     expect(myAssigneeKeys(ASSIGNEES, null).size).toBe(0)
   })
 
+  it('ревью 0.4.0: «Только вехи» — ограничение «и» и с исполнителем', () => {
+    const items = plan().map((i) => (i.key === 'M' ? { ...i, assigneeKey: 'a1', commentCount: 1 } : i))
+    expect(visible({ traits: ['milestones'], mine: true }, ctx(), items)).toBe('G,M')
+    expect(visible({ traits: ['milestones'], assignees: ['a1'] }, ctx(), items)).toBe('G,M')
+    // Вехи с комментариями, а не «вехи или строки с комментариями»
+    expect(visible({ traits: ['milestones', 'comments'] }, ctx(), items)).toBe('G,M')
+  })
+
   it('«мои задачи», если меня нет среди исполнителей, — ничего', () => {
     expect(visible({ mine: true }, ctx({ mine: new Set() }))).toBe('M2')
   })

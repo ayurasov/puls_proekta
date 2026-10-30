@@ -13,8 +13,12 @@ import { shiftedEnd } from './tree'
  *
  * only — сдвигать только эти задачи (зависящие от только что изменённых); остальные считаются
  * неподвижными. Задачи, чьи связи замкнуты в цикл, не сдвигаются: цикл сдвигал бы их бесконечно.
+ *
+ * fixed — Map(key → { start?, end? }): даты, заданные той же правкой (перенос из Jira), которые связь не
+ * определяет, — окончание при FS/SS, начало при FF/SF. Такая задача растягивается или сжимается, а не
+ * сдвигается целиком: иначе срок из Jira перезаписался бы сдвигом вслед за предшественником.
  */
-export function computeDependencyShifts(items, { maxLoops = 30, only = null } = {}) {
+export function computeDependencyShifts(items, { maxLoops = 30, only = null, fixed = null } = {}) {
   const byKey = new Map()
   for (const item of items) byKey.set(item.key, { ...item })
   const cyclic = cyclicKeys(byKey)
@@ -34,18 +38,21 @@ export function computeDependencyShifts(items, { maxLoops = 30, only = null } = 
       const dur = Math.max(1, diffDays(task.start, task.end) + 1)
       const lag = Number(task.dependencyLag || 0)
       const type = task.dependencyType || 'FS'
+      const pin = fixed?.get(task.key)
       let ns = task.start
       let ne = task.end
       if (type === 'FS') ns = addDays(de, 1 + lag)
       if (type === 'SS') ns = addDays(ds, lag)
-      if (type === 'FF') { ne = addDays(de, lag); ns = addDays(ne, -(dur - 1)) }
-      if (type === 'SF') { ne = addDays(ds, lag); ns = addDays(ne, -(dur - 1)) }
+      if (type === 'FF' || type === 'SF') {
+        ne = type === 'FF' ? addDays(de, lag) : addDays(ds, lag)
+        ns = pin?.start && pin.start <= ne ? pin.start : addDays(ne, -(dur - 1))
+      }
       const parent = task.parentKey ? byKey.get(task.parentKey) : null
       if (parent && parent.type === 'task' && parent.start && parent.end) {
         if (ns < parent.start) ns = parent.start
         if (ne > parent.end) ne = parent.end
       }
-      let end = type === 'FF' || type === 'SF' ? ne : addDays(ns, dur - 1)
+      let end = type === 'FF' || type === 'SF' ? ne : pin?.end && pin.end >= ns ? pin.end : addDays(ns, dur - 1)
       if (end < ns) {
         // FF/SF-подзадача упёрлась в окончание родителя: начало сдвигается назад, но не раньше родителя
         const back = addDays(end, -(dur - 1))

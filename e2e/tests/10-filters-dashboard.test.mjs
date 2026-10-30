@@ -124,6 +124,17 @@ test('сохранённый фильтр: сохранить, применит�
   await closeFilters()
 })
 
+test('ревью 0.4.0: окно фильтров с клавиатуры — фокус внутри, Esc возвращает его на кнопку', async () => {
+  const button = page.locator('.toolbar button', { hasText: 'Фильтры' })
+  await button.focus()
+  await page.keyboard.press('Enter')
+  await page.locator('.menu .filters').waitFor()
+  await page.waitForFunction(() => document.querySelector('.menu')?.contains(document.activeElement))
+  await page.keyboard.press('Escape')
+  await page.locator('.menu .filters').waitFor({ state: 'detached' })
+  assert.equal(await page.evaluate(() => document.activeElement?.textContent?.includes('Фильтры')), true)
+})
+
 test('экспорт CSV — с действующими фильтрами', async () => {
   // Отметки «Мои задачи» и «Просрочены» остались от сохранённого фильтра
   assert.deepEqual(await chips(), ['Мои задачи', 'Просрочены'])

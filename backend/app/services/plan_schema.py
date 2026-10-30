@@ -332,6 +332,8 @@ def item_to_api(item):
             "comment": item.comment,
             "lineStyle": item.line_style or "dashed",
             "lineColor": item.line_color or item.color,
+            # Веха может быть связана с задачей Jira: её срок — дата вехи (сверка и автоперенос)
+            "jiraUrl": item.jira_url,
         })
     elif item.type == "group":
         # Группа может быть эпиком Jira («Задачи из Jira» группами по эпикам)

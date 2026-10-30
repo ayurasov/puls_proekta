@@ -358,6 +358,8 @@ function duplicate() {
 
       <!-- Веха -->
       <template v-if="item.type === 'milestone'">
+        <!-- Веха, связанная с задачей Jira: срок задачи — дата вехи -->
+        <JiraIssueCard v-if="jira.keyFor(item)" :item="item" />
         <section class="sec">
           <div class="sec-head"><span class="sec-title">Параметры вехи</span></div>
           <div class="sec-card">
@@ -440,7 +442,8 @@ function duplicate() {
         </div>
       </section>
 
-      <section v-if="item.type === 'task'" class="sec">
+      <!-- Задача, веха (срок) или группа (эпик) могут быть связаны с задачей Jira -->
+      <section class="sec">
         <div class="sec-head"><span class="sec-title">Jira</span></div>
         <div class="sec-card">
           <label class="field">

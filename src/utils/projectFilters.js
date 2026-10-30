@@ -50,10 +50,14 @@ export function projectState(project) {
   return 'ontrack'
 }
 
-/** «Мои» — проекты, которые сотрудник создал или может редактировать. */
+/**
+ * «Мои» — проекты, которые сотрудник создал или может редактировать. Администратор может редактировать всё,
+ * поэтому для него «Мои» — созданные им.
+ */
 export function isMyProject(project, user) {
   if (!user) return false
-  return project.createdById === user.id || ['edit', 'manage'].includes(project.access)
+  if (project.createdById === user.id) return true
+  return user.role !== 'admin' && ['edit', 'manage'].includes(project.access)
 }
 
 /** Направление группы на главной (null — «Без направления») подходит под выбранное. */

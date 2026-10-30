@@ -29,6 +29,10 @@ describe('фильтры главной', () => {
     const me = { id: 7 }
     expect(isMyProject(project(1, 'А', null, { createdById: 7 }), me)).toBe(true)
     expect(isMyProject(project(1, 'А', null, { access: 'edit' }), me)).toBe(true)
+    // Администратор правит всё — для него «Мои» только созданные им
+    const admin = { ...me, role: 'admin' }
+    expect(isMyProject(project(1, 'А', null, { access: 'manage' }), admin)).toBe(false)
+    expect(isMyProject(project(1, 'А', null, { access: 'manage', createdById: me.id }), admin)).toBe(true)
     expect(isMyProject(project(1, 'А', null, { access: 'manage' }), me)).toBe(true)
     expect(isMyProject(project(1, 'А'), me)).toBe(false)
     expect(isMyProject(project(1, 'А', null, { createdById: 7 }), null)).toBe(false)

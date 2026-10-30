@@ -208,3 +208,42 @@ describe('0.4.0: несколько строк одной правкой', () =>
     expect(keys.every((k) => !editor.state.items[k])).toBe(true)
   })
 })
+
+describe('0.4.0: перенос из Jira в цепочке связей', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
+  const chain = () => [
+    { ...task('a', 'A'), start: '2026-11-02', end: '2026-11-06' },
+    { ...task('b', 'B'), start: '2026-11-09', end: '2026-11-13', dependencyKey: 'a', dependencyType: 'FS' },
+    { ...task('c', 'C'), start: '2026-11-16', end: '2026-11-20', dependencyKey: 'b', dependencyType: 'FS' },
+  ]
+
+  it('срок последующей задачи из Jira не перезаписывается сдвигом за предшественником', async () => {
+    const editor = await openEditor(chain())
+    editor.updateItems([
+      { key: 'a', fields: { start: '2026-11-02', end: '2026-11-10' } },
+      { key: 'b', fields: { start: '2026-11-09', end: '2026-11-20' } },
+    ], 'Из Jira', { keepFreeDates: true })
+    expect([editor.state.items.b.start, editor.state.items.b.end]).toEqual(['2026-11-11', '2026-11-20'])
+    // Следующая по цепочке — сдвигается от нового окончания B, длительность сохраняется
+    expect([editor.state.items.c.start, editor.state.items.c.end]).toEqual(['2026-11-21', '2026-11-25'])
+  })
+
+  it('обычная правка сдвигает последующую задачу целиком, как раньше', async () => {
+    const editor = await openEditor(chain())
+    editor.updateItems([{ key: 'a', fields: { end: '2026-11-10' } }, { key: 'b', fields: { end: '2026-11-20' } }], 'Правка')
+    expect([editor.state.items.b.start, editor.state.items.b.end]).toEqual(['2026-11-11', '2026-11-22'])
+  })
+
+  it('автоперенос не отнимает «Повторить»', async () => {
+    const editor = await openEditor(chain())
+    editor.updateItem('c', { name: 'C2' }, 'Переименование')
+    editor.undo()
+    expect(editor.state.redo).toHaveLength(1)
+    editor.updateItems([{ key: 'a', fields: { progress: 30 } }], 'Из Jira автоматически (1)', { keepRedo: true })
+    expect(editor.state.redo).toHaveLength(1)
+    editor.updateItems([{ key: 'a', fields: { progress: 40 } }], 'Правка')
+    expect(editor.state.redo).toHaveLength(0)
+  })
+})

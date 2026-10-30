@@ -222,5 +222,19 @@ function add() {
 .key { font-weight: 700; font-size: 12px; color: #0052cc; }
 .due { text-align: right; }
 .place { margin-top: 12px; max-width: 360px; }
+/* Телефон: строка задачи в две строки — ключ, статус и срок сверху, название с эпиком снизу */
+@media (max-width: 768px) {
+  .issue {
+    grid-template-columns: 18px auto minmax(0, 1fr) auto;
+    grid-template-areas: "check key status due" "check summary summary summary" "check badge badge badge";
+    row-gap: 2px;
+  }
+  .issue > input { grid-area: check; }
+  .issue .key { grid-area: key; }
+  .issue .summary-cell { grid-area: summary; }
+  .issue .jira-status { grid-area: status; justify-self: start; }
+  .issue .due { grid-area: due; }
+  .issue .badge { grid-area: badge; justify-self: start; }
+}
 .auto-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; cursor: pointer; }
 </style>

@@ -131,12 +131,14 @@ function matchesTrait(item, option, env) {
 
 const TESTS = {
   statuses: (item, value) => item.type === 'task' && (item.status || 'new') === value,
-  assignees: (item, value) => item.type === 'task' && (item.assigneeKey || NONE) === value,
+  // Исполнитель есть и у вех: «Только вехи» + исполнитель или «Только мои» — вехи этого исполнителя
+  assignees: (item, value) => (item.type === 'task' || item.type === 'milestone') && (item.assigneeKey || NONE) === value,
   categories: (item, value) => item.type === 'task' && (item.category || NONE) === value,
   dates: (item, value, env) => matchesDate(item, value, env),
   jira: (item, value, env) => matchesJira(item, value, env.jira),
   traits: (item, value, env) => matchesTrait(item, value, env),
-  mine: (item, _value, env) => item.type === 'task' && Boolean(item.assigneeKey) && Boolean(env.mine?.has(item.assigneeKey)),
+  mine: (item, _value, env) => (item.type === 'task' || item.type === 'milestone') && Boolean(item.assigneeKey)
+    && Boolean(env.mine?.has(item.assigneeKey)),
 }
 
 /** Задачи со связью «предшественник» — и ведомые, и их предшественники. */
@@ -174,12 +176,16 @@ function compile(filters, ctx, items) {
   if (!conditions.length) return null
   const wantsLinks = conditions.some((c) => c.group === 'traits' && c.values.includes('dependencies'))
   const env = { ...ctx, filters, linked: wantsLinks ? dependencyKeys(items) : null }
-  // «Только вехи»: вехи отбираются условиями наравне с задачами (у вех нет статуса, исполнителя и т. п.)
+  // «Только вехи» — ограничение «и», а не одно из «или» группы «Тип и прочее»: отбираются только вехи, и к ним
+  // применяются остальные условия (вехи с комментариями, вехи исполнителя)
   const milestones = conditions.some((c) => c.group === 'traits' && c.values.includes('milestones'))
+  const rest = milestones
+    ? conditions.map((c) => (c.group === 'traits' ? { ...c, values: c.values.filter((v) => v !== 'milestones') } : c)).filter((c) => c.values.length)
+    : conditions
   return {
     milestones,
-    test: (item) => (item.type === 'task' || (milestones && item.type === 'milestone'))
-      && conditions.every(({ group, values }) => values.some((value) => TESTS[group](item, value, env))),
+    test: (item) => item.type === (milestones ? 'milestone' : 'task')
+      && rest.every(({ group, values }) => values.some((value) => TESTS[group](item, value, env))),
   }
 }
 

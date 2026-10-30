@@ -260,7 +260,7 @@ function onDragEnd() {
       </select>
       <button
         class="btn" :class="{ 'is-active': filters.mine }" type="button" :aria-pressed="filters.mine"
-        title="Проекты, которые вы создали или можете редактировать" data-testid="filter-mine-projects" @click="filters.mine = !filters.mine"
+        :title="auth.isAdmin ? 'Проекты, которые вы создали' : 'Проекты, которые вы создали или можете редактировать'" data-testid="filter-mine-projects" @click="filters.mine = !filters.mine"
       >
         <AppIcon name="users" :size="15" /> Мои
       </button>
