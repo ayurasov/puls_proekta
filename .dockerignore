@@ -3,8 +3,10 @@ dist
 backend
 legacy
 docs
-# Руководство пользователя открывается из приложения (/user-guide.pdf)
+# Файлы docs, которые нужны клиенту при сборке (проверяет src/__tests__/dockerContext.test.js):
+# руководство пользователя (/user-guide.pdf) и история версий для окна «Что нового»
 !docs/manuals/user-guide.pdf
+!docs/versions.md
 e2e
 .git
 *.log
