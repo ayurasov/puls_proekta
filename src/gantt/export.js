@@ -198,7 +198,7 @@ function csvCell(value) {
 export function buildCsv(editor) {
   const assignee = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
   const header = ['Уровень', 'Тип', 'Название', 'Статус', 'Начало', 'Окончание', 'Длительность, дн.', 'Прогресс, %', 'Сдвиг, дн.',
-    'Дата завершения', 'Ответственный', 'Категория', 'Предшественник', 'Тип связи', 'Лаг, дн.', 'Jira', 'Комментариев']
+    'Дата завершения', 'Исполнитель', 'Категория', 'Предшественник', 'Тип связи', 'Лаг, дн.', 'Jira', 'Комментариев']
   const lines = [header.map(csvCell).join(';')]
   const types = { task: 'Задача', milestone: 'Веха', group: 'Группа' }
   for (const { item, depth } of editor.visibleRows) {

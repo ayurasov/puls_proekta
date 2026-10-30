@@ -206,7 +206,7 @@ function toggleColumn(column) {
 
     <PopupMenu v-if="menu?.type === 'view'" :anchor="menu.anchor" align="end" @close="menu = null">
       <div class="menu-label">Колонки слева</div>
-      <label v-for="(label, column) in { start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Ответственный', progress: 'Прогресс' }" :key="column" class="menu-item">
+      <label v-for="(label, column) in { start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Исполнитель', progress: 'Прогресс' }" :key="column" class="menu-item">
         <input type="checkbox" :checked="view.columns[column]" @change="toggleColumn(column)" /> {{ label }}
       </label>
       <div class="menu-separator" />

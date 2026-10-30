@@ -440,7 +440,7 @@ function onBarUp(event) {
   } else if (d.kind === 'milestone') {
     editor.updateItem(d.key, finalPreview[d.key], `Сдвиг вехи «${item.name}»`)
   } else if (d.kind === 'group') {
-    editor.updateItems(Object.entries(finalPreview).map(([key, fields]) => ({ key, fields })), `Сдвиг группы «${item.name}» на ${d.delta > 0 ? '+' : ''}${d.delta} д`)
+    editor.updateItems(Object.entries(finalPreview).map(([key, fields]) => ({ key, fields })), `Сдвиг группы «${item.name}» на ${d.delta > 0 ? '+' : ''}${d.delta} дн.`)
   }
 }
 
@@ -468,26 +468,26 @@ const tooltipData = computed(() => {
   if (item.type === 'task') {
     if (fields.includes('status')) rowsOut.push(['Статус', STATUS_BY_KEY[item.status || 'new'].label, STATUS_BY_KEY[item.status || 'new'].text])
     if (fields.includes('dates')) {
-      rowsOut.push(['Срок', `${formatDay(item.start)} — ${formatDay(item.end)} (${diffDays(item.start, item.end) + 1} д)`])
-      if (item.offset) rowsOut.push(['Сдвиг', `${item.offset > 0 ? '+' : ''}${item.offset} д, до ${formatDay(addDays(item.end, item.offset))}`])
+      rowsOut.push(['Срок', `${formatDay(item.start)} — ${formatDay(item.end)} (${diffDays(item.start, item.end) + 1} дн.)`])
+      if (item.offset) rowsOut.push(['Сдвиг', `${item.offset > 0 ? '+' : ''}${item.offset} дн., до ${formatDay(addDays(item.end, item.offset))}`])
       if (item.completedDate) rowsOut.push(['Завершена', formatDay(item.completedDate)])
     }
     if (fields.includes('progress') && item.progress) rowsOut.push(['Прогресс', `${item.progress}%`])
     if (fields.includes('dependency') && item.dependencyKey && editor.source.items[item.dependencyKey]) {
       rowsOut.push(['Зависит от', editor.source.items[item.dependencyKey].name])
     }
-    if (fields.includes('assignee') && item.assigneeKey) rowsOut.push(['Ответственный', assigneeName(item.assigneeKey)])
+    if (fields.includes('assignee') && item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
     if (item.category) rowsOut.push(['Категория', item.category])
   } else if (item.type === 'milestone') {
     rowsOut.push(['Дата', formatDay(item.date)])
     if (item.comment) rowsOut.push(['Комментарий', item.comment])
-    if (item.assigneeKey) rowsOut.push(['Ответственный', assigneeName(item.assigneeKey)])
+    if (item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
   } else {
     const model = models.value.find((m) => m.key === item.key)
     if (model?.group) {
       rowsOut.push(['Сроки', model.group.label])
       rowsOut.push(['Задач', `${model.group.count}, завершено ${model.group.done}`])
-      if (model.group.offset) rowsOut.push(['Сдвиг', `${model.group.offset > 0 ? '+' : ''}${model.group.offset} д`])
+      if (model.group.offset) rowsOut.push(['Сдвиг', `${model.group.offset > 0 ? '+' : ''}${model.group.offset} дн.`])
     }
   }
   if (fields.includes('lastChange') && item.updatedAt) {
@@ -579,7 +579,7 @@ function noteLabel(note) {
                 <span class="muted small">{{ countLabel(rows.length, 'строка', 'строки', 'строк') }}</span>
               </div>
               <div v-for="col in columns" :key="col.key" class="col-head" :style="{ width: col.width + 'px' }">
-                {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Ответственный', progress: '%' }[col.key] }}
+                {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Исполнитель', progress: '%' }[col.key] }}
               </div>
             </div>
             <div class="resizer" title="Ширина колонки: перетащите; двойной щелчок — по самому длинному названию" @pointerdown="startResize" @dblclick="autoFitNameColumn" />

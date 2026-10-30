@@ -365,7 +365,7 @@ def add_comment(plan_id, item_key):
                           text=text, reply_to_id=payload.replyToId)
     db.session.add(comment)
     db.session.flush()
-    _bump_comment_count(plan, item_key, user, f"Комментарий к «{item.name}»: {text[:200]}")
+    _bump_comment_count(plan, item_key, user, f"Комментарий к задаче «{item.name}»: {text[:200]}")
     db.session.commit()
     return jsonify({"comment": _comment(comment, {user.id: user_public(user)}), "revision": plan.revision,
                     "commentCount": item.comment_count}), 201

@@ -49,7 +49,7 @@ function select(key) {
         </dl>
         <template v-if="stats.topShifted.length">
           <div class="muted small sub">Больше всего сдвинуты</div>
-          <button v-for="t in stats.topShifted" :key="t.key" class="link-row" type="button" @click="select(t.key)"><b class="bad">+{{ t.offset }} д</b> {{ t.name }}</button>
+          <button v-for="t in stats.topShifted" :key="t.key" class="link-row" type="button" @click="select(t.key)"><b class="bad">+{{ t.offset }} дн.</b> {{ t.name }}</button>
         </template>
       </section>
       <section>

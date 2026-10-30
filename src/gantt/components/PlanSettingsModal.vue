@@ -44,7 +44,7 @@ function fitRange() {
 function setToday(fields) {
   patch({ today: { ...s.value.today, ...fields } }, 'Линия «сегодня»')
 }
-const TOOLTIP = { status: 'Статус', dates: 'Сроки и сдвиг', progress: 'Прогресс', dependency: 'Предшественник', assignee: 'Ответственный', lastChange: 'Последнее изменение' }
+const TOOLTIP = { status: 'Статус', dates: 'Сроки и сдвиг', progress: 'Прогресс', dependency: 'Предшественник', assignee: 'Исполнитель', lastChange: 'Последнее изменение' }
 function toggleTooltip(field) {
   const list = [...(d.value.tooltipFields || [])]
   const i = list.indexOf(field)
@@ -94,7 +94,7 @@ function saveDefaultView() {
           <label class="field">
             <span class="field-label">Линия</span>
             <select class="select" :value="s.today?.style || 'dashed'" :disabled="readonly" @change="setToday({ style: $event.target.value })">
-              <option value="dashed">Пунктир</option><option value="solid">Сплошная</option><option value="dotted">Точки</option>
+              <option value="dashed">Пунктирная</option><option value="solid">Сплошная</option><option value="dotted">Точечная</option>
             </select>
           </label>
           <div class="field"><span class="field-label">Цвет</span><ColorPicker :model-value="s.today?.color || 'red'" :disabled="readonly" @update:model-value="(c) => setToday({ color: c })" /></div>
@@ -116,7 +116,7 @@ function saveDefaultView() {
         <label class="switch"><input type="checkbox" :checked="d.showWeekends" :disabled="readonly" @change="toggle('showWeekends')" /><span class="switch-track" />Выделять выходные</label>
         <label class="switch"><input type="checkbox" :checked="d.showHolidays" :disabled="readonly" @change="toggle('showHolidays')" /><span class="switch-track" />Выделять праздники</label>
         <label class="switch"><input type="checkbox" :checked="d.autoShift" :disabled="readonly" @change="toggle('autoShift')" /><span class="switch-track" />Автосдвиг задач по связям</label>
-        <p class="muted small">Праздники и переносы — по календарю администратора (Настройки → Календарь).</p>
+        <p class="muted small">Праздники и переносы — по календарю администратора (Настройки → Производственный календарь).</p>
       </section>
       <section>
         <h3>Легенда</h3>

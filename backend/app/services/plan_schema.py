@@ -202,7 +202,7 @@ FIELD_LABELS = {
     "end": "Окончание", "date": "Дата", "endMode": "Режим завершения", "duration": "Длительность",
     "durationType": "Тип дней", "progress": "Прогресс", "offset": "Сдвиг", "completedDate": "Дата завершения",
     "dependencyKey": "Предшественник", "dependencyType": "Тип связи", "dependencyLag": "Лаг связи",
-    "assigneeKey": "Ответственный", "category": "Категория", "color": "Цвет", "barText": "Текст на полосе",
+    "assigneeKey": "Исполнитель", "category": "Категория", "color": "Цвет", "barText": "Текст на полосе",
     "jiraUrl": "Ссылка Jira", "comment": "Комментарий", "lineStyle": "Стиль линии", "lineColor": "Цвет линии",
 }
 

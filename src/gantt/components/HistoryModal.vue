@@ -23,7 +23,7 @@ const snapshots = ref([])
 const loading = ref(false)
 const userFilter = ref('')
 
-const REASONS = { auto: 'Автосохранение', manual: 'Сохранённая версия', before_restore: 'Перед восстановлением', legacy_import: 'Перенос из 1.0.1', before_import: 'Перед импортом' }
+const REASONS = { auto: 'Автосохранение', manual: 'Сохранённая версия', before_restore: 'Перед восстановлением', legacy_import: 'При переносе из прежней версии', before_import: 'Перед импортом' }
 const ACTION_ICONS = { create: 'plus', update: 'edit', delete: 'trash', restore: 'undo', comment: 'message', legacy: 'history', archive: 'archive', unarchive: 'unarchive', import: 'upload', restore_snapshot: 'history' }
 const users = computed(() => [...new Set(events.value.map((e) => e.userName).filter(Boolean))].sort())
 const filtered = computed(() => (userFilter.value ? events.value.filter((e) => e.userName === userFilter.value) : events.value))
@@ -129,7 +129,7 @@ async function restore(snap) {
           <div class="event-main">
             <div v-if="event.action === 'legacy' && rowName(event)" class="target">{{ rowName(event) }}</div>
             <div class="summary">{{ event.summary }}</div>
-            <div class="muted small">{{ event.userName || 'система' }} · {{ formatDateTime(event.createdAt) }}<span v-if="event.action === 'legacy'"> · из 1.0</span></div>
+            <div class="muted small">{{ event.userName || 'система' }} · {{ formatDateTime(event.createdAt) }}<span v-if="event.action === 'legacy'" title="Запись перенесена из прежней версии «Пульса Проекта»"> · до переноса</span></div>
           </div>
         </div>
       </div>

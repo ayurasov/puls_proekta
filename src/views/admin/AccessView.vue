@@ -163,7 +163,7 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
         <button class="btn btn-primary" type="button" :disabled="!grantCount || busy" @click="grant">
           Выдать доступ ({{ selected.users.size }} × {{ selected.projects.size + selected.directions.size }})
         </button>
-        <p class="muted small">Повторная выдача не создаёт дублей (в 1.0 одинаковые правила копились).</p>
+        <p class="muted small">Повторная выдача не создаёт дублей.</p>
       </section>
     </div>
 
