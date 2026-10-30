@@ -4,6 +4,8 @@ import AppIcon from '../../components/common/AppIcon.vue'
 import ColorPicker from './ColorPicker.vue'
 import ItemComments from './ItemComments.vue'
 import ItemHistory from './ItemHistory.vue'
+import JiraIssueCard from './JiraIssueCard.vue'
+import { issueKeyFromUrl, jiraLinkFromInput } from '../jira'
 import { STATUSES, DEPENDENCY_TYPES } from '../domain/colors'
 import { addDays, diffDays, formatDay } from '../domain/dates'
 import { resolveEnd } from '../domain/calendar'
@@ -17,6 +19,7 @@ const props = defineProps({ item: { type: Object, required: true } })
 const emit = defineEmits(['close'])
 const editor = inject('gantt')
 const actions = inject('ganttActions')
+const jira = inject('jira')
 const { prompt } = useDialogs()
 const ui = useUiStore()
 const tab = ref('main')
@@ -38,8 +41,16 @@ function commitText(field) {
   focused.value = null
   const value = drafts[field].trim()
   if (field === 'name' && !value) { drafts.name = item.value.name; return }
-  if (field === 'jiraUrl' && value && !/^https?:\/\/\S+$/i.test(value)) {
-    ui.error('Ссылка должна начинаться с http:// или https://')
+  if (field === 'jiraUrl') {
+    // Ключ задачи (ABC-123) превращается в ссылку на подключённую Jira
+    const link = jiraLinkFromInput(value, jira.state.baseUrl)
+    if (link.error) { ui.error(link.error); return }
+    drafts.jiraUrl = link.url || ''
+    if ((item.value.jiraUrl || '') !== (link.url || '')) {
+      save({ jiraUrl: link.url }, link.url ? 'Задача в Jira' : 'Отвязка от Jira')
+      const key = issueKeyFromUrl(link.url, jira.state.baseUrl)
+      if (key) jira.fetchKeys([key])
+    }
     return
   }
   if ((item.value[field] || '') !== value) save({ [field]: value || null })
@@ -177,6 +188,7 @@ function duplicate() {
           <input class="input" type="date" :value="item.completedDate || item.end" :disabled="readonly" @change="setCompletedDate($event.target.value)" />
           <span class="field-hint">Сдвиг считается от планового окончания: {{ item.offset > 0 ? '+' : '' }}{{ item.offset || 0 }} д</span>
         </label>
+        <JiraIssueCard v-if="jira.keyFor(item)" :item="item" />
 
         <div class="form-grid">
           <label class="field">
@@ -334,9 +346,10 @@ function duplicate() {
         <label class="field">
           <span class="field-label">Задача в Jira</span>
           <span class="with-action">
-            <input v-model="drafts.jiraUrl" class="input" type="url" :readonly="readonly" maxlength="2000" placeholder="https://jira.example.com/browse/PROJ-123"
+            <input v-model="drafts.jiraUrl" class="input" :readonly="readonly" maxlength="2000" data-testid="item-jira"
+                   :placeholder="jira.state.connected ? 'ABC-123 или ссылка на задачу' : 'https://jira.example.com/browse/PROJ-123'"
                    @focus="focused = 'jiraUrl'" @blur="commitText('jiraUrl')" @keydown.enter.prevent="$event.target.blur()" />
-            <a v-if="item.jiraUrl" class="btn btn-icon" :href="item.jiraUrl" target="_blank" rel="noopener noreferrer" title="Открыть"><AppIcon name="external" :size="15" /></a>
+            <a v-if="item.jiraUrl" class="btn btn-icon" :href="item.jiraUrl" target="_blank" rel="noopener noreferrer" title="Открыть в Jira"><AppIcon name="external" :size="15" /></a>
           </span>
         </label>
       </template>

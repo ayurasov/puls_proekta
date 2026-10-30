@@ -178,3 +178,9 @@ h1, h2, h3, h4 { margin: 0; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- Jira: статус задачи (цвета категорий как в Jira) ---------- */
+.jira-status { display: inline-flex; align-items: center; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; white-space: nowrap; max-width: 160px; overflow: hidden; text-overflow: ellipsis; }
+.jira-status.cat-new { background: #e9ebef; color: #44546f; }
+.jira-status.cat-indeterminate { background: #e9f2ff; color: #0055cc; }
+.jira-status.cat-done { background: #dcfff1; color: #216e4e; }

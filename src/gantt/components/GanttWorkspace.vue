@@ -5,6 +5,7 @@ import { useUiStore } from '../../stores/ui'
 import { useDirectoryStore } from '../../stores/directory'
 import { useDialogs } from '../../composables/useDialogs'
 import { createPlanEditor } from '../editor'
+import { createJira } from '../jira'
 import { computeDependencyShifts } from '../domain/dependencies'
 import { descendantKeys } from '../domain/tree'
 import { formatRelative } from '../../utils/format'
@@ -19,6 +20,8 @@ import StatsModal from './StatsModal.vue'
 import HistoryModal from './HistoryModal.vue'
 import CompletionDialog from './CompletionDialog.vue'
 import NoteEditor from './NoteEditor.vue'
+import JiraSyncModal from './JiraSyncModal.vue'
+import JiraImportModal from './JiraImportModal.vue'
 
 const props = defineProps({
   planId: { type: Number, required: true },
@@ -35,6 +38,8 @@ const editor = createPlanEditor({
   onRemoteChange: () => {},
 })
 provide('gantt', editor)
+const jira = createJira(editor, ui)
+provide('jira', jira)
 defineExpose({ editor })
 
 const chart = ref(null)
@@ -54,6 +59,7 @@ onMounted(async () => {
     await editor.load()
     editor.start()
     chart.value?.scrollToToday({ initial: true })
+    jira.init()
   } catch {
     /* сообщение показывает шаблон */
   }
@@ -67,6 +73,10 @@ onBeforeUnmount(() => {
 })
 
 watch(() => state.plan?.title, (title, old) => { if (old && title !== old) emit('plan-meta') })
+// Коллега привязал строку к задаче Jira — подгружаем её, не дожидаясь обновления всего плана
+watch(() => (jira.state.loaded ? jira.linkedItems().map((item) => jira.keyFor(item)).join(' ') : ''), (keys) => {
+  if (keys) jira.fetchKeys(keys.split(' '))
+})
 
 const saveStatus = computed(() => {
   void savedTick.value
@@ -260,6 +270,8 @@ provide('ganttActions', actions)
   <HistoryModal v-if="modal?.name === 'history'" :plan-id="planId" :initial="modal.payload" @close="modal = null" @restored="editor.load({ keepView: true, resetHistory: true })" />
   <CompletionDialog v-if="completion" :item="completion.item" :today="state.today" @cancel="completion = null" @confirm="applyCompletion" />
   <NoteEditor v-if="noteEditor" v-bind="noteEditor" @close="noteEditor = null" />
+  <JiraSyncModal v-if="modal?.name === 'jira-sync'" @close="modal = null" />
+  <JiraImportModal v-if="modal?.name === 'jira-import'" @close="modal = null" />
 </template>
 
 <style scoped>

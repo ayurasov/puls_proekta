@@ -41,6 +41,7 @@ const adminLinks = [
   { to: '/admin/access', icon: 'shield', label: 'Доступы' },
   { to: '/admin/audit', icon: 'history', label: 'Реестр изменений' },
   { to: '/admin/trash', icon: 'trash', label: 'Корзина' },
+  { to: '/admin/integrations', icon: 'link', label: 'Интеграции' },
   { to: '/admin/settings', icon: 'settings', label: 'Настройки' },
 ]
 

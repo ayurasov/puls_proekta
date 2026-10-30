@@ -14,6 +14,7 @@ const routes = [
   { path: '/admin/access', name: 'admin-access', component: () => import('../views/admin/AccessView.vue'), meta: { admin: true, title: 'Доступы' } },
   { path: '/admin/audit', name: 'admin-audit', component: () => import('../views/admin/AuditView.vue'), meta: { admin: true, title: 'Реестр изменений' } },
   { path: '/admin/settings', name: 'admin-settings', component: () => import('../views/admin/SettingsView.vue'), meta: { admin: true, title: 'Настройки' } },
+  { path: '/admin/integrations', name: 'admin-integrations', component: () => import('../views/admin/IntegrationsView.vue'), meta: { admin: true, title: 'Интеграции' } },
   { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { admin: true, title: 'Корзина' } },
   { path: '/about', name: 'about', component: () => import('../views/AboutView.vue'), meta: { title: 'О программе' } },
   { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../views/NotFoundView.vue'), meta: { title: 'Не найдено' } },

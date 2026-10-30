@@ -16,7 +16,7 @@ import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree
 import { hasActiveFilters, visibilityPredicate } from './domain/filters'
 import { computeDependencyShifts } from './domain/dependencies'
 import { createCalendar } from './domain/calendar'
-import { insertPosition } from './domain/positions'
+import { STEP, insertPosition } from './domain/positions'
 import { addDays, diffDays, todayLocal } from './domain/dates'
 import { localStorageGet, localStorageSet } from '../stores/ui'
 
@@ -95,7 +95,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     view: {
       scale: 'day', zoom: 1, gridWidth: 300, collapsed: new Set(), search: '',
       categories: new Set(), statuses: new Set(), assignees: new Set(),
-      selectedKey: null, panelKey: null, columns: { start: false, end: false, duration: false, assignee: false, progress: false },
+      selectedKey: null, panelKey: null, columns: { start: false, end: false, duration: false, assignee: false, progress: false, jira: false },
     },
     previewSnapshot: null,
   })
@@ -580,16 +580,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     return { start: begin, end: addDays(begin, 4) }
   }
 
-  /** Создать строку; возвращает её ключ. Вставляется после afterKey (среди тех же братьев). */
-  function createItem(type, data = {}, { afterKey = null, parentKey = undefined, label } = {}) {
-    let parent = parentKey
-    if (parent === undefined) {
-      const after = afterKey ? state.items[afterKey] : null
-      parent = after ? (after.parentKey && state.items[after.parentKey] ? after.parentKey : null) : null
-    }
-    const key = randomKey('i')
-    const { position, renumber } = nextPosition(parent, afterKey)
-    const ops = renumber.map((r) => ({ op: 'item.update', key: r.key, fields: { position: r.position } }))
+  /** Новая строка со значениями по умолчанию для своего типа. */
+  function newItem(type, data, key, parent, position) {
     const item = { key, type, parentKey: parent || null, position, ...data }
     if (type === 'task') {
       Object.assign(item, {
@@ -604,10 +596,38 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       Object.assign(item, { color: 'slate', ...data })
     }
     item.name = (item.name || '').trim() || { task: 'Новая задача', milestone: 'Новая веха', group: 'Новая группа' }[type]
+    return item
+  }
+
+  /** Создать строку; возвращает её ключ. Вставляется после afterKey (среди тех же братьев). */
+  function createItem(type, data = {}, { afterKey = null, parentKey = undefined, label } = {}) {
+    let parent = parentKey
+    if (parent === undefined) {
+      const after = afterKey ? state.items[afterKey] : null
+      parent = after ? (after.parentKey && state.items[after.parentKey] ? after.parentKey : null) : null
+    }
+    const key = randomKey('i')
+    const { position, renumber } = nextPosition(parent, afterKey)
+    const ops = renumber.map((r) => ({ op: 'item.update', key: r.key, fields: { position: r.position } }))
+    const item = newItem(type, data, key, parent, position)
     ops.push({ op: 'item.create', item })
     const changes = new Map([[key, item]])
     commit([...ops, ...(type === 'task' && item.dependencyKey ? cascadeOps(changes) : [])], label || { task: 'Новая задача', milestone: 'Новая веха', group: 'Новая группа' }[type])
     return key
+  }
+
+  /** Несколько строк в конец родителя одной правкой (отменяется целиком); возвращает их ключи. */
+  function createItems(list, { parentKey = null, label = 'Новые строки' } = {}) {
+    const siblings = siblingsOf(parentKey)
+    let position = siblings.length ? siblings[siblings.length - 1].position : 0
+    const keys = []
+    const ops = list.map(({ type, data }) => {
+      position += STEP
+      const key = randomKey('i')
+      keys.push(key)
+      return { op: 'item.create', item: newItem(type, data || {}, key, parentKey, position) }
+    })
+    return commit(ops, label) ? keys : []
   }
 
   function duplicateItem(key, { shiftDays = 0 } = {}) {
@@ -772,7 +792,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     state, settings, range, canEdit, itemList, index, calendar, visibleRows, filtersActive, assigneeList, noteList,
     todayMarker, pendingCount, categories, source,
     load, start, stop, flushNow, poll, saveView,
-    commit, undo, redo, updateItem, updateItems, createItem, duplicateItem, deleteItems, moveItem, setStatus,
+    commit, undo, redo, updateItem, updateItems, createItem, createItems, duplicateItem, deleteItems, moveItem, setStatus,
     createNote, updateNote, deleteNote, createAssignee, updateAssignee, deleteAssignee, updatePlan,
     select, toggleCollapse, collapseAll, revealItem, cascadeOps,
   })
