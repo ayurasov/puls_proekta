@@ -8,6 +8,7 @@ import { createPlanEditor } from '../editor'
 import { computeDependencyShifts } from '../domain/dependencies'
 import { descendantKeys } from '../domain/tree'
 import { formatRelative } from '../../utils/format'
+import { isUndoRedo, keyContext } from '../keyboard'
 import AppIcon from '../../components/common/AppIcon.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
 import GanttToolbar from './GanttToolbar.vue'
@@ -143,32 +144,28 @@ function openNoteEditor(payload) {
   noteEditor.value = payload
 }
 
-function isTyping(event) {
-  const t = event.target
-  return t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
-}
-
 function onKeydown(event) {
-  if (document.querySelector('.modal-overlay')) return
-  const mod = event.ctrlKey || event.metaKey
-  if (mod && event.key.toLowerCase() === 'z' && !isTyping(event)) {
+  // Клавишу уже обработал элемент (меню, поле, окно) или открыто окно — сочетания диаграммы молчат
+  if (event.defaultPrevented || document.querySelector('.modal-overlay')) return
+  const where = keyContext(event)
+  if (isUndoRedo(event) && where !== 'typing') {
     event.preventDefault()
-    if (event.shiftKey) editor.redo()
+    if (event.key.toLowerCase() === 'y' || event.shiftKey) editor.redo()
     else editor.undo()
     return
   }
-  if (mod && event.key.toLowerCase() === 'y' && !isTyping(event)) {
-    event.preventDefault()
-    editor.redo()
-    return
-  }
-  if (isTyping(event)) return
-  const selected = state.view.selectedKey
+  if (where === 'typing') return
   if (event.key === 'Escape') {
+    // Esc в карточке (на её кнопке) закрывает карточку; меню закрываются сами
+    if (where === 'owned' && !event.target.closest('.panel')) return
     if (state.view.panelKey) state.view.panelKey = null
     else state.view.selectedKey = null
     return
   }
+  // Enter и пробел на кнопке нажимают кнопку, стрелки в меню ходят по пунктам, Delete в карточке — не удаление строки
+  if (where !== 'free') return
+  const mod = event.ctrlKey || event.metaKey
+  const selected = state.view.selectedKey
   if (event.key === 'Insert' && editor.canEdit) { event.preventDefault(); toolbar.value?.addRow('task'); return }
   if (!selected) return
   if ((event.key === 'Delete') && editor.canEdit) { event.preventDefault(); deleteRows([selected]); return }

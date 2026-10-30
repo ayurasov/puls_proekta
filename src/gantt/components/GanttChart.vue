@@ -631,7 +631,7 @@ function noteLabel(note) {
               <div class="cell-name" :style="{ width: nameWidth + 'px' }">
                 <span v-if="editor.canEdit" class="handle" title="Перетащить" @pointerdown.stop="onHandleDown($event, row.item)"><AppIcon name="grip" :size="14" /></span>
                 <span class="indent" :style="{ width: row.depth * 16 + 'px' }" />
-                <button v-if="row.hasChildren" class="caret" type="button" :title="view.collapsed.has(row.item.key) && !editor.filtersActive ? 'Развернуть' : 'Свернуть'" @click.stop="editor.toggleCollapse(row.item.key)" @dblclick.stop>
+                <button v-if="row.hasChildren" class="caret" type="button" :title="view.collapsed.has(row.item.key) && !editor.filtersActive ? 'Развернуть' : 'Свернуть'" @mousedown.prevent @click.stop="editor.toggleCollapse(row.item.key)" @dblclick.stop>
                   <AppIcon :name="view.collapsed.has(row.item.key) && !editor.filtersActive ? 'chevronRight' : 'chevronDown'" :size="13" />
                 </button>
                 <span v-else class="caret-space" />
@@ -654,7 +654,7 @@ function noteLabel(note) {
                     </div>
                   </template>
                 </div>
-                <button class="open-btn" type="button" title="Открыть карточку" @click.stop="openPanel(row.item)"><AppIcon name="detail" :size="14" /></button>
+                <button class="open-btn" type="button" title="Открыть карточку (Enter)" @mousedown.prevent @click.stop="openPanel(row.item)"><AppIcon name="detail" :size="14" /></button>
               </div>
               <div v-for="col in columns" :key="col.key" class="cell" :style="{ width: col.width + 'px' }">{{ columnValue(row.item, col.key) }}</div>
             </div>
