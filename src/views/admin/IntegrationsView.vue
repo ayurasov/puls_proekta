@@ -106,7 +106,7 @@ function fieldLabel(id) { return fieldOptions.value.find((f) => f.id === id)?.na
       <div class="head">
         <span class="logo" aria-hidden="true"><AppIcon name="link" :size="18" /></span>
         <div>
-          <h2 class="section-title">Подключение к Jira</h2>
+          <h2 class="section-title">Подключение к Jira <HelpLink topic="admin-jira" /></h2>
           <p class="muted small">Одно подключение для всей системы. Учётная запись, от имени которой «Пульс» читает задачи, — лучше
             сервисная и только с правом просмотра нужных проектов: задачи, которые она видит, увидят все сотрудники с доступом к
             плану. Пароль или токен хранится на сервере зашифрованным и в интерфейс не возвращается.</p>

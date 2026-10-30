@@ -1,4 +1,5 @@
 <script setup>
+import HelpLink from '../common/HelpLink.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
@@ -76,7 +77,7 @@ async function disconnect() {
     <div class="head">
       <span class="logo" aria-hidden="true"><AppIcon name="checklist" :size="18" /></span>
       <div>
-        <h2 class="section-title">Подключение к «По Делу»</h2>
+        <h2 class="section-title">Подключение к «По Делу» <HelpLink topic="admin-podelu" /></h2>
         <p class="muted small">Одно подключение для всей системы. «Пульс» входит в «По Делу» сервисной учётной записью и забирает
           оттуда структуру компании и сотрудников, а в «Пульсе» появляются ссылки на подразделения и сотрудников в «По Делу».
           Пароль хранится на сервере зашифрованным и в интерфейс не возвращается; сотрудники видят только адрес «По Делу».</p>
