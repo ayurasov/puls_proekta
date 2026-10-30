@@ -94,11 +94,17 @@ async function exportCsv() {
 .audit-table { table-layout: fixed; min-width: 900px; }
 .audit-table th { white-space: normal; }
 .audit-table td { vertical-align: top; overflow-wrap: anywhere; }
-.w-date { width: 92px; } .w-user { width: 12%; } .w-project { width: 12%; } .w-section { width: 92px; }
+.w-date { width: 118px; } .w-user { width: 12%; } .w-project { width: 12%; } .w-section { width: 92px; }
 .w-action { width: 96px; } .w-entity { width: 16%; } .w-field { width: 9%; } .w-value { width: 15%; }
 .clip { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 tr.open .clip { display: block; -webkit-line-clamp: none; }
 tr.open td { background: #fafbff; }
+@media (max-width: 768px) {
+  .filters .input, .filters .select { flex: 1 1 100%; }
+  .date { flex: 1 1 40%; }
+  .date .input { flex: 1; min-width: 0; }
+  .audit-table { min-width: 1040px; }
+}
 tbody tr { cursor: pointer; }
 .more { padding: 10px; text-align: center; }
 </style>
