@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, ref } from 'vue'
 import BaseModal from '../../components/common/BaseModal.vue'
+import ToggleSwitch from '../../components/common/ToggleSwitch.vue'
 import ColorPicker from './ColorPicker.vue'
 import { useDialogs } from '../../composables/useDialogs'
 
@@ -58,9 +59,9 @@ async function remove() {
           </select>
         </div>
       </div>
-      <label class="field"><span class="field-label">Текст</span><textarea v-model="form.text" class="textarea" rows="3" maxlength="5000" :readonly="readonly" /></label>
+      <label class="field"><span class="field-label">Текст</span><textarea v-model="form.text" class="textarea" rows="3" maxlength="5000" :readonly="readonly" placeholder="Что отметить на шкале" /></label>
       <div class="field"><span class="field-label">Цвет</span><ColorPicker v-model="form.color" :disabled="readonly" /></div>
-      <label class="checkbox"><input v-model="form.showDate" type="checkbox" :disabled="readonly" /> Показывать дату рядом с текстом</label>
+      <div class="toggle-box"><ToggleSwitch v-model="form.showDate" label="Показывать дату рядом с текстом" :disabled="readonly" /></div>
     </form>
     <template #footer>
       <button v-if="existing && !readonly" class="btn btn-ghost btn-text-danger" type="button" style="margin-right:auto" @click="remove">Удалить</button>
@@ -69,3 +70,7 @@ async function remove() {
     </template>
   </BaseModal>
 </template>
+
+<style scoped>
+.toggle-box { border: 1px solid var(--color-border); border-radius: 10px; padding: 2px 4px; background: var(--color-surface-2); }
+</style>

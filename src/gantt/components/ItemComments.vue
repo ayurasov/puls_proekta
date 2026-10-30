@@ -94,9 +94,12 @@ function onKeydown(event) {
 <template>
   <div class="comments">
     <div v-if="loading" class="muted small">Загрузка…</div>
-    <div v-else-if="!comments.length" class="empty muted">Комментариев пока нет</div>
+    <div v-else-if="!comments.length" class="empty muted">
+      <span class="empty-icon"><AppIcon name="message" :size="18" /></span>
+      Комментариев пока нет
+    </div>
     <div v-for="{ comment, depth } in ordered" :key="comment.id" class="comment" :class="{ reply: depth > 0 }" :style="{ marginLeft: depth * 18 + 'px' }">
-      <UserAvatar :user="{ name: comment.authorName, avatarUrl: comment.authorAvatarUrl }" :size="26" />
+      <UserAvatar :user="{ name: comment.authorName, avatarUrl: comment.authorAvatarUrl }" :size="28" />
       <div class="comment-main">
         <div class="comment-head">
           <strong>{{ comment.authorName || 'Автор' }}</strong>
@@ -122,28 +125,47 @@ function onKeydown(event) {
     </div>
     <form v-if="canWrite" class="composer" @submit.prevent="send">
       <div v-if="replyTo" class="replying small">
-        Ответ на комментарий {{ replyTo.authorName }}: «{{ replyTo.text.slice(0, 60) }}»
+        <AppIcon name="reply" :size="12" />
+        <span class="replying-text">Ответ на комментарий {{ replyTo.authorName }}: «{{ replyTo.text.slice(0, 60) }}»</span>
         <button class="link" type="button" @click="replyTo = null">отменить</button>
       </div>
-      <textarea v-model="text" class="textarea" rows="3" placeholder="Написать комментарий… (Ctrl+Enter — отправить)" maxlength="10000" @keydown="onKeydown" />
-      <button class="btn btn-primary btn-sm" type="submit" :disabled="sending || !text.trim()">Отправить</button>
+      <div class="composer-box">
+        <textarea v-model="text" class="composer-input" rows="3" placeholder="Написать комментарий… (Ctrl+Enter — отправить)" maxlength="10000" @keydown="onKeydown" />
+        <div class="composer-foot">
+          <button class="btn btn-primary btn-sm" type="submit" :disabled="sending || !text.trim()"><AppIcon name="send" :size="13" /> Отправить</button>
+        </div>
+      </div>
     </form>
   </div>
 </template>
 
 <style scoped>
-.comments { display: flex; flex-direction: column; gap: 12px; }
-.empty { text-align: center; padding: 20px 0; font-size: 13px; }
+.comments { display: flex; flex-direction: column; gap: 14px; }
+.empty { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; padding: 28px 0 12px; font-size: 13px; }
+.empty-icon { width: 40px; height: 40px; border-radius: 12px; background: #eef1f7; display: inline-flex; align-items: center; justify-content: center; }
 .comment { display: flex; gap: 10px; }
 .comment.reply { padding-left: 10px; border-left: 2px solid #dbe4ff; }
-.comment-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.comment-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .comment-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; flex-wrap: wrap; }
-.comment-text { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; }
-.row-actions { display: flex; gap: 10px; }
-.link { border: 0; background: none; padding: 0; color: var(--color-primary-dark); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; }
-.link.danger { color: var(--color-danger); }
-.link:hover { text-decoration: underline; }
-.composer { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; border-top: 1px solid var(--color-border); padding-top: 12px; }
-.replying { align-self: stretch; color: var(--color-primary-dark); background: #f3f6ff; padding: 6px 8px; border-radius: 6px; }
+.comment-text { font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.5; padding: 8px 12px; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: 4px 12px 12px 12px; }
+.row-actions { display: flex; gap: 12px; }
+.link { border: 0; background: none; padding: 0; color: var(--color-text-muted); font-size: 12px; display: inline-flex; align-items: center; gap: 4px; transition: color 0.15s; }
+.link:hover { color: var(--color-primary-dark); text-decoration: underline; }
+.link.danger:hover { color: var(--color-danger); }
+/* Поле ответа прижато к низу карточки и не уезжает при прокрутке переписки */
+.composer { position: sticky; bottom: 0; margin: auto -18px -24px; padding: 12px 18px 16px; background: linear-gradient(180deg, rgba(255, 255, 255, 0.85), #fff 24%); display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--color-border); }
+.composer-box { border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); transition: border-color 0.15s, box-shadow 0.15s; }
+.composer-box:focus-within { border-color: var(--color-primary); box-shadow: var(--focus-ring); }
+.composer-input { display: block; width: 100%; min-height: 64px; max-height: 40vh; padding: 10px 12px 4px; border: 0; border-radius: 12px; resize: vertical; background: transparent; font-family: inherit; font-size: 13px; line-height: 1.45; color: var(--color-text); }
+.composer-input:focus { outline: none; }
+.composer-foot { display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 4px 6px 6px 12px; }
+.replying { display: flex; align-items: center; gap: 6px; color: var(--color-primary-dark); background: #f3f6ff; padding: 6px 8px; border-radius: 8px; }
+.replying-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replying .link { color: var(--color-primary-dark); }
 .deleted { font-style: italic; }
+@media (max-width: 768px) {
+  .composer { margin: auto -16px -24px; padding: 12px 16px calc(14px + env(safe-area-inset-bottom)); }
+  .composer-input { font-size: 16px; }
+  .link { min-height: 40px; }
+}
 </style>
