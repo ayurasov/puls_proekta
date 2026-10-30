@@ -20,7 +20,10 @@ def ensure_bootstrap_admin(app):
             return False
         problem = password_problem(password)
         if problem:
-            raise RuntimeError(f"BOOTSTRAP_ADMIN_PASSWORD: {problem}")
+            raise RuntimeError(
+                f"BOOTSTRAP_ADMIN_PASSWORD: {problem}. Новая установка — задайте в .env пароль подлиннее. "
+                "Переход с 1.0.x — оставьте BOOTSTRAP_ADMIN_PASSWORD пустым и перенесите базу: "
+                "docker compose --profile migrate run --rm legacy-import")
         db.session.add(User(login=app.config["BOOTSTRAP_ADMIN_LOGIN"], name="Администратор", role="admin",
                             password_hash=hash_password(password), auth_source="local"))
         db.session.commit()

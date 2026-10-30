@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from app import audit
 from app.extensions import db
 from app.models import Direction, Project, utcnow
-from app.security import ApiError, admin_required, login_required, roles_required
+from app.security import ApiError, accessible_projects_query, admin_required, current_user, login_required, roles_required
 from app.serializers import direction as serialize
 
 bp = Blueprint("directions", __name__, url_prefix="/api/directions")
@@ -45,7 +45,15 @@ def _get(direction_id):
 @bp.get("")
 @login_required
 def list_directions():
-    rows = db.session.execute(select(Direction).order_by(Direction.position, Direction.id)).scalars().all()
+    """Администратор и менеджер видят все направления (менеджер выбирает направление для своих проектов);
+    остальные — только направления, где есть хотя бы один доступный им проект."""
+    user = current_user()
+    query = select(Direction).order_by(Direction.position, Direction.id)
+    if user.role not in ("admin", "manager"):
+        visible = accessible_projects_query(user).with_only_columns(Project.direction_id).where(
+            Project.direction_id.is_not(None))
+        query = query.where(Direction.id.in_(visible))
+    rows = db.session.execute(query).scalars().all()
     return jsonify([serialize(d) for d in rows])
 
 

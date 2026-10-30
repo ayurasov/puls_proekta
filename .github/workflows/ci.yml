@@ -147,6 +147,8 @@ jobs:
       SECRET_KEY: ci-only-secret-key-0123456789abcdef-0123456789
       POSTGRES_PASSWORD: ci-only-password
       HTTP_PORT: '8080'
+      # Пароль первого администратора задан, как при ошибке на рабочем сервере: перенос 1.0.1 он не блокирует
+      BOOTSTRAP_ADMIN_PASSWORD: ci-bootstrap-password
     steps:
       - uses: actions/checkout@v7
       - name: Сборка образов

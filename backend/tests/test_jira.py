@@ -60,11 +60,26 @@ class FakeJira:
                 {"id": "customfield_10015", "name": "Start date", "custom": True, "schema": {"type": "date"}},
                 {"id": "summary", "name": "Тема", "schema": {"type": "string"}},
             ])
+        if path == "serverInfo":
+            return FakeResponse(200, {"version": "8.20.10", "deploymentType": "Server", "serverTitle": "Jira"})
         if path == "search":
             body = kwargs["json"]
             jql = body["jql"]
+            # Как Jira Server/DC: validateQuery — только логическое значение (строку «warn» понимает лишь Cloud)
+            validate = body.get("validateQuery", True)
+            if not isinstance(validate, bool):
+                return FakeResponse(400, {"errorMessages": [
+                    f"Can not construct instance of java.lang.Boolean from String value '{validate}': only \"true\" "
+                    "or \"false\" recognized (through reference chain: SearchRequestBean[\"validateQuery\"])"]})
             if jql.startswith("key in"):
                 keys = [k.strip() for k in jql[jql.index("(") + 1:jql.rindex(")")].split(",")]
+                unknown = [k for k in keys if k not in self.issues]
+                if validate and unknown:
+                    return FakeResponse(400, {"errorMessages": [
+                        f"An issue with key '{unknown[0]}' does not exist for field 'key'."]})
+            elif "BADFIELD" in jql and validate:
+                return FakeResponse(400, {"errorMessages": [
+                    "Field 'BADFIELD' does not exist or you do not have permission to view it."]})
             else:
                 keys = sorted(self.issues)
             found = [{"key": k, "fields": self.issues[k]} for k in keys if k in self.issues]
@@ -119,7 +134,7 @@ def test_connection_is_admin_only_and_token_never_returned(app, admin, jira):
 
     # Проверка без нового пароля — сохранённым; пароль в UTF-8 (кириллица)
     res = admin.post("/api/settings/jira/test", json={"baseUrl": BASE, "instanceType": "server_basic", "login": "svc-puls"})
-    assert res.get_json() == {"ok": True, "user": "Сервисная учётка"}
+    assert res.get_json() == {"ok": True, "user": "Сервисная учётка", "version": "8.20.10", "deploymentType": "Server"}
     assert jira.auth == ("svc-puls".encode(), "секрет".encode())
     # Сохранённый пароль не уходит на другой адрес
     res = admin.put("/api/settings/jira", json={"baseUrl": "https://evil.example.ru", "login": "svc-puls"})
@@ -319,3 +334,93 @@ def test_review_wrong_password_backs_off(app, admin, jira):
         admin.get(f"/api/plans/{plan_id}/jira")
     assert len(jira.calls) == 1
     req.Session.request = lambda self, method, url, **kw: original(self, method, url, **kw)
+
+
+# ---------- 0.3.1: Jira Server ----------
+
+def _searches(jira):
+    return [c for c in jira.calls if c[1].endswith("/search")]
+
+
+def test_v031_server_reads_keys_in_one_request_without_string_validate_query(app, admin, jira):
+    """Jira Server отвечала 400 на validateQuery: "warn" — задачи плана не загружались, поиск по ключу писал
+    «не найдены». Ключи читаются одним запросом с validateQuery: false, несуществующий ключ — не ошибка."""
+    _connect(admin)
+    jira.add("SRM-650")
+    jira.add("SRM-651")
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", jiraUrl=f"{BASE}/browse/SRM-650"), task("t2", jiraUrl=f"{BASE}/browse/SRM-651"),
+                            task("t3", jiraUrl=f"{BASE}/browse/NOPE-9")])
+    jira.calls.clear()
+    data = admin.get(f"/api/plans/{plan_id}/jira").get_json()
+    assert data["error"] is None
+    assert data["issues"]["SRM-650"]["summary"] == "Задача SRM-650" and data["issues"]["NOPE-9"] is None
+    searches = _searches(jira)
+    assert len(searches) == 1 and searches[0][2]["validateQuery"] is False
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "keys": "SRM-650", "refresh": True}).get_json()
+    assert [i["key"] for i in res["issues"]] == ["SRM-650"] and res["missing"] == []
+
+
+def test_v031_jql_is_validated_by_jira_and_error_is_readable(app, admin, jira):
+    _connect(admin)
+    jira.add("ABC-1")
+    _, plan_id = create_project(admin)
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "jql": "component = ЕИО AND assignee = arkhipov.ao"})
+    assert res.status_code == 200 and "validateQuery" not in _searches(jira)[-1][2]
+    res = admin.post("/api/jira/search", json={"planId": plan_id, "jql": "BADFIELD = 1"})
+    assert res.status_code == 400
+    assert res.get_json()["message"] == (
+        "Jira не приняла запрос: Field 'BADFIELD' does not exist or you do not have permission to view it.")
+
+
+def test_v031_connection_check_runs_a_real_search(app, admin, jira):
+    """«Соединение установлено» — только если поиск задач работает тем же запросом, что и для планов."""
+    _connect(admin)
+    res = admin.post("/api/settings/jira/test").get_json()
+    assert res["ok"] and res["version"] == "8.20.10"
+    probe = _searches(jira)[-1][2]
+    assert probe["validateQuery"] is False and probe["maxResults"] == 1
+    original = jira.__call__
+    import requests as req
+
+    def broken_search(session, method, url, **kwargs):
+        if url.endswith("/search"):
+            return FakeResponse(400, {"errorMessages": ["Search is broken"]})
+        return original(session, method, url, **kwargs)
+    req.Session.request = lambda self, method, url, **kw: broken_search(self, method, url, **kw)
+    res = admin.post("/api/settings/jira/test")
+    assert res.status_code == 502
+    assert "Вход выполнен (Сервисная учётка), но поиск задач в Jira не работает" in res.get_json()["message"]
+
+
+def test_v031_single_rejected_key_is_read_directly_not_hidden(app, admin, jira):
+    """Jira отклоняет запрос даже с одним ключом: задача читается напрямую, а не помечается «нет в Jira»."""
+    _connect(admin)
+    jira.add("ABC-1")
+    original = jira.__call__
+    import requests as req
+
+    def rejecting_search(session, method, url, **kwargs):
+        if url.endswith("/search"):
+            jira.calls.append((method, url, kwargs.get("json")))
+            return FakeResponse(400, {"errorMessages": ["Unsupported search"]})
+        return original(session, method, url, **kwargs)
+    req.Session.request = lambda self, method, url, **kw: rejecting_search(self, method, url, **kw)
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", jiraUrl=f"{BASE}/browse/ABC-1"), task("t2", jiraUrl=f"{BASE}/browse/NOPE-2")])
+    data = admin.get(f"/api/plans/{plan_id}/jira").get_json()
+    assert data["issues"]["ABC-1"]["summary"] == "Задача ABC-1" and data["issues"]["NOPE-2"] is None
+
+
+def test_v031_missing_issue_is_rechecked_sooner_than_found(app, admin, jira, monkeypatch):
+    _connect(admin)
+    jira.add("ABC-1")
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("t1", jiraUrl=f"{BASE}/browse/ABC-1"), task("t2", jiraUrl=f"{BASE}/browse/ABC-2")])
+    assert admin.get(f"/api/plans/{plan_id}/jira").get_json()["issues"]["ABC-2"] is None
+    monkeypatch.setattr(jira_service, "MISSING_CACHE_SECONDS", 0)
+    jira.add("ABC-2")
+    jira.calls.clear()
+    data = admin.get(f"/api/plans/{plan_id}/jira").get_json()
+    assert data["issues"]["ABC-2"]["key"] == "ABC-2"
+    assert [c[2]["jql"] for c in _searches(jira)] == ["key in (ABC-2)"]

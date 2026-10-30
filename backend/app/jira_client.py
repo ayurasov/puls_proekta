@@ -40,9 +40,10 @@ TIMEOUT = (5, 20)
 class JiraError(Exception):
     """Ошибка обращения к Jira с понятным сотруднику текстом; status — код ответа Jira, если он был."""
 
-    def __init__(self, message, status=None):
+    def __init__(self, message, status=None, detail=""):
         super().__init__(message)
         self.status = status
+        self.detail = detail  # сообщения из ответа Jira (errorMessages, errors) — например, ошибка в JQL
 
 
 def check_base_url(base_url):
@@ -301,7 +302,8 @@ class JiraClient:
         detail = _error_text(resp)
         if resp.status_code == 403:
             raise JiraError("Недостаточно прав в Jira (403)" + (f": {detail}" if detail else ""), 403)
-        raise JiraError(f"Jira вернула ошибку {resp.status_code}: {detail or self.where(url)}", resp.status_code)
+        raise JiraError(f"Jira вернула ошибку {resp.status_code}: {detail or self.where(url)}", resp.status_code,
+                        detail)
 
     def json(self, method, url, kind=dict, **kwargs):
         resp = self.request(method, url, **kwargs)
@@ -322,8 +324,19 @@ class JiraClient:
         data = self.json("GET", self.api("myself"))
         return data.get("displayName") or data.get("name") or data.get("emailAddress") or ""
 
-    def search(self, jql, fields, limit=SEARCH_LIMIT):
-        """Задачи по JQL постранично (startAt в Server/DC, nextPageToken в Cloud) → [(ключ, поля)]."""
+    def server_info(self):
+        """Версия и вид Jira (Server, DataCenter, Cloud) — для проверки подключения."""
+        data = self.json("GET", self.api("serverInfo"))
+        return {"version": str(data.get("version") or "")[:50],
+                "deploymentType": str(data.get("deploymentType") or "")[:50]}
+
+    def search(self, jql, fields, limit=SEARCH_LIMIT, strict=True):
+        """Задачи по JQL постранично (startAt в Server/DC, nextPageToken в Cloud) → [(ключ, поля)].
+
+        strict=False — для «key in (…)»: в Server/DC запрос не проверяется (validateQuery: false), и
+        несуществующий или недоступный ключ не ошибка — такой задачи просто нет в ответе. validateQuery в Server/DC
+        — логическое значение: строки «warn» и «none» понимает только Cloud, Server отвечает на них 400.
+        strict=True — для запроса сотрудника: Jira проверяет JQL и объясняет ошибку."""
         out, start_at, token = [], 0, None
         while True:
             body = {"jql": jql, "fields": list(fields), "maxResults": min(SEARCH_BATCH, limit - len(out))}
@@ -332,7 +345,8 @@ class JiraClient:
                     body["nextPageToken"] = token
             else:
                 body["startAt"] = start_at
-                body["validateQuery"] = "warn"  # несуществующий ключ в «key in (…)» — предупреждение, а не ошибка
+                if not strict:
+                    body["validateQuery"] = False
             data = self.json("POST", self.api("search/jql" if self.cloud else "search"), json=body)
             issues = [i for i in data.get("issues") or [] if isinstance(i, dict) and i.get("key")]
             out.extend((i["key"], i.get("fields") or {}) for i in issues)
@@ -358,7 +372,8 @@ class JiraClient:
     def issues_by_keys(self, keys, fields, deadline=None):
         """({ключ: поля}, проверенные ключи) для задач по ключам пакетами; удалённые и недоступные задачи в ответ не
         попадают. Если Jira отклоняет пакет из-за несуществующего ключа (Cloud), пакет делится пополам, пока не
-        останется один ключ, — несколько ошибочных ключей стоят десятков запросов, а не сотен. deadline
+        останется один ключ, а его задача читается напрямую, — несколько ошибочных ключей стоят десятков запросов,
+        а не сотен. deadline
         (time.monotonic()) — к этому времени чтение прекращается: остальное прочитается при следующем открытии."""
         out, checked = {}, set()
         pending = [sorted(set(keys))[i:i + SEARCH_BATCH] for i in range(0, len(set(keys)), SEARCH_BATCH)]
@@ -367,14 +382,17 @@ class JiraClient:
                 return out, checked
             batch = pending.pop(0)
             try:
-                found = self.search("key in (%s)" % ", ".join(batch), fields, limit=len(batch))
+                found = self.search("key in (%s)" % ", ".join(batch), fields, limit=len(batch), strict=False)
             except JiraError as exc:
                 if exc.status != 400:
                     raise
                 if len(batch) > 1:
                     pending[:0] = [batch[:len(batch) // 2], batch[len(batch) // 2:]]
                     continue
-                found = []
+                # Один ключ, а Jira отклоняет запрос: задача читается напрямую — 404, если её нет или нет прав;
+                # любая другая ошибка видна, а не превращается в «нет в Jira»
+                data = self.issue(batch[0], fields)
+                found = [(batch[0], data)] if data is not None else []
             returned = {key.upper(): data for key, data in found}
             out.update({key: data for key, data in returned.items() if key in batch})
             # Задача перенесена в другой проект: Jira вернула её под новым ключом — читаем по старому

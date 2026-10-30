@@ -93,7 +93,11 @@ services:
       context: ./backend
     # Пишет отчёт в смонтированный каталог ./import, владелец которого — пользователь сервера
     user: "0:0"
-    environment: *backend-env
+    environment:
+      <<: *backend-env
+      # Перенос идёт только в пустую базу: администратор из BOOTSTRAP_ADMIN_PASSWORD здесь не создаётся,
+      # иначе перенос отказался бы («В базе уже есть данные»)
+      BOOTSTRAP_ADMIN_PASSWORD: ""
     volumes:
       - ./import:/import
     command: ["python", "scripts/import_legacy.py", "/import/puls.db", "--report", "/import/import-report.md"]

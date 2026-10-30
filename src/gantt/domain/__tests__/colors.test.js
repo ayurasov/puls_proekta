@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { BAR_OPACITY, blendWithWhite, contrastRatio, PALETTE, readableText, STATUSES, textColorOnWhite } from '../colors'
+import { apcaContrast, BAR_OPACITY, blendWithWhite, contrastRatio, PALETTE, readableText, STATUSES, textColorOnWhite } from '../colors'
 
-describe('контраст подписей (WCAG AA, 4,5:1)', () => {
-  it('текст на полосе любого цвета палитры — и на бледных полосах выполненных и заблокированных задач', () => {
+describe('контраст подписей', () => {
+  it('текст на полосе любого цвета палитры — и на бледных полосах выполненных и заблокированных задач (APCA)', () => {
     for (const { color } of PALETTE) {
       for (const opacity of [1, BAR_OPACITY.done, BAR_OPACITY.blocked]) {
         const fill = opacity < 1 ? blendWithWhite(color, opacity) : color
-        expect(contrastRatio(fill, readableText(color, opacity)), `${color} × ${opacity}`).toBeGreaterThanOrEqual(4.5)
+        expect(apcaContrast(readableText(color, opacity), fill), `${color} × ${opacity}`).toBeGreaterThanOrEqual(50)
       }
     }
   })
@@ -14,6 +14,17 @@ describe('контраст подписей (WCAG AA, 4,5:1)', () => {
     expect(readableText('#84cc16')).not.toBe('#ffffff')
     expect(readableText('#14b8a6')).not.toBe('#ffffff')
     expect(readableText('#1e293b')).toBe('#ffffff')
+  })
+  it('0.3.1: на синем, красном, фиолетовом, индиго, сером и тёмных цветах — белый текст, и на бледных полосах', () => {
+    for (const key of ['blue', 'red', 'purple', 'indigo', 'slate', 'pink']) {
+      const { color } = PALETTE.find((c) => c.key === key)
+      expect(readableText(color), key).toBe('#ffffff')
+      expect(readableText(color, BAR_OPACITY.done), `${key} завершена`).toBe('#ffffff')
+    }
+    // Тёмно-зелёный и коричневый на завершённой задаче: по WCAG 2 получался чёрный текст
+    expect(readableText('#166534', BAR_OPACITY.done)).toBe('#ffffff')
+    expect(readableText('#92400e', BAR_OPACITY.done)).toBe('#ffffff')
+    expect(readableText('#fde047')).toBe('#000000')
   })
   it('статусы в строке — тёмными оттенками', () => {
     for (const s of STATUSES) expect(contrastRatio(s.text, '#ffffff'), s.key).toBeGreaterThanOrEqual(4.5)

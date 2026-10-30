@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { api, BASE, closeBrowser, login, newPage, shot, waitSaved } from '../helpers.mjs'
 
-// Jira Server на этом же компьютере: /myself, /search (key in …), /issue/KEY, /field
+// Jira Server на этом же компьютере: /myself, /serverInfo, /search (key in …), /issue/KEY, /field
 const JIRA_PORT = 5099
 const JIRA = `http://127.0.0.1:${JIRA_PORT}`
 const issues = {
@@ -21,8 +21,13 @@ function startJira() {
       const path = req.url.split('?')[0].replace('/rest/api/2/', '')
       if (path === 'myself') return send(200, { displayName: 'Сервисная учётная запись' })
       if (path === 'field') return send(200, [{ id: 'duedate', name: 'Срок', schema: { type: 'date' } }])
+      if (path === 'serverInfo') return send(200, { version: '8.20.10', deploymentType: 'Server' })
       if (path === 'search') {
-        const { jql } = JSON.parse(body || '{}')
+        const { jql, validateQuery } = JSON.parse(body || '{}')
+        // Как Jira Server: validateQuery — только true или false
+        if (validateQuery !== undefined && typeof validateQuery !== 'boolean') {
+          return send(400, { errorMessages: [`Can not construct instance of java.lang.Boolean from String value '${validateQuery}'`] })
+        }
         const keys = jql.startsWith('key in') ? jql.slice(jql.indexOf('(') + 1, jql.lastIndexOf(')')).split(',').map((k) => k.trim()) : Object.keys(issues)
         const found = keys.filter((k) => issues[k]).map((key) => ({ key, fields: issues[key] }))
         return send(200, { issues: found, total: found.length })
@@ -59,7 +64,7 @@ test('администратор подключает Jira в «Интеграц
   await page.fill('[data-testid=jira-login]', 'svc-puls')
   await page.fill('[data-testid=jira-token]', 'пароль-сервиса')
   await page.click('[data-testid=jira-test]')
-  await page.locator('[data-testid=jira-status]', { hasText: 'Соединение установлено: Сервисная учётная запись' }).waitFor()
+  await page.locator('[data-testid=jira-status]', { hasText: 'Соединение установлено: Сервисная учётная запись · Jira Server 8.20.10 · поиск задач работает' }).waitFor()
   await page.click('[data-testid=jira-save]')
   await page.locator('[data-testid=jira-status]', { hasText: 'Подключение сохранено' }).waitFor()
   await shot(page, '06-jira-settings')

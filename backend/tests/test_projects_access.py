@@ -118,3 +118,23 @@ def test_dashboard_stats_count_default_plan_only(app, admin):
     admin.post(f"/api/plans/{copy['id']}/archive")
     stats = admin.get("/api/projects").get_json()[0]["stats"]
     assert stats["planId"] == plan_id and stats["total"] == 3
+
+
+def test_v031_direction_hidden_without_visible_projects(app, admin):
+    """Направление, в котором сотрудник не видит ни одного проекта, ему не показывается (и через API)."""
+    mine = admin.post("/api/directions", json={"name": "Мои проекты"}).get_json()
+    other = admin.post("/api/directions", json={"name": "Чужое направление"}).get_json()
+    empty = admin.post("/api/directions", json={"name": "Пустое"}).get_json()
+    p1, _ = create_project(admin, "Доступный", mine["id"])
+    create_project(admin, "Закрытый", other["id"])
+    editor = new_client(app, "ed2", "editor")
+    assert editor.get("/api/directions").get_json() == []
+    admin.post("/api/access", json={"userIds": [_uid(app, "ed2")], "projectIds": [p1], "level": "view"})
+    assert [d["name"] for d in editor.get("/api/directions").get_json()] == ["Мои проекты"]
+    # Правило на направление без единого проекта направление не показывает
+    admin.post("/api/access", json={"userIds": [_uid(app, "ed2")], "directionIds": [empty["id"]], "level": "view"})
+    assert [d["name"] for d in editor.get("/api/directions").get_json()] == ["Мои проекты"]
+    # Менеджер выбирает направление для своих проектов — видит все; администратор — все
+    manager = new_client(app, "mgr2", "manager")
+    assert len(manager.get("/api/directions").get_json()) == 3
+    assert len(admin.get("/api/directions").get_json()) == 3

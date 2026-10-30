@@ -523,7 +523,9 @@ def import_legacy_database(sqlite_path, replace=False):
         if not _target_is_empty():
             if not replace:
                 raise LegacyImportError("В базе 0.2 уже есть данные. Перенос выполняется в пустую базу "
-                                        "(для повторной репетиции — флаг --replace)")
+                                        "(для повторной репетиции — флаг --replace). Если в базе только "
+                                        "администратор из BOOTSTRAP_ADMIN_PASSWORD (backend запускали до переноса), "
+                                        "повторите с --replace и оставьте BOOTSTRAP_ADMIN_PASSWORD пустым")
             _wipe_target()
         importer = LegacyImporter(conn)
         stats = importer.run()

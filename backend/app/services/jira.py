@@ -29,6 +29,7 @@ DOWN_SECONDS = 60          # после отказа Jira — минута бе�
 REFRESH_PAUSE_SECONDS = 15  # «Обновить из Jira» сразу после отказа тоже не идёт к Jira
 FETCH_BUDGET_SECONDS = 15   # дольше одно открытие плана Jira не ждёт: остальное — при следующем
 CACHE_DAYS = 30             # задачи, которые никто не открывал месяц, удаляются из кэша
+MISSING_CACHE_SECONDS = 60  # «нет в Jira или нет доступа» считается свежим минуту
 _down_until = 0.0
 _down_since = 0.0
 
@@ -147,8 +148,16 @@ def fetch_issues(keys, refresh=False, detailed=False):
         raise JiraError(NOT_CONFIGURED)
     keys = sorted(set(keys))[:MAX_PLAN_ISSUES]
     cached = {row.key: row for row in db.session.execute(select(JiraIssue).where(JiraIssue.key.in_(keys))).scalars()}
-    fresh_after = utcnow() - timedelta(seconds=current_app.config.get("JIRA_CACHE_SECONDS", 300))
-    stale = keys if refresh else [k for k in keys if k not in cached or cached[k].fetched_at < fresh_after]
+    now = utcnow()
+    fresh_after = now - timedelta(seconds=current_app.config.get("JIRA_CACHE_SECONDS", 300))
+    # «Нет в Jira» перепроверяется через минуту: задачу могли только что создать или выдать на неё права
+    missing_fresh_after = max(fresh_after, now - timedelta(seconds=MISSING_CACHE_SECONDS))
+
+    def is_stale(key):
+        row = cached.get(key)
+        return row is None or row.fetched_at < (fresh_after if row.found else missing_fresh_after)
+
+    stale = keys if refresh else [k for k in keys if is_stale(k)]
     error, fetched_at = None, None
     now_mono = time.monotonic()
     available = now_mono >= _down_until or (refresh and now_mono - _down_since >= REFRESH_PAUSE_SECONDS)
