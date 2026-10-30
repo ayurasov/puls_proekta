@@ -424,3 +424,11 @@ def test_v031_missing_issue_is_rechecked_sooner_than_found(app, admin, jira, mon
     data = admin.get(f"/api/plans/{plan_id}/jira").get_json()
     assert data["issues"]["ABC-2"]["key"] == "ABC-2"
     assert [c[2]["jql"] for c in _searches(jira)] == ["key in (ABC-2)"]
+
+
+def test_v040_plan_jira_auto_fields_are_validated(app, admin):
+    """Автоперенос из Jira — настройка плана: только известные поля, по умолчанию выключен."""
+    _, plan_id = create_project(admin)
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraAuto"] == []
+    ok_ops(admin, plan_id, [{"op": "plan.update", "fields": {"settings": {"jiraAuto": ["dates", "мусор", "status", "status"]}}}])
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraAuto"] == ["status", "dates"]

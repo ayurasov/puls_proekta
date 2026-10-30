@@ -28,6 +28,9 @@ function groupOf(item) {
   return current?.key || ''
 }
 const parentKey = ref(groupOf(selectedItem.value))
+// Предложить автоперенос, если он в плане ещё не включён: дальше статус, сроки и прогресс строк обновляются сами
+const autoOn = computed(() => jira.autoFields().length > 0)
+const enableAuto = ref(false)
 const linked = computed(() => new Set(jira.linkedItems().map((item) => jira.keyFor(item))))
 
 async function search() {
@@ -81,6 +84,7 @@ function add() {
   const keys = editor.createItems(list, { parentKey: parentKey.value || null, label: `Задачи из Jira (${list.length})` })
   if (!keys.length) return
   for (const issue of chosen.value) jira.state.issues[issue.key] = issue
+  if (enableAuto.value && !autoOn.value) jira.setAutoFields(['status', 'dates', 'progress'])
   editor.revealItem(keys[keys.length - 1])
   editor.select(keys[0])
   emit('close')
@@ -138,6 +142,11 @@ function add() {
           <option v-for="g in groups" :key="g.key" :value="g.key">В группу «{{ g.name }}»</option>
         </select>
       </label>
+      <label v-if="result.issues.length && !autoOn" class="auto-check">
+        <input v-model="enableAuto" type="checkbox" data-testid="jira-import-auto" />
+        Дальше переносить из Jira автоматически статус, сроки и прогресс
+      </label>
+      <p v-else-if="result.issues.length" class="muted small">В плане включён автоперенос из Jira — новые строки будут обновляться сами.</p>
     </template>
 
     <template #footer>
@@ -163,4 +172,5 @@ function add() {
 .key { font-weight: 700; font-size: 12px; color: #0052cc; }
 .due { text-align: right; }
 .place { margin-top: 12px; max-width: 360px; }
+.auto-check { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: 13px; cursor: pointer; }
 </style>

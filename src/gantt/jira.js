@@ -128,7 +128,8 @@ export function createJira(editor, ui) {
       state.error = res.error
       state.fetchedAt = res.fetchedAt
       state.loaded = true
-      if (refresh && !res.error) ui.success(`Данные Jira обновлены (${Object.keys(res.issues).length})`)
+      const applied = autoApply()
+      if (refresh && !res.error && !applied) ui.success(`Данные Jira обновлены (${Object.keys(res.issues).length})`)
       else if (refresh && res.error) ui.error(res.error)
     } catch (err) {
       if (seq === loadSeq) { state.error = err.message; if (refresh) ui.error(err) }
@@ -163,6 +164,7 @@ export function createJira(editor, ui) {
       for (const key of wanted) if (!(key in next) && res.error) failed[key] = res.error
       state.issues = next
       state.failed = failed
+      autoApply(wanted)
     } catch (err) {
       const failed = { ...state.failed }
       for (const key of wanted) if (!(key in state.issues) || refresh) failed[key] = err.message
@@ -193,5 +195,54 @@ export function createJira(editor, ui) {
     editor.updateItems([...merged].map(([key, fields]) => ({ key, fields })), label)
   }
 
-  return reactive({ state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, differs, apply })
+  /** Поля, которые план переносит из Jira сам (настройка плана «Автоперенос из Jira»). */
+  function autoFields() {
+    return editor.settings.jiraAuto || []
+  }
+
+  // Уже перенесённое автоматически в этом окне: если правку сразу изменил автосдвиг или коллега, она не
+  // повторяется при каждом обновлении — расхождение остаётся видно в «Сверке с Jira»
+  const autoDone = new Set()
+
+  /**
+   * Автоперенос: при открытии плана, обновлении из Jira и привязке строки выбранные в настройке поля переносятся
+   * из Jira одной правкой (отменяется Ctrl+Z, видна в истории как «Из Jira автоматически»). Только у того, кто
+   * может править план. keys — только эти задачи Jira (после привязки строк). Возвращает число строк.
+   */
+  function autoApply(keys = null) {
+    const fields = autoFields()
+    if (!fields.length || !editor.canEdit) return 0
+    const only = keys ? new Set(keys) : null
+    const list = []
+    for (const item of linkedItems()) {
+      const key = keyFor(item)
+      if (only && !only.has(key)) continue
+      if (!issueFor(item)) continue
+      for (const change of changesFor(item)) {
+        // Срок вехи («Дата») переносится вместе со сроками задач
+        const setting = change.field === 'date' ? 'dates' : change.field
+        if (!fields.includes(setting)) continue
+        const mark = `${item.key}:${change.field}:${JSON.stringify(change.fields)}`
+        if (autoDone.has(mark)) continue
+        autoDone.add(mark)
+        list.push({ key: item.key, fields: change.fields })
+      }
+    }
+    if (!list.length) return 0
+    const count = new Set(list.map((c) => c.key)).size
+    apply(list, `Из Jira автоматически (${count})`)
+    ui.success(`Из Jira перенесено в строки: ${count}. Отменить — Ctrl+Z`)
+    return count
+  }
+
+  /** Включить или выключить автоперенос полей (одна правка настроек плана). */
+  function setAutoFields(list) {
+    editor.updatePlan({ settings: { jiraAuto: list } }, list.length ? 'Автоперенос из Jira' : 'Автоперенос из Jira выключен')
+    if (list.length) autoApply()
+  }
+
+  return reactive({
+    state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, differs, apply, autoFields, autoApply,
+    setAutoFields,
+  })
 }

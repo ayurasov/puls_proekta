@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest'
-import { issueKeyFromUrl, jiraChanges, jiraLinkFromInput } from '../jira'
+import { describe, expect, it, vi } from 'vitest'
+import { createJira, issueKeyFromUrl, jiraChanges, jiraLinkFromInput } from '../jira'
 
 const BASE = 'https://jira.example.ru'
 const task = (fields = {}) => ({
@@ -79,5 +79,62 @@ describe('ревью 0.3.0: перенос из Jira', () => {
     expect(fs[0].note).toBe('начало задаёт связь')
     const ff = jiraChanges(task({ dependencyKey: 'p', dependencyType: 'FF' }), issue({ start: '2026-11-01', due: '2026-11-09' }), { linked: true })
     expect(ff[0].fields).toEqual({ start: '2026-11-01', end: '2026-11-06' })
+  })
+})
+
+describe('0.4.0: автоперенос из Jira', () => {
+  function setup({ auto = ['status'], canEdit = true } = {}) {
+    const items = {
+      a: task({ key: 'a', jiraUrl: `${BASE}/browse/ABC-1` }),
+      b: task({ key: 'b', jiraUrl: `${BASE}/browse/ABC-2`, status: 'inwork' }),
+      c: task({ key: 'c' }),
+    }
+    const editor = {
+      settings: { jiraAuto: auto, display: { autoShift: true } }, canEdit, calendar: null,
+      itemList: Object.values(items), state: { items, today: '2026-11-04', plan: { id: 1 }, access: 'edit' },
+      updateItems: vi.fn(), updatePlan: vi.fn((fields) => { editor.settings.jiraAuto = fields.settings.jiraAuto }),
+    }
+    const ui = { success: vi.fn(), error: vi.fn() }
+    const jira = createJira(editor, ui)
+    Object.assign(jira.state, { connected: true, baseUrl: BASE, loaded: true })
+    jira.state.issues = {
+      'ABC-1': issue({ key: 'ABC-1', statusCategory: 'indeterminate', due: '2026-11-10' }),
+      'ABC-2': issue({ key: 'ABC-2', statusCategory: 'indeterminate' }),
+    }
+    return { editor, jira, ui }
+  }
+
+  it('переносит только выбранные поля, одной правкой и один раз', () => {
+    const { editor, jira, ui } = setup()
+    expect(jira.autoApply()).toBe(1)
+    expect(editor.updateItems).toHaveBeenCalledTimes(1)
+    const [list, label] = editor.updateItems.mock.calls[0]
+    expect(list).toEqual([{ key: 'a', fields: { status: 'inwork' } }])
+    expect(label).toBe('Из Jira автоматически (1)')
+    expect(ui.success).toHaveBeenCalled()
+    // Уже перенесённое не повторяется при следующем обновлении (например, после Ctrl+Z)
+    expect(jira.autoApply()).toBe(0)
+  })
+
+  it('выключен или нет прав на правку — ничего не меняет', () => {
+    expect(setup({ auto: [] }).jira.autoApply()).toBe(0)
+    const { editor, jira } = setup({ canEdit: false })
+    expect(jira.autoApply()).toBe(0)
+    expect(editor.updateItems).not.toHaveBeenCalled()
+  })
+
+  it('включение автопереноса — правка настроек плана и сразу перенос', () => {
+    const { editor, jira } = setup({ auto: [] })
+    jira.setAutoFields(['status', 'dates'])
+    expect(editor.updatePlan).toHaveBeenCalledWith({ settings: { jiraAuto: ['status', 'dates'] } }, 'Автоперенос из Jira')
+    const fields = editor.updateItems.mock.calls[0][0].find((c) => c.key === 'a').fields
+    expect(fields).toMatchObject({ status: 'inwork', end: '2026-11-10' })
+  })
+
+  it('после привязки строки — только её задача', () => {
+    const { editor, jira } = setup({ auto: ['status'] })
+    jira.state.issues['ABC-2'] = issue({ key: 'ABC-2', statusCategory: 'done', resolved: '2026-11-03' })
+    expect(jira.autoApply(['ABC-2'])).toBe(1)
+    expect(editor.updateItems.mock.calls[0][0].map((c) => c.key)).toEqual(['b'])
   })
 })

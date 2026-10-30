@@ -142,3 +142,32 @@ test('сверка с Jira после изменений в Jira', async () => {
   assert.equal(item.end, '2026-06-26')
   assert.deepEqual(page.errors, [])
 })
+
+test('0.4.0: автоперенос из Jira — включается в «Сверке» и срабатывает при обновлении', async () => {
+  await page.click('[data-testid=jira-menu]')
+  await page.click('[data-testid=jira-sync-open]')
+  await page.check('[data-testid=jira-auto-status]')
+  await page.check('[data-testid=jira-auto-dates]')
+  await waitSaved(page)
+  const plan = (await api(page, 'GET', `/plans/${planId}`)).body.plan
+  assert.deepEqual(plan.settings.jiraAuto, ['status', 'dates'])
+  await page.keyboard.press('Escape')
+
+  // В Jira задачу закрыли и перенесли срок: после «Обновить из Jira» строка меняется сама
+  issues['PULS-2'].status = { name: 'Готово', statusCategory: { key: 'done' } }
+  issues['PULS-2'].resolutiondate = '2026-06-25T10:00:00.000+0300'
+  issues['PULS-2'].duedate = '2026-06-25'
+  await page.click('[data-testid=jira-menu]')
+  await page.click('button:has-text("Обновить из Jira")')
+  await page.locator('.toast', { hasText: 'Из Jira перенесено в строки: 1' }).waitFor()
+  await waitSaved(page)
+  const item = (await planItems()).find((i) => i.name === 'Прототип интерфейса')
+  assert.equal(item.status, 'done')
+  assert.equal(item.completedDate, '2026-06-25')
+  assert.equal(item.end, '2026-06-25')
+  // Одна правка: Ctrl+Z возвращает строку
+  await page.click('[data-testid=undo]')
+  await waitSaved(page)
+  assert.equal((await planItems()).find((i) => i.name === 'Прототип интерфейса').status, 'inwork')
+  assert.deepEqual(page.errors, [])
+})
