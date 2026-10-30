@@ -37,6 +37,7 @@ function toggle(group) {
 const groups = computed(() => projects.grouped.filter((g) => g.projects.length || g.direction))
 const adminLinks = [
   { to: '/admin/users', icon: 'users', label: 'Сотрудники' },
+  { to: '/admin/structure', icon: 'hierarchy', label: 'Структура' },
   { to: '/admin/directions', icon: 'folder', label: 'Направления' },
   { to: '/admin/access', icon: 'shield', label: 'Доступы' },
   { to: '/admin/audit', icon: 'history', label: 'Реестр изменений' },
@@ -71,6 +72,9 @@ async function logout() {
     <nav class="sidebar-nav" aria-label="Основная навигация">
       <router-link to="/" class="nav-item" :class="{ 'router-link-active': route.name === 'projects' }" exact-active-class="" title="Проекты">
         <AppIcon name="home" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Проекты</span>
+      </router-link>
+      <router-link to="/org" class="nav-item" title="Структура компании" data-testid="org-link">
+        <AppIcon name="hierarchy" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Структура компании</span>
       </router-link>
     </nav>
 
