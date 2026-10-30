@@ -1,6 +1,38 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { availableGuides, canReadGuide, GUIDES, guideDownloads, loadGuide, resolveGuideImage } from '../guides'
+import { HELP_TOPICS, helpTopic } from '../helpTopics'
+
+const SRC = fileURLToPath(new URL('../..', import.meta.url))
+
+function vueFiles(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(dir, entry.name)
+    if (entry.isDirectory()) return entry.name === '__tests__' ? [] : vueFiles(path)
+    return entry.name.endsWith('.vue') ? [path] : []
+  })
+}
+
+/**
+ * Темы всех <HelpLink> в интерфейсе: topic="…" и варианты :topic="условие ? 'тема' : 'тема'"
+ * (строки после «?» и «:»; строки в сравнениях условия — не темы).
+ */
+function helpLinkTopics() {
+  const used = []
+  for (const file of vueFiles(SRC)) {
+    const source = readFileSync(file, 'utf8')
+    for (const [, tag] of source.matchAll(/<HelpLink\b([^>]*)>/g)) {
+      const fixed = tag.match(/(?:^|\s)topic="([^"]+)"/)
+      const bound = tag.match(/:topic="([^"]+)"/)
+      if (fixed) used.push({ file, topic: fixed[1] })
+      if (bound) for (const [, topic] of bound[1].matchAll(/(?:^|[?:])\s*'([^']+)'/g)) used.push({ file, topic })
+      if (!fixed && !bound) used.push({ file, topic: '(нет topic)' })
+    }
+  }
+  return used
+}
 
 describe('руководства в приложении', () => {
   it('renders both guides with every screenshot resolved to a build asset', async () => {
@@ -46,5 +78,27 @@ describe('руководства в приложении', () => {
     expect(canReadGuide('nope', { isAdmin: true })).toBe(false)
     expect(availableGuides({ isAdmin: false }).map((guide) => guide.key)).toEqual(['user'])
     expect(availableGuides({ isAdmin: true }).map((guide) => guide.key)).toEqual(['user', 'admin'])
+  })
+})
+
+describe('контекстная справка (HelpLink)', () => {
+  it('every help topic points to an existing section with the same title', async () => {
+    const broken = []
+    for (const [key, topic] of Object.entries(HELP_TOPICS)) {
+      const { headings } = await loadGuide(topic.guide)
+      const heading = headings.find((item) => item.id === topic.id)
+      if (!heading) broken.push(`${key}: нет раздела #${topic.id} в «${GUIDES[topic.guide].title}»`)
+      else if (heading.text !== topic.title) broken.push(`${key}: раздел #${topic.id} называется «${heading.text}», а не «${topic.title}»`)
+    }
+    expect(broken).toEqual([])
+  })
+
+  it('every HelpLink in the interface uses a known topic, and every topic is used', () => {
+    const used = helpLinkTopics()
+    expect(used.length).toBeGreaterThanOrEqual(10)
+    expect(used.filter(({ topic }) => !helpTopic(topic)).map(({ file, topic }) => `${file.slice(SRC.length)}: ${topic}`)).toEqual([])
+    const usedKeys = new Set(used.map(({ topic }) => topic))
+    expect(Object.keys(HELP_TOPICS).filter((key) => !usedKeys.has(key))).toEqual([])
+    expect(helpTopic('toString')).toBeNull()
   })
 })

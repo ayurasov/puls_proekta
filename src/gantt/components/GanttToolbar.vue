@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, ref } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
 import { SCALES, nextZoom } from '../domain/layout'
 import { STATUSES, resolveColor } from '../domain/colors'
@@ -154,6 +155,7 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-sm" type="button" title="Весь период на ширину экрана" @click="emit('fit')"><AppIcon name="fit" :size="14" /></button>
       <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /><span class="today-label">Сегодня</span></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Вид" @click="open('view', $event)"><AppIcon name="layers" /></button>
+      <HelpLink topic="plan" />
     </div>
 
     <!-- Действия с планом целиком — в строке вкладок планов, рядом с выбранным планом -->

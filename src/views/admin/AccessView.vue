@@ -6,6 +6,7 @@ import { ROLE_LABELS } from '../../stores/auth'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 
 const ui = useUiStore()
 const projects = useProjectsStore()
@@ -108,6 +109,7 @@ const LEVEL_SHORT = { view: 'П', edit: 'Р', manage: 'У' }
         <h1 class="page-title">Доступы</h1>
         <div class="page-subtitle">Кто какие проекты видит и может менять. Администраторы видят всё; наблюдатель — только просмотр.</div>
       </div>
+      <HelpLink :topic="tab === 'rules' ? 'admin-access-rules' : tab === 'matrix' ? 'admin-access-matrix' : 'admin-access-grant'" />
       <div class="spacer" />
       <div class="segmented">
         <button type="button" :class="{ 'is-active': tab === 'grant' }" @click="tab = 'grant'">Выдать доступ</button>

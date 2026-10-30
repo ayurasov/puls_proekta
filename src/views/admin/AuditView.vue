@@ -4,6 +4,7 @@ import { api, downloadFrom } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { formatDateTime } from '../../utils/format'
 import AppIcon from '../../components/common/AppIcon.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 
 const ui = useUiStore()
 const filters = reactive({ user: '', section: '', project: '', action: '', from: '', to: '', q: '' })
@@ -46,6 +47,7 @@ async function exportCsv() {
         <h1 class="page-title">Реестр изменений</h1>
         <div class="page-subtitle">{{ total }} записей. Изменения планов — с содержанием правки; подробная история — в «Истории» плана.</div>
       </div>
+      <HelpLink topic="admin-audit" />
       <div class="spacer" />
       <button class="btn" type="button" @click="exportCsv"><AppIcon name="download" :size="14" /> Выгрузить CSV</button>
     </div>

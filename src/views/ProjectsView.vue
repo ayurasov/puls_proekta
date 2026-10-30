@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { useDialogs } from '../composables/useDialogs'
 import AppIcon from '../components/common/AppIcon.vue'
+import HelpLink from '../components/common/HelpLink.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PopupMenu from '../components/common/PopupMenu.vue'
 import { formatDate, formatDateTime, pluralize } from '../utils/format'
@@ -169,6 +170,7 @@ function onDragEnd() {
         <h1 class="page-title">Проекты</h1>
         <div class="page-subtitle">{{ total }} {{ pluralize(total, 'проект', 'проекта', 'проектов') }}</div>
       </div>
+      <HelpLink topic="projects" />
       <div class="spacer" />
       <label class="search">
         <AppIcon name="search" :size="15" class="search-icon" />
