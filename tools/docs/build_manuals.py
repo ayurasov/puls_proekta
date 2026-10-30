@@ -256,6 +256,10 @@ def build_docx(name, md, title, footer, reference):
 
 
 def main(names):
+    from table_widths import fix  # ширины столбцов — по содержимому (pipe-таблицы pandoc)
+    for name in names:
+        md = source_dir(name) / f"{name}.md"
+        md.write_text(fix(md.read_text(encoding="utf-8")), encoding="utf-8")
     with tempfile.TemporaryDirectory() as tmp:
         reference = Path(tmp) / "reference.docx"
         reference_docx(reference)

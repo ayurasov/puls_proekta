@@ -3,6 +3,8 @@ dist
 backend
 legacy
 docs
+# Руководство пользователя открывается из приложения (/user-guide.pdf)
+!docs/manuals/user-guide.pdf
 e2e
 .git
 *.log

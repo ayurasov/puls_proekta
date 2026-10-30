@@ -22,6 +22,7 @@ services:
       retries: 20
 
   backend:
+    image: puls-backend
     build:
       context: ./backend
     restart: unless-stopped
@@ -35,6 +36,7 @@ services:
       SNAPSHOT_INTERVAL_MINUTES: ${SNAPSHOT_INTERVAL_MINUTES:-30}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       GUNICORN_WORKERS: ${GUNICORN_WORKERS:-}
+      ACCESS_LOG: ${ACCESS_LOG:-false}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
       TZ: ${TZ:-Europe/Moscow}
     depends_on:
@@ -42,6 +44,7 @@ services:
         condition: service_healthy
 
   frontend:
+    image: puls-frontend
     build:
       context: .
     restart: unless-stopped
@@ -76,6 +79,8 @@ services:
   # Одноразовый перенос базы 1.0.x: положите puls.db (и puls.db-wal, если есть) в ./import
   legacy-import:
     profiles: ["migrate"]
+    # Тот же образ, что у backend: отдельный образ не собирается
+    image: puls-backend
     build:
       context: ./backend
     # Пишет отчёт в смонтированный каталог ./import, владелец которого — пользователь сервера

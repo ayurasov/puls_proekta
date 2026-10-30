@@ -35,6 +35,7 @@ const version = packageJson.version
           <li>закрытые вкладки-версии не теряются — уходят в архив;</li>
           <li>данные 1.0.1 перенесены полностью, включая историю и комментарии.</li>
         </ul>
+        <p class="guide"><a class="btn btn-sm" href="/user-guide.pdf" target="_blank" rel="noopener"><AppIcon name="file" :size="14" /> Руководство пользователя (PDF)</a></p>
         <p class="muted small">Автор — Alexander Yurasov.</p>
       </section>
     </div>
@@ -42,6 +43,7 @@ const version = packageJson.version
 </template>
 
 <style scoped>
+.guide { margin: 12px 0 8px; }
 .about { max-width: 980px; }
 .hero { display: flex; align-items: center; gap: 18px; padding: 22px; margin-bottom: 14px; }
 .hero h1 { font-size: 22px; }
