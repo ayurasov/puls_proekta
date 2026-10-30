@@ -235,3 +235,30 @@ test('загрузка структуры и сотрудников из «По 
   assert.ok(created.avatarUrl)
   assert.deepEqual(page.errors, [])
 })
+
+test('переименование в «По Делу» меняет подразделение «Пульса» на месте', async () => {
+  // В «По Делу» «Продажи» стали «Коммерческим отделом» — и в выгрузке сотрудников тоже
+  structure.departments.find((d) => d.key === IDS.sales).name = 'Коммерческий отдел'
+  const fix = (path) => (path[1] === 'Продажи' ? [path[0], 'Коммерческий отдел', ...path.slice(2)] : path)
+  for (const item of employees.employees) {
+    item.department = fix(item.department)
+    for (const head of item.heads) head.department = fix(head.department)
+  }
+  await page.click('[data-testid=podelu-preview]')
+  await page.waitForFunction(() => /переименовано: Продажи → Коммерческий отдел/.test(document.querySelector('[data-testid=structure-departments]')?.textContent || ''))
+  assert.match(await page.textContent('[data-testid=structure-plan]'), /Новых: 0/)
+  await shot(page, '10-podelu-rename')
+  await page.waitForFunction(() => !document.querySelector('[data-testid=podelu-apply]')?.disabled)
+  await page.click('[data-testid=podelu-apply]')
+  await page.locator('[data-testid=podelu-applied]').waitFor()
+  assert.match(await page.textContent('[data-testid=podelu-applied]'), /подразделений новых 0, изменено 1;\s+сотрудников новых 0/)
+
+  const tree = (await api(page, 'GET', '/org/tree')).body
+  const renamed = tree.departments.filter((d) => d.podeluId === IDS.sales)
+  assert.deepEqual(renamed.map((d) => [d.id, d.name]), [[IDS.sales, 'Коммерческий отдел']])
+  assert.ok(!tree.departments.some((d) => d.name === 'Продажи' && d.parentId === IDS.company))
+  const kozlova = (await api(page, 'GET', '/users')).body.find((u) => u.login === 'kozlova.ii')
+  assert.equal(kozlova.departmentId, IDS.sales)
+  assert.equal(openSessions(), 0)
+  assert.deepEqual(page.errors, [])
+})
