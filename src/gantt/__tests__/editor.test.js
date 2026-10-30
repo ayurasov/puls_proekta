@@ -184,3 +184,27 @@ describe('сдвиг завершённой задачи', () => {
     expect(editor.state.items.a.offset).toBe(3)
   })
 })
+
+describe('0.4.0: несколько строк одной правкой', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
+  it('новая группа с задачами внутри и строка в существующую группу — одна правка', async () => {
+    const editor = await openEditor([{ ...task('g', 'Эпик'), type: 'group' }, { ...task('t', 'Старая'), parentKey: 'g' }])
+    const keys = editor.createItems([
+      { type: 'group', data: { name: 'Новый эпик' }, children: [{ type: 'task', data: { name: 'A' } }, { type: 'task', data: { name: 'B' } }] },
+      { type: 'task', data: { name: 'C' }, parentKey: 'g' },
+      { type: 'task', data: { name: 'D' } },
+    ], { label: 'Задачи из Jira (4)' })
+    expect(keys).toHaveLength(5)
+    const [group, a, b, c, d] = keys.map((k) => editor.state.items[k])
+    expect([a.parentKey, b.parentKey]).toEqual([group.key, group.key])
+    expect(a.position).toBeLessThan(b.position)
+    expect(c.parentKey).toBe('g')
+    expect(c.position).toBeGreaterThan(editor.state.items.t.position)
+    expect(group.parentKey).toBeNull()
+    expect(d.parentKey).toBeNull()
+    editor.undo()
+    expect(keys.every((k) => !editor.state.items[k])).toBe(true)
+  })
+})

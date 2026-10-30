@@ -649,16 +649,32 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   /** Несколько строк в конец родителя одной правкой (отменяется целиком); возвращает их ключи. */
+  /**
+   * Несколько строк одной правкой: [{ type, data, children?, parentKey? }]. children — вложенные строки новой
+   * группы; parentKey у строки — положить её в другую (уже существующую) группу. Новые строки — в конец уровня.
+   */
   function createItems(list, { parentKey = null, label = 'Новые строки' } = {}) {
-    const siblings = siblingsOf(parentKey)
-    let position = siblings.length ? siblings[siblings.length - 1].position : 0
+    const last = new Map()
+    const nextPositionIn = (parent) => {
+      if (!last.has(parent)) {
+        const siblings = siblingsOf(parent)
+        last.set(parent, siblings.length ? siblings[siblings.length - 1].position : 0)
+      }
+      last.set(parent, last.get(parent) + STEP)
+      return last.get(parent)
+    }
     const keys = []
-    const ops = list.map(({ type, data }) => {
-      position += STEP
-      const key = randomKey('i')
-      keys.push(key)
-      return { op: 'item.create', item: newItem(type, data || {}, key, parentKey, position) }
-    })
+    const ops = []
+    const add = (entries, parent) => {
+      for (const entry of entries) {
+        const target = entry.parentKey !== undefined ? entry.parentKey : parent
+        const key = randomKey('i')
+        keys.push(key)
+        ops.push({ op: 'item.create', item: newItem(entry.type, entry.data || {}, key, target, nextPositionIn(target)) })
+        if (entry.children?.length) add(entry.children, key)
+      }
+    }
+    add(list, parentKey)
     return commit(ops, label) ? keys : []
   }
 

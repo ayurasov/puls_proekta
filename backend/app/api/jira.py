@@ -191,6 +191,8 @@ class SearchIn(BaseModel):
     jql: str = Field(default="", max_length=2000)
     limit: Optional[int] = Field(default=SEARCH_MAX, ge=1, le=SEARCH_MAX)
     refresh: bool = False
+    # Разложить по эпикам: у задач — ключ эпика, в ответе — эпики (название, ссылка, статус)
+    epics: bool = False
 
 
 @bp.post("/jira/search")
@@ -210,6 +212,8 @@ def search():
     if not keys and not payload.jql.strip():
         raise ApiError(400, "validation_error", "Укажите ключи задач или запрос JQL")
     detailed = user.role == "admin"
+    if payload.epics:
+        return jsonify(_search_with_epics(conn, keys, invalid, payload, detailed))
     if keys:
         # По ключам — через кэш: так же карточка строки получает задачу сразу после ввода ссылки
         wanted = keys[:SEARCH_MAX]
@@ -230,3 +234,35 @@ def search():
     return jsonify({"issues": [normalize_issue(k.upper(), f, conn["baseUrl"], fmap) for k, f in ordered],
                     "missing": [], "invalid": invalid, "truncated": len(ordered) >= (payload.limit or SEARCH_MAX),
                     "error": None})
+
+
+def _search_with_epics(conn, keys, invalid, payload, detailed):
+    """Поиск для «Задач из Jira» с эпиками: поле «Epic Link» (Server/DC) или родитель (Cloud), эпики — отдельным
+    запросом. Кэш задач строк не используется: в нём нет полей эпика."""
+    try:
+        client = jira_service.make_client(detailed=detailed)
+        fmap = {**jira_service.field_map(conn), "epicField": client.epic_link_field()}
+        fields = request_fields(fmap, epics=True)
+        if keys:
+            wanted = keys[:SEARCH_MAX]
+            found, _checked = client.issues_by_keys(wanted, fields)
+            ordered = [(k, found[k]) for k in wanted if k in found]
+            missing = [k for k in wanted if k not in found]
+        else:
+            ordered = [(k.upper(), f) for k, f in client.search(payload.jql.strip(), fields,
+                                                                 limit=payload.limit or SEARCH_MAX)]
+            missing = []
+        issues = [normalize_issue(k, f, conn["baseUrl"], fmap) for k, f in ordered]
+        epic_keys = sorted({i["epic"] for i in issues if i["epic"]} - {i["key"] for i in issues})[:SEARCH_MAX]
+        epics = {i["key"]: i for i in issues if i["isEpic"]}
+        if epic_keys:
+            found, _checked = client.issues_by_keys(epic_keys, request_fields(fmap))
+            epics.update({k: normalize_issue(k, f, conn["baseUrl"], fmap) for k, f in found.items()})
+    except JiraError as exc:
+        if exc.status == 400 and exc.detail:
+            raise ApiError(400, "jql_error", f"Jira не приняла запрос: {exc.detail}") from None
+        raise _jira_failed(exc) from None
+    return {"issues": issues, "missing": missing, "invalid": invalid,
+            "truncated": len(keys) > SEARCH_MAX if keys else len(ordered) >= (payload.limit or SEARCH_MAX),
+            "error": None, "epics": {k: {"key": k, "summary": e["summary"], "url": e["url"], "status": e["status"],
+                                         "statusCategory": e["statusCategory"]} for k, e in epics.items()}}

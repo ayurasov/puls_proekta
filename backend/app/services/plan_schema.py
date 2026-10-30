@@ -333,6 +333,9 @@ def item_to_api(item):
             "lineStyle": item.line_style or "dashed",
             "lineColor": item.line_color or item.color,
         })
+    elif item.type == "group":
+        # Группа может быть эпиком Jira («Задачи из Jira» группами по эпикам)
+        data["jiraUrl"] = item.jira_url
     if item.deleted_at is not None:
         data["deleted"] = True
     return data

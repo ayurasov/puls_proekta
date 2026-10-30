@@ -31,13 +31,18 @@ const parentKey = ref(groupOf(selectedItem.value))
 // Предложить автоперенос, если он в плане ещё не включён: дальше статус, сроки и прогресс строк обновляются сами
 const autoOn = computed(() => jira.autoFields().length > 0)
 const enableAuto = ref(false)
+// Группами по эпикам: эпик — группа плана (уже привязанная к эпику группа используется), его задачи — внутри
+const byEpics = ref(false)
 const linked = computed(() => new Set(jira.linkedItems().map((item) => jira.keyFor(item))))
 
 async function search() {
   error.value = ''
   busy.value = true
   try {
-    const body = { planId: editor.state.plan.id, ...(mode.value === 'keys' ? { keys: keys.value } : { jql: jql.value }) }
+    const body = {
+      planId: editor.state.plan.id, ...(mode.value === 'keys' ? { keys: keys.value } : { jql: jql.value }),
+      ...(byEpics.value ? { epics: true } : {}),
+    }
     result.value = await api.post('/jira/search', body)
     picked.value = new Set(result.value.issues.filter((i) => !linked.value.has(i.key)).map((i) => i.key))
   } catch (err) {
@@ -69,19 +74,52 @@ function datesFor(issue) {
   const end = anchor && anchor >= start ? anchor : addDays(start, 4)
   return { start, end }
 }
-function add() {
-  const list = chosen.value.map((issue) => {
-    const { start, end } = datesFor(issue)
-    const status = STATUS_FROM_CATEGORY[issue.statusCategory] || 'new'
-    const data = { name: issue.summary || issue.key, jiraUrl: issue.url, start, end, status }
-    if (status === 'done') {
-      const done = issue.resolved || end
-      Object.assign(data, { progress: 100, completedDate: done, offset: diffDays(start, done) - diffDays(start, end) })
+function taskFor(issue) {
+  const { start, end } = datesFor(issue)
+  const status = STATUS_FROM_CATEGORY[issue.statusCategory] || 'new'
+  const data = { name: issue.summary || issue.key, jiraUrl: issue.url, start, end, status }
+  if (status === 'done') {
+    const done = issue.resolved || end
+    Object.assign(data, { progress: 100, completedDate: done, offset: diffDays(start, done) - diffDays(start, end) })
+  }
+  else if (issue.progress !== null) data.progress = issue.progress
+  return { type: 'task', data }
+}
+
+/**
+ * Строки для добавления. По эпикам: группа на каждый эпик (группа плана, уже привязанная к этому эпику,
+ * используется повторно), задачи эпика — внутри; задачи без эпика — как обычно; выбранный эпик — только группа.
+ */
+function rowsToAdd() {
+  if (!byEpics.value || !result.value?.epics) return chosen.value.map(taskFor)
+  const epicGroups = new Map(groups.value.filter((g) => jira.keyFor(g)).map((g) => [jira.keyFor(g), g.key]))
+  const created = new Map()
+  const rows = []
+  const groupFor = (epicKey) => {
+    if (epicGroups.has(epicKey)) return { parentKey: epicGroups.get(epicKey) }
+    if (!created.has(epicKey)) {
+      const epic = result.value.epics[epicKey] || { summary: epicKey, url: null }
+      const group = { type: 'group', data: { name: epic.summary || epicKey, jiraUrl: epic.url }, children: [] }
+      created.set(epicKey, group)
+      rows.push(group)
     }
-    else if (issue.progress !== null) data.progress = issue.progress
-    return { type: 'task', data }
-  })
-  const keys = editor.createItems(list, { parentKey: parentKey.value || null, label: `Задачи из Jira (${list.length})` })
+    return created.get(epicKey)
+  }
+  for (const issue of chosen.value) {
+    if (issue.isEpic) { groupFor(issue.key); continue }
+    if (!issue.epic) { rows.push(taskFor(issue)); continue }
+    const target = groupFor(issue.epic)
+    if (target.children) target.children.push(taskFor(issue))
+    else rows.push({ ...taskFor(issue), parentKey: target.parentKey })
+  }
+  return rows
+}
+const epicCount = computed(() => (byEpics.value && result.value?.epics ? new Set(chosen.value.map((i) => (i.isEpic ? i.key : i.epic)).filter(Boolean)).size : 0))
+
+function add() {
+  const list = rowsToAdd()
+  const tasks = chosen.value.filter((i) => !(byEpics.value && i.isEpic)).length
+  const keys = editor.createItems(list, { parentKey: parentKey.value || null, label: `Задачи из Jira (${tasks})` })
   if (!keys.length) return
   for (const issue of chosen.value) jira.state.issues[issue.key] = issue
   if (enableAuto.value && !autoOn.value) jira.setAutoFields(['status', 'dates', 'progress'])
@@ -110,6 +148,9 @@ function add() {
         <span class="field-hint">Не больше 200 задач. Строка запроса — как в поиске Jira.</span>
       </label>
       <div class="actions">
+        <label class="epics-check" title="Эпик станет группой плана, его задачи — строками внутри">
+          <input v-model="byEpics" type="checkbox" data-testid="jira-import-epics" @change="result && search()" /> Группами по эпикам
+        </label>
         <button class="btn" type="submit" :disabled="busy || !(mode === 'keys' ? keys.trim() : jql.trim())" data-testid="jira-import-search">
           <AppIcon name="search" :size="14" /> {{ busy ? 'Ищем…' : 'Найти' }}
         </button>
@@ -123,7 +164,11 @@ function add() {
         <label v-for="issue in result.issues" :key="issue.key" class="issue" :class="{ linked: linked.has(issue.key) }">
           <input type="checkbox" :checked="picked.has(issue.key)" @change="toggle(issue.key)" />
           <span class="key">{{ issue.key }}</span>
-          <span class="summary ellipsis" :title="issue.summary">{{ issue.summary }}</span>
+          <span class="summary-cell">
+            <span class="summary ellipsis" :title="issue.summary">{{ issue.summary }}</span>
+            <span v-if="byEpics && issue.isEpic" class="epic-tag">эпик → группа</span>
+            <span v-else-if="byEpics && issue.epic" class="epic-tag muted ellipsis" :title="result.epics?.[issue.epic]?.summary">{{ result.epics?.[issue.epic]?.summary || issue.epic }}</span>
+          </span>
           <span class="jira-status" :class="`cat-${issue.statusCategory}`">{{ issue.status }}</span>
           <span class="muted small due">{{ issue.due ? formatDay(issue.due) : 'без срока' }}</span>
           <span v-if="linked.has(issue.key)" class="badge">уже в плане</span>
@@ -151,6 +196,7 @@ function add() {
 
     <template #footer>
       <button class="btn" type="button" @click="emit('close')">Отмена</button>
+      <span v-if="epicCount" class="muted small foot-note">Групп по эпикам: {{ epicCount }}</span>
       <button class="btn btn-primary" type="button" :disabled="!chosen.length" data-testid="jira-import-add" @click="add">
         Добавить<span v-if="chosen.length"> ({{ chosen.length }})</span>
       </button>
@@ -162,7 +208,11 @@ function add() {
 .query { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .query textarea { resize: vertical; min-height: 64px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-.actions { display: flex; justify-content: flex-end; }
+.actions { display: flex; justify-content: flex-end; align-items: center; gap: 12px; flex-wrap: wrap; }
+.epics-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; margin-right: auto; }
+.summary-cell { display: flex; flex-direction: column; min-width: 0; }
+.epic-tag { font-size: 11.5px; color: #5e4db2; }
+.foot-note { margin-right: auto; }
 .error { color: var(--color-danger); display: flex; align-items: center; gap: 6px; }
 .list { max-height: 42vh; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); margin-top: 8px; }
 .issue { display: grid; grid-template-columns: 18px 84px minmax(0, 1fr) auto 78px auto; align-items: center; gap: 8px; padding: 6px 12px; border-bottom: 1px solid #f0f2f6; font-size: 13px; cursor: pointer; }

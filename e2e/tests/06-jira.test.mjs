@@ -10,6 +10,10 @@ const issues = {
   'PULS-1': { summary: 'Согласование ТЗ', status: { name: 'В работе', statusCategory: { key: 'indeterminate' } }, assignee: { displayName: 'Иванов И.' }, duedate: '2026-06-12', timespent: 7200, timeestimate: 7200 },
   'PULS-2': { summary: 'Прототип интерфейса', status: { name: 'Открыта', statusCategory: { key: 'new' } }, duedate: '2026-06-20' },
   'PULS-3': { summary: 'Приёмка заказчиком', status: { name: 'Готово', statusCategory: { key: 'done' } }, duedate: '2026-06-05', resolutiondate: '2026-06-04T11:00:00.000+0300' },
+  // Эпик и его задачи (поле Epic Link Jira Software)
+  'PULS-10': { summary: 'Личный кабинет', issuetype: { name: 'Epic' }, status: { name: 'В работе', statusCategory: { key: 'indeterminate' } } },
+  'PULS-11': { summary: 'Вход по СМС', status: { name: 'Открыта', statusCategory: { key: 'new' } }, duedate: '2026-07-10', customfield_10008: 'PULS-10' },
+  'PULS-12': { summary: 'Профиль', status: { name: 'Открыта', statusCategory: { key: 'new' } }, duedate: '2026-07-17', customfield_10008: 'PULS-10' },
 }
 let jiraServer
 function startJira() {
@@ -20,7 +24,12 @@ function startJira() {
       const send = (status, data) => { res.writeHead(status, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
       const path = req.url.split('?')[0].replace('/rest/api/2/', '')
       if (path === 'myself') return send(200, { displayName: 'Сервисная учётная запись' })
-      if (path === 'field') return send(200, [{ id: 'duedate', name: 'Срок', schema: { type: 'date' } }])
+      if (path === 'field') {
+        return send(200, [
+          { id: 'duedate', name: 'Срок', schema: { type: 'date' } },
+          { id: 'customfield_10008', name: 'Epic Link', custom: true, schema: { type: 'any', custom: 'com.pyxis.greenhopper.jira:gh-epic-link' } },
+        ])
+      }
       if (path === 'serverInfo') return send(200, { version: '8.20.10', deploymentType: 'Server' })
       if (path === 'search') {
         const { jql, validateQuery } = JSON.parse(body || '{}')
@@ -169,5 +178,25 @@ test('0.4.0: автоперенос из Jira — включается в «Св
   await page.click('[data-testid=undo]')
   await waitSaved(page)
   assert.equal((await planItems()).find((i) => i.name === 'Прототип интерфейса').status, 'inwork')
+  assert.deepEqual(page.errors, [])
+})
+
+test('0.4.0: «Задачи из Jira» группами по эпикам', async () => {
+  await page.click('[data-testid=jira-menu]')
+  await page.click('[data-testid=jira-import-open]')
+  await page.check('[data-testid=jira-import-epics]')
+  await page.fill('[data-testid=jira-import-keys]', 'PULS-11 PULS-12')
+  await page.click('[data-testid=jira-import-search]')
+  const list = page.locator('[data-testid=jira-import-list]')
+  await list.locator('text=Вход по СМС').waitFor()
+  assert.equal(await list.locator('.epic-tag', { hasText: 'Личный кабинет' }).count(), 2)
+  await page.click('[data-testid=jira-import-add]')
+  await page.locator('.grid-row .name', { hasText: 'Личный кабинет' }).waitFor()
+  await waitSaved(page)
+  const items = await planItems()
+  const group = items.find((i) => i.name === 'Личный кабинет')
+  assert.equal(group.type, 'group')
+  assert.equal(group.jiraUrl, `${JIRA}/browse/PULS-10`)
+  assert.deepEqual(items.filter((i) => i.parentKey === group.key).map((i) => i.name).sort(), ['Вход по СМС', 'Профиль'])
   assert.deepEqual(page.errors, [])
 })
