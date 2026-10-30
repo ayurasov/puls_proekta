@@ -5,7 +5,7 @@ import BaseModal from '../../components/common/BaseModal.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
-import { formatDateTime, formatRelative } from '../../utils/format'
+import { countLabel, formatDateTime, formatRelative } from '../../utils/format'
 
 /**
  * История плана: журнал изменений (кто, когда, что было → стало) и сохранённые версии
@@ -86,7 +86,7 @@ async function preview(snap) {
 async function restore(snap) {
   const ok = await confirm({
     title: 'Восстановить это состояние плана?',
-    message: `План станет таким, каким был ${formatDateTime(snap.createdAt)} (${snap.itemsCount} строк). Текущее состояние сохранится отдельной версией — восстановление тоже можно отменить.`,
+    message: `План станет таким, каким был ${formatDateTime(snap.createdAt)} (${countLabel(snap.itemsCount, 'строка', 'строки', 'строк')}). Текущее состояние сохранится отдельной версией — восстановление тоже можно отменить.`,
     confirmText: 'Восстановить', danger: false,
   })
   if (!ok) return
@@ -98,7 +98,7 @@ async function restore(snap) {
     }
     const res = await api.post(`/plans/${props.planId}/snapshots/${snap.id}/restore`)
     editor.state.previewSnapshot = null
-    ui.success('План восстановлен', `Изменений: ${res.changes}`)
+    ui.success('План восстановлен', countLabel(res.changes, 'изменение', 'изменения', 'изменений'))
     emit('restored')
     emit('close')
   } catch (err) { ui.error(err) }
@@ -146,7 +146,7 @@ async function restore(snap) {
         <div class="snap-main">
           <div class="snap-title">{{ snap.label || REASONS[snap.reason] || snap.reason }}</div>
           <div class="muted small">
-            <span :title="formatDateTime(snap.createdAt)">{{ formatRelative(snap.createdAt) }}</span> · {{ REASONS[snap.reason] || snap.reason }} · {{ snap.itemsCount }} строк<span v-if="snap.userName"> · {{ snap.userName }}</span>
+            <span :title="formatDateTime(snap.createdAt)">{{ formatRelative(snap.createdAt) }}</span> · {{ REASONS[snap.reason] || snap.reason }} · {{ countLabel(snap.itemsCount, 'строка', 'строки', 'строк') }}<span v-if="snap.userName"> · {{ snap.userName }}</span>
           </div>
         </div>
         <button class="btn btn-sm" type="button" @click="preview(snap)"><AppIcon name="eye" :size="14" /> Просмотреть</button>

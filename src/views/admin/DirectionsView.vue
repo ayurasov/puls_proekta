@@ -5,6 +5,7 @@ import { useProjectsStore } from '../../stores/projects'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
+import { countLabel } from '../../utils/format'
 import ColorPicker from '../../gantt/components/ColorPicker.vue'
 
 const projects = useProjectsStore()
@@ -43,7 +44,7 @@ async function remove(direction) {
   const ok = await confirm({
     title: `Удалить направление «${direction.name}»?`,
     message: n
-      ? `${n} проект(ов) направления останутся и переместятся в «Без направления». Правила доступа, выданные на всё направление, будут удалены.`
+      ? `${countLabel(n, 'проект', 'проекта', 'проектов')} направления ${n % 10 === 1 && n % 100 !== 11 ? 'останется и переместится' : 'останутся и переместятся'} в «Без направления». Правила доступа, выданные на всё направление, будут удалены.`
       : 'Проектов в направлении нет.',
     confirmText: 'Удалить',
   })
@@ -98,7 +99,7 @@ async function drop(target) {
             <div class="name">{{ d.name }}</div>
             <div v-if="d.description" class="muted small">{{ d.description }}</div>
           </div>
-          <span class="muted small">{{ counts[d.id] || 0 }} проектов</span>
+          <span class="muted small">{{ countLabel(counts[d.id] || 0, 'проект', 'проекта', 'проектов') }}</span>
           <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Изменить" @click="editing = { ...d }"><AppIcon name="edit" :size="15" /></button>
           <button class="btn btn-ghost btn-icon btn-sm btn-text-danger" type="button" title="Удалить" @click="remove(d)"><AppIcon name="trash" :size="15" /></button>
         </template>

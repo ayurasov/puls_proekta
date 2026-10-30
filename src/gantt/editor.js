@@ -19,6 +19,7 @@ import { createCalendar } from './domain/calendar'
 import { insertPosition } from './domain/positions'
 import { addDays, diffDays, todayLocal } from './domain/dates'
 import { localStorageGet, localStorageSet } from '../stores/ui'
+import { countLabel } from '../utils/format'
 
 const POLL_VISIBLE_MS = 4000
 const POLL_HIDDEN_MS = 30000
@@ -353,7 +354,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         const lost = batch.entries.length + state.queue.length
         state.queue = []
         if (err.code === 'archived' && state.plan) state.plan.isArchived = true
-        ui.error(err.message || 'Изменения не сохранены', `Не сохранено правок: ${lost}. План обновлён с сервера.`)
+        ui.error(err.message || 'Изменения не сохранены', `Не сохранено: ${countLabel(lost, 'правка', 'правки', 'правок')}. План обновлён с сервера.`)
         resyncNeeded = !stopped
         drained()
         return

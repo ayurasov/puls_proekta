@@ -7,7 +7,7 @@ import { useDialogs } from '../../composables/useDialogs'
 import { createPlanEditor } from '../editor'
 import { computeDependencyShifts } from '../domain/dependencies'
 import { descendantKeys } from '../domain/tree'
-import { formatRelative } from '../../utils/format'
+import { countLabel, formatRelative, pluralize } from '../../utils/format'
 import { isUndoRedo, keyContext } from '../keyboard'
 import AppIcon from '../../components/common/AppIcon.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
@@ -71,8 +71,9 @@ watch(() => state.plan?.title, (title, old) => { if (old && title !== old) emit(
 
 const saveStatus = computed(() => {
   void savedTick.value
-  if (state.authLost) return { kind: 'offline', text: `Сессия истекла · ${editor.pendingCount} ${editor.pendingCount === 1 ? 'изменение ждёт' : 'изменений ждут'} входа` }
-  if (state.offline) return { kind: 'offline', text: `Нет связи · ${editor.pendingCount} ${editor.pendingCount === 1 ? 'изменение ждёт' : 'изменений ждут'} отправки` }
+  const waiting = `${countLabel(editor.pendingCount, 'изменение', 'изменения', 'изменений')} ${pluralize(editor.pendingCount, 'ждёт', 'ждут', 'ждут')}`
+  if (state.authLost) return { kind: 'offline', text: `Сессия истекла · ${waiting} входа` }
+  if (state.offline) return { kind: 'offline', text: `Нет связи · ${waiting} отправки` }
   if (state.inFlight || state.queue.length) return { kind: 'saving', text: 'Сохранение…' }
   if (state.lastSavedAt) return { kind: 'saved', text: `Сохранено ${formatRelative(state.lastSavedAt)}` }
   return { kind: 'idle', text: editor.canEdit ? 'Все изменения сохраняются автоматически' : '' }
@@ -98,7 +99,7 @@ async function deleteRows(keys) {
     const choice = await ui.openDialog({
       type: 'choice',
       title: items.length === 1 ? `Удалить «${items[0].name}»?` : `Удалить строки (${items.length})?`,
-      message: `Внутри ${children.size} ${children.size === 1 ? 'вложенная строка' : 'вложенных строк'}. Удалить их тоже или оставить, подняв на уровень выше?`,
+      message: `Внутри ${countLabel(children.size, 'вложенная строка', 'вложенные строки', 'вложенных строк')}. Удалить их тоже или оставить, подняв на уровень выше?`,
       choices: [
         { value: 'keep', label: 'Оставить вложенные' },
         { value: 'all', label: 'Удалить всё', danger: true },
@@ -241,7 +242,7 @@ provide('ganttActions', actions)
       <AppIcon name="wifiOff" /> Нет связи с сервером. Изменения сохраняются на этой странице и будут отправлены, когда связь восстановится — не закрывайте вкладку.
     </div>
     <div v-if="inconsistent && !state.previewSnapshot" class="banner banner-info">
-      <AppIcon name="link" /> Сроки {{ inconsistent }} {{ inconsistent === 1 ? 'задачи не согласованы' : 'задач не согласованы' }} со связями «предшественник».
+      <AppIcon name="link" /> Сроки {{ countLabel(inconsistent, 'задачи', 'задач', 'задач') }} не согласованы со связями «предшественник».
       <span class="spacer" />
       <button class="btn btn-sm" type="button" @click="alignDependencies">Выровнять по связям</button>
     </div>

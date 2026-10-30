@@ -6,6 +6,7 @@ import { ROLE_LABELS } from '../../stores/auth'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
+import { countLabel } from '../../utils/format'
 
 const ui = useUiStore()
 const projects = useProjectsStore()
@@ -85,7 +86,7 @@ async function changeLevel(rule, value) {
   } catch (err) { ui.error(err) }
 }
 async function removeRules(ids) {
-  const ok = await confirm({ title: ids.length === 1 ? 'Отозвать доступ?' : `Отозвать доступы (${ids.length})?`, message: 'Сотрудники перестанут видеть эти проекты.', confirmText: 'Отозвать' })
+  const ok = await confirm({ title: ids.length === 1 ? 'Отозвать доступ?' : `Отозвать ${countLabel(ids.length, 'доступ', 'доступа', 'доступов')}?`, message: 'Сотрудники перестанут видеть эти проекты.', confirmText: 'Отозвать' })
   if (!ok) return
   try {
     await api.post('/access/delete', { ids })

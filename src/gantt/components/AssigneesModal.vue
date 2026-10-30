@@ -6,6 +6,7 @@ import UserAvatar from '../../components/common/UserAvatar.vue'
 import { useDirectoryStore } from '../../stores/directory'
 import { useDialogs } from '../../composables/useDialogs'
 import { resolveColor } from '../domain/colors'
+import { countLabel } from '../../utils/format'
 
 /** Исполнители плана: ФИО, роль, цвет и (необязательно) связь с сотрудником системы. */
 const emit = defineEmits(['close'])
@@ -46,7 +47,7 @@ async function remove(a) {
   const n = usage.value[a.key] || 0
   const ok = await confirm({
     title: `Удалить исполнителя «${a.name}»?`,
-    message: n ? `Он назначен на ${n} строк — у них ответственный будет снят. Отменить можно через Ctrl+Z.` : 'Отменить удаление можно через Ctrl+Z.',
+    message: n ? `Он назначен на ${countLabel(n, 'строку', 'строки', 'строк')} — у них исполнитель будет снят. Отменить можно через Ctrl+Z.` : 'Отменить удаление можно через Ctrl+Z.',
     confirmText: 'Удалить',
   })
   if (ok) editor.deleteAssignee(a.key)
@@ -75,7 +76,7 @@ async function remove(a) {
             <div class="name">{{ a.name }}</div>
             <div class="muted small">{{ [a.role, a.userId && directory.byId[a.userId] ? 'сотрудник системы' : ''].filter(Boolean).join(' · ') || '—' }}</div>
           </div>
-          <span class="muted small">{{ usage[a.key] || 0 }} строк</span>
+          <span class="muted small">{{ countLabel(usage[a.key] || 0, 'строка', 'строки', 'строк') }}</span>
           <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm" type="button" title="Изменить" @click="startEdit(a)"><AppIcon name="edit" :size="14" /></button>
           <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm btn-text-danger" type="button" title="Удалить" @click="remove(a)"><AppIcon name="trash" :size="14" /></button>
         </template>

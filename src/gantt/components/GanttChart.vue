@@ -8,6 +8,7 @@ import { dayX, fitZoom, nextZoom } from '../domain/layout'
 import { STATUSES, STATUS_BY_KEY, resolveColor } from '../domain/colors'
 import { descendantKeys, parentOf } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
+import { countLabel } from '../../utils/format'
 
 const editor = inject('gantt')
 const actions = inject('ganttActions')
@@ -213,7 +214,7 @@ function metaLine(item) {
     if (item.commentCount) parts.push({ text: `💬 ${item.commentCount}` })
   } else if (item.type === 'group') {
     const model = rows.value.find((r) => r.item.key === item.key)
-    if (model?.childCount) parts.push({ text: `${model.childCount} ${model.childCount === 1 ? 'элемент' : 'эл.'}` })
+    if (model?.childCount) parts.push({ text: countLabel(model.childCount, 'элемент', 'элемента', 'элементов') })
   } else if (item.type === 'milestone') {
     parts.push({ text: formatDay(item.date) })
     if (item.assigneeKey) parts.push({ text: assigneeName(item.assigneeKey) })
@@ -575,7 +576,7 @@ function noteLabel(note) {
             <div class="corner-cols" :style="{ height: ctx.headerHeight + 'px' }">
               <div class="col-head col-name" :style="{ width: nameWidth + 'px' }">
                 <span>Задача</span>
-                <span class="muted small">{{ rows.length }} {{ rows.length === 1 ? 'строка' : 'строк' }}</span>
+                <span class="muted small">{{ countLabel(rows.length, 'строка', 'строки', 'строк') }}</span>
               </div>
               <div v-for="col in columns" :key="col.key" class="col-head" :style="{ width: col.width + 'px' }">
                 {{ { start: 'Начало', end: 'Окончание', duration: 'Длит.', assignee: 'Ответственный', progress: '%' }[col.key] }}

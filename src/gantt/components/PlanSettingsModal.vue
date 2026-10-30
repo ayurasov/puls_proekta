@@ -6,6 +6,7 @@ import ColorPicker from './ColorPicker.vue'
 import { addDays, maxDay, minDay } from '../domain/dates'
 import { SCALES } from '../domain/layout'
 import { useUiStore } from '../../stores/ui'
+import { countLabel } from '../../utils/format'
 
 /** Настройки графика — общие для всех, кто работает с планом (изменения видны коллегам). */
 const emit = defineEmits(['close'])
@@ -60,7 +61,7 @@ function addCategory() {
 }
 function removeCategory(name) {
   const used = editor.itemList.filter((i) => i.category === name).length
-  if (used) { ui.error(`Категория используется в ${used} задачах — сначала смените её у задач`); return }
+  if (used) { ui.error(`Категория используется в ${countLabel(used, 'задаче', 'задачах', 'задачах')} — сначала смените её у задач`); return }
   patch({ categories: (s.value.categories || []).filter((c) => c !== name) }, 'Удаление категории')
 }
 function saveDefaultView() {
