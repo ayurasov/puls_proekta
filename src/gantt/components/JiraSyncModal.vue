@@ -1,6 +1,7 @@
 <script setup>
 import { computed, inject, reactive, ref } from 'vue'
 import BaseModal from '../../components/common/BaseModal.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import { STATUS_BY_KEY } from '../domain/colors'
 import { formatDay } from '../domain/dates'
@@ -61,6 +62,7 @@ function open(key) {
 
 <template>
   <BaseModal title="Сверка с Jira" size="wide" @close="emit('close')">
+    <template #header-actions><HelpLink topic="jira-sync" /></template>
     <div class="top">
       <p class="muted small">Строки плана, привязанные к задачам Jira: {{ rows.length }}. Отметьте, что перенести из Jira в план, —
         всё переносится одной правкой и отменяется кнопкой «Отменить» или Ctrl+Z.</p>

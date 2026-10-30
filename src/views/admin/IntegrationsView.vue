@@ -3,6 +3,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
+import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 
 const ui = useUiStore()
@@ -93,7 +94,7 @@ function fieldLabel(id) { return fieldOptions.value.find((f) => f.id === id)?.na
 <template>
   <div class="page narrow">
     <div class="page-header">
-      <h1 class="page-title">Интеграции</h1>
+      <h1 class="page-title">Интеграции <HelpLink topic="admin-integrations" /></h1>
     </div>
 
     <div v-if="loaded" class="card block" data-testid="jira-settings">

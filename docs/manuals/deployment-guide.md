@@ -206,6 +206,38 @@ server {
 | `BACKUP_HOUR` | `03` | Час ежедневной копии (по `TZ`) |
 | `BACKUP_RETENTION_DAYS` | `30` | Сколько дней хранить ежедневные копии |
 
+# Структура компании из командной строки
+
+Те же операции, что на странице «Импорт и экспорт», — командой в контейнере backend (без `--apply` — только
+проверка, ничего не записывается):
+
+```bash
+docker compose exec backend python scripts/org_transfer.py export-structure -o /tmp/structure.json
+docker compose exec backend python scripts/org_transfer.py export-employees --format zip -o /tmp/employees.zip
+docker compose cp backend:/tmp/structure.json backend:/tmp/employees.zip .
+```
+
+Загрузка: скопируйте файл в контейнер и проверьте, затем примените (`--actor` — логин администратора, от имени
+которого изменения попадут в реестр):
+
+```bash
+docker compose cp people.csv backend:/tmp/people.csv
+docker compose exec backend python scripts/org_transfer.py import-csv /tmp/people.csv --create-missing --actor admin
+docker compose exec backend python scripts/org_transfer.py import-csv /tmp/people.csv --create-missing --actor admin --apply
+```
+
+Так же работают `import-structure` (`--no-settings` — без типов и глубины из файла), `import-employees`
+(`--new-users active|inactive|file`) и `sync-ad` (`--create-missing`, `--deactivate-missing`).
+
+Синхронизация с Active Directory по расписанию — запись cron на сервере, например ежедневно в 06:15:
+
+```bash
+15 6 * * * cd /opt/puls && docker compose exec -T backend python scripts/org_transfer.py sync-ad --create-missing --actor admin --apply >> /var/log/puls-ad-sync.log 2>&1
+```
+
+Подключение к каталогу берётся из «Администрирование → Настройки → Вход через домен», параметры синхронизации — со
+страницы «Импорт и экспорт → Active Directory».
+
 # Резервное копирование и восстановление
 
 ## Копии

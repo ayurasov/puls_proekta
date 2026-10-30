@@ -4,6 +4,7 @@ import { api } from '../../api/client'
 import { useOrgStore } from '../../stores/org'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
+import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import BaseModal from '../../components/common/BaseModal.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
@@ -151,7 +152,7 @@ const peopleWithoutUnit = computed(() => org.people.filter((p) => p.isActive && 
   <div class="page">
     <div class="page-header">
       <div>
-        <h1 class="page-title">Структура компании</h1>
+        <h1 class="page-title">Структура компании <HelpLink topic="admin-structure" /></h1>
         <div class="page-subtitle">
           {{ org.departments.length }} подразделений · {{ org.people.filter((p) => p.isActive).length }} сотрудников
           <span v-if="peopleWithoutUnit"> · <router-link to="/admin/users?department=none">без подразделения: {{ peopleWithoutUnit }}</router-link></span>

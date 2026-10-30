@@ -2,6 +2,7 @@
 import { computed, inject, ref } from 'vue'
 import { api } from '../../api/client'
 import BaseModal from '../../components/common/BaseModal.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import { addDays, diffDays, formatDay } from '../domain/dates'
 import { STATUS_FROM_CATEGORY } from '../jira'
@@ -72,6 +73,7 @@ function add() {
 
 <template>
   <BaseModal title="Задачи из Jira" size="wide" @close="emit('close')">
+    <template #header-actions><HelpLink topic="jira-import" /></template>
     <div class="segmented">
       <button type="button" :class="{ 'is-active': mode === 'keys' }" @click="mode = 'keys'">По ключам</button>
       <button type="button" :class="{ 'is-active': mode === 'jql' }" @click="mode = 'jql'">Запрос JQL</button>

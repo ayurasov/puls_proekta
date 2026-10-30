@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import StructureTransfer from '../../components/org-transfer/StructureTransfer.vue'
 import EmployeesTransfer from '../../components/org-transfer/EmployeesTransfer.vue'
@@ -30,7 +31,7 @@ function selectTab(key) {
   <div class="page narrow">
     <div class="page-header">
       <div>
-        <h1 class="page-title">Импорт и экспорт структуры</h1>
+        <h1 class="page-title">Импорт и экспорт структуры <HelpLink topic="admin-org-transfer" /></h1>
         <div class="page-subtitle">Структура компании и сотрудники: перенос файлами в формате «По Делу», загрузка из кадровой системы, синхронизация с Active Directory</div>
       </div>
     </div>

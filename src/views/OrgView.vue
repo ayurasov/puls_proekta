@@ -6,6 +6,7 @@ import { useOrgStore } from '../stores/org'
 import { useAuthStore } from '../stores/auth'
 import { useUiStore } from '../stores/ui'
 import { pluralize } from '../utils/format'
+import HelpLink from '../components/common/HelpLink.vue'
 import AppIcon from '../components/common/AppIcon.vue'
 import UserAvatar from '../components/common/UserAvatar.vue'
 
@@ -114,7 +115,7 @@ const without = computed(() => org.people.filter((p) => p.isActive && !p.departm
   <div class="page org-page">
     <div class="page-header">
       <div>
-        <h1 class="page-title">Структура компании</h1>
+        <h1 class="page-title">Структура компании <HelpLink topic="org" /></h1>
         <div class="page-subtitle">{{ org.departments.length }} {{ pluralize(org.departments.length, 'подразделение', 'подразделения', 'подразделений') }} ·
           {{ activeCount }} {{ pluralize(activeCount, 'сотрудник', 'сотрудника', 'сотрудников') }}</div>
       </div>

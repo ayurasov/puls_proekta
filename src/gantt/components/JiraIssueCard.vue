@@ -1,5 +1,6 @@
 <script setup>
 import { computed, inject, ref } from 'vue'
+import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import { STATUS_BY_KEY } from '../domain/colors'
 import { formatDay } from '../domain/dates'
@@ -77,6 +78,7 @@ async function refresh() {
     <div class="foot muted small">
       <span v-if="jira.state.fetchedAt">Данные Jira {{ formatRelative(jira.state.fetchedAt) }}</span>
       <span class="spacer" />
+      <HelpLink topic="jira" :size="13" />
       <button class="link small" type="button" :disabled="refreshing" @click="refresh"><AppIcon name="refresh" :size="12" /> {{ refreshing ? 'Обновляем…' : 'Обновить' }}</button>
     </div>
   </div>
