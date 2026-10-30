@@ -6,7 +6,7 @@
  * Стенд: временная база SQLite с демо-данными, Flask на :5077 и собранный клиент (vite preview)
  * на :4177. Снимки 1440×900 при масштабе 1,5 сохраняются в docs/manuals/images/{user,admin}/ и
  * затем сжимаются `python3 tools/docs/optimize_png.py docs/manuals/images/user docs/manuals/images/admin`.
- * Переменные: PYTHON (по умолчанию python3).
+ * Переменные: PYTHON (по умолчанию python3), SHOTS_API_PORT и SHOTS_WEB_PORT — другие порты.
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync } from 'node:fs'
@@ -19,7 +19,9 @@ const require = createRequire(import.meta.url)
 const { chromium } = require('playwright')
 const root = resolve(fileURLToPath(import.meta.url), '../../..')
 const python = process.env.PYTHON || 'python3'
-const BASE = 'http://127.0.0.1:4177'
+const API_PORT = process.env.SHOTS_API_PORT || '5077'
+const WEB_PORT = process.env.SHOTS_WEB_PORT || '4177'
+const BASE = `http://127.0.0.1:${WEB_PORT}`
 const PASSWORD = 'demo-password-1'
 const only = process.argv.slice(2)
 const dir = mkdtempSync(join(tmpdir(), 'puls-shots-'))
@@ -29,8 +31,9 @@ const seed = spawnSync(python, [join(root, 'tools/demo/seed_demo.py')], { cwd: j
 if (seed.status !== 0) process.exit(seed.status || 1)
 
 const children = [
-  spawn(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--host', '127.0.0.1', '--port', '5077'], { cwd: join(root, 'backend'), env, stdio: 'ignore' }),
-  spawn('npx', ['vite', 'preview', '--host', '127.0.0.1', '--port', '4177', '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: 'http://127.0.0.1:5077' }, stdio: 'ignore' }),
+  spawn(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--host', '127.0.0.1', '--port', API_PORT], { cwd: join(root, 'backend'), env, stdio: 'ignore' }),
+  // vite — напрямую, а не через npx: иначе после снимков сервер остаётся работать
+  spawn(process.execPath, [join(root, 'node_modules/vite/bin/vite.js'), 'preview', '--host', '127.0.0.1', '--port', WEB_PORT, '--strictPort'], { cwd: root, env: { ...process.env, VITE_BACKEND: `http://127.0.0.1:${API_PORT}` }, stdio: 'ignore' }),
 ]
 async function waitFor(url) {
   for (let i = 0; i < 120; i += 1) {
@@ -186,7 +189,7 @@ async function userGuide() {
   const viewer = await session('volkov')
   await openProject(viewer, PORTAL)
   await shot(viewer, '22-viewer')
-  await viewer.click('button[title="Профиль"]')
+  await viewer.click('.user-card')
   await viewer.waitForSelector('.modal')
   await shot(viewer, '23-profile')
 }
@@ -236,7 +239,7 @@ async function adminGuide() {
 
 let code = 0
 try {
-  await waitFor('http://127.0.0.1:5077/api/health/ready')
+  await waitFor(`http://127.0.0.1:${API_PORT}/api/health/ready`)
   await waitFor(BASE + '/')
   // Поля дат браузера — в русском формате, как у сотрудников: Chromium в Linux берёт его из окружения
   browser = await chromium.launch({ env: { ...process.env, LANG: 'ru_RU.UTF-8', LANGUAGE: 'ru_RU:ru', LC_ALL: 'ru_RU.UTF-8' } })
