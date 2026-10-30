@@ -15,7 +15,19 @@ const refreshing = ref(false)
 const key = computed(() => jira.keyFor(props.item))
 const issue = computed(() => jira.issueFor(props.item))
 const changes = computed(() => (issue.value ? jira.changesFor(props.item) : []))
-const hours = (h) => (h === null || h === undefined ? '—' : `${String(h).replace('.', ',')} ч`)
+const hours = (h) => `${String(h).replace('.', ',')} ч`
+const known = (h) => h !== null && h !== undefined
+/** «40 ч из 160 ч · осталось 120 ч» — только то, что есть в Jira. */
+const effort = computed(() => {
+  const i = issue.value
+  if (!i) return ''
+  const parts = []
+  if (known(i.spentHours) && known(i.estimateHours)) parts.push(`${hours(i.spentHours)} из ${hours(i.estimateHours)}`)
+  else if (known(i.spentHours)) parts.push(`затрачено ${hours(i.spentHours)}`)
+  else if (known(i.estimateHours)) parts.push(`оценка ${hours(i.estimateHours)}`)
+  if (known(i.remainingHours)) parts.push(`осталось ${hours(i.remainingHours)}`)
+  return parts.join(' · ')
+})
 
 function describe(change) {
   if (change.field === 'status') return `${STATUS_BY_KEY[change.from]?.label} → ${STATUS_BY_KEY[change.to]?.label}`
@@ -55,9 +67,9 @@ async function refresh() {
         <template v-if="issue.start"><dt>Начало</dt><dd>{{ formatDay(issue.start) }}</dd></template>
         <dt>Срок</dt><dd>{{ issue.due ? formatDay(issue.due) : 'не указан' }}</dd>
         <template v-if="issue.resolved"><dt>Решена</dt><dd>{{ formatDay(issue.resolved) }}</dd></template>
-        <template v-if="issue.estimateHours !== null || issue.spentHours !== null">
+        <template v-if="effort">
           <dt>Трудозатраты</dt>
-          <dd>{{ hours(issue.spentHours) }} из {{ hours(issue.estimateHours) }}<span v-if="issue.remainingHours !== null" class="muted"> · осталось {{ hours(issue.remainingHours) }}</span></dd>
+          <dd>{{ effort }}</dd>
         </template>
       </dl>
       <div v-if="issue.progress !== null" class="progress" :title="`Прогресс по трудозатратам: ${issue.progress}%`"><span :style="{ width: issue.progress + '%' }" /></div>
@@ -69,7 +81,7 @@ async function refresh() {
         </div>
         <div v-for="change in changes" :key="change.field" class="change">
           <span class="muted small label">{{ change.label }}</span>
-          <span class="small ellipsis" :title="describe(change)">{{ describe(change) }}</span>
+          <span class="small value">{{ describe(change) }}</span>
           <button class="link small" type="button" @click="applyOne(change)">Перенести</button>
         </div>
       </div>
@@ -97,7 +109,8 @@ async function refresh() {
 .progress span { display: block; height: 100%; background: #0052cc; }
 .changes { border-top: 1px dashed var(--color-border); padding-top: 8px; display: flex; flex-direction: column; gap: 4px; }
 .changes-head { display: flex; align-items: center; justify-content: space-between; }
-.change { display: grid; grid-template-columns: 74px 1fr auto; gap: 8px; align-items: center; }
+.change { display: grid; grid-template-columns: 74px 1fr auto; gap: 8px; align-items: baseline; }
+.change .value { overflow-wrap: anywhere; }
 .synced { display: flex; align-items: center; gap: 4px; color: #1f7a4c; }
 .foot { display: flex; align-items: center; gap: 6px; }
 .link { border: 0; background: none; color: var(--color-primary-dark); padding: 0; display: inline-flex; align-items: center; gap: 3px; }
