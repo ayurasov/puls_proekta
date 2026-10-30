@@ -340,7 +340,7 @@ function onDragEnd() {
 .progress-value { font-size: 12px; font-weight: 600; color: var(--color-text-secondary); min-width: 32px; text-align: right; }
 .card-stats { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--color-text-secondary); }
 .stat-inwork { color: #a8670f; }
-.stat-overdue { color: var(--color-danger); font-weight: 600; }
+.stat-overdue { color: #c62933; font-weight: 600; }
 .stat-blocked { color: #c62933; }
 .milestone { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #0f766e; }
 .card-footer { display: flex; align-items: center; gap: 8px; margin-top: 2px; }

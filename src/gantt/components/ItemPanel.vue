@@ -364,7 +364,7 @@ function duplicate() {
 @keyframes slide-in { from { transform: translateX(16px); opacity: 0; } to { transform: none; opacity: 1; } }
 .panel-head { display: flex; align-items: center; gap: 4px; padding: 10px 12px 4px 16px; }
 .type-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--color-text-muted); }
-.type-badge.t-milestone { color: #0f9b8e; }
+.type-badge.t-milestone { color: #0f766e; }
 .type-badge.t-group { color: #64748b; }
 .title-wrap { padding: 0 16px 8px; }
 .title-input { width: 100%; border: 1px solid transparent; border-radius: var(--radius-sm); font-size: 16px; font-weight: 700; padding: 4px 6px; margin-left: -6px; resize: none; field-sizing: content; min-height: 32px; font-family: inherit; color: var(--color-text); background: transparent; line-height: 1.35; }
@@ -393,8 +393,8 @@ function duplicate() {
 .span-card { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; padding: 10px 12px; background: var(--color-surface-2); border: 1px solid var(--color-border); border-radius: var(--radius-md); }
 .span-card div { display: flex; flex-direction: column; gap: 2px; }
 .span-card strong { font-size: 13px; }
-.late { color: var(--color-danger); }
-.early { color: var(--color-success); }
+.late { color: #c62933; }
+.early { color: #1f7a4c; }
 .with-action { display: flex; gap: 6px; }
 .updated { margin: 6px 0 0; }
 /* Ноутбук и планшет: карточка открывается поверх диаграммы, а не сжимает её */

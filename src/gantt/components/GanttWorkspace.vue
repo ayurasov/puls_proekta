@@ -276,7 +276,7 @@ provide('ganttActions', actions)
 .presence-avatar.editing { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--color-success); }
 .save-status { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); white-space: nowrap; }
 .save-status.is-saved { color: #1f7a4c; }
-.save-status.is-offline { color: var(--color-danger); font-weight: 600; }
+.save-status.is-offline { color: #c62933; font-weight: 600; }
 .save-status.is-saving svg { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (max-width: 1100px) { .presence-label { display: none; } }

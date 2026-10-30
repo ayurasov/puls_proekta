@@ -5,7 +5,7 @@ import PopupMenu from '../../components/common/PopupMenu.vue'
 import { createChartContext, dependencyPaths, legendEntries, rowModel } from '../chartModel'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { dayX, fitZoom, nextZoom } from '../domain/layout'
-import { STATUSES, STATUS_BY_KEY, resolveColor } from '../domain/colors'
+import { EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, resolveColor } from '../domain/colors'
 import { descendantKeys, parentOf } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
 import { countLabel } from '../../utils/format'
@@ -206,10 +206,10 @@ function metaLine(item) {
   const parts = []
   if (item.type === 'task') {
     const st = STATUS_BY_KEY[item.status || 'new']
-    parts.push({ text: st.label, color: st.color })
+    parts.push({ text: st.label, color: st.text })
     if (item.assigneeKey) parts.push({ text: assigneeName(item.assigneeKey) })
     if (item.category) parts.push({ text: item.category })
-    if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? '#e5484d' : '#2fa96b' })
+    if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? LATE_TEXT : EARLY_TEXT })
     if (item.dependencyLag) parts.push({ text: `лаг ${item.dependencyLag > 0 ? '+' : ''}${item.dependencyLag} д` })
     if (item.commentCount) parts.push({ text: `💬 ${item.commentCount}` })
   } else if (item.type === 'group') {
@@ -466,7 +466,7 @@ const tooltipData = computed(() => {
   const fields = display.value.tooltipFields || []
   const rowsOut = []
   if (item.type === 'task') {
-    if (fields.includes('status')) rowsOut.push(['Статус', STATUS_BY_KEY[item.status || 'new'].label, STATUS_BY_KEY[item.status || 'new'].color])
+    if (fields.includes('status')) rowsOut.push(['Статус', STATUS_BY_KEY[item.status || 'new'].label, STATUS_BY_KEY[item.status || 'new'].text])
     if (fields.includes('dates')) {
       rowsOut.push(['Срок', `${formatDay(item.start)} — ${formatDay(item.end)} (${diffDays(item.start, item.end) + 1} д)`])
       if (item.offset) rowsOut.push(['Сдвиг', `${item.offset > 0 ? '+' : ''}${item.offset} д, до ${formatDay(addDays(item.end, item.offset))}`])
@@ -605,7 +605,7 @@ function noteLabel(note) {
                  @click="label.kind === 'milestone' ? openPanel(state.items[label.key]) : actions.openNoteEditor({ noteKey: label.key })"
                  @pointermove="updateTooltip" @pointerleave="tooltip = null">
                 <path v-if="label.kind === 'note'" :d="`M${label.x - 4} ${6 + label.level * 15} l4 9 l4 -9 a4 4 0 1 0 -8 0 Z`" :fill="label.color" />
-                <text :x="label.x + (label.kind === 'note' ? 7 : 0)" :y="16 + label.level * 15" :fill="label.color" :text-anchor="label.kind === 'note' ? 'start' : 'middle'" class="lane-text">
+                <text :x="label.x + (label.kind === 'note' ? 7 : 0)" :y="16 + label.level * 15" :fill="label.textColor || label.color" :text-anchor="label.kind === 'note' ? 'start' : 'middle'" class="lane-text">
                   {{ label.kind === 'note' ? noteLabel(label) : label.text }}
                 </text>
               </g>
@@ -696,7 +696,7 @@ function noteLabel(note) {
                 <g v-if="m.bar" class="task" :class="[`st-${m.bar.status}`, { selected: m.key === selectedKey, editable: editor.canEdit }]" :data-key="m.key" data-kind="task" :data-tip="m.key">
                   <rect v-if="m.bar.tail?.kind === 'late'" class="tail late" :x="m.bar.tail.x - 3" :y="m.bar.y + 3" :width="m.bar.tail.w + 3" :height="m.bar.h - 6" rx="4" />
                   <rect class="bar" :x="m.bar.x" :y="m.bar.y" :width="m.bar.w" :height="m.bar.h" rx="6" :fill="m.bar.fill" />
-                  <rect v-if="m.bar.progress" class="progress" :x="m.bar.x" :y="m.bar.y" :width="m.bar.w * m.bar.progress / 100" :height="m.bar.h" rx="6" />
+                  <rect v-if="m.bar.progress" class="progress" :x="m.bar.x + 2" :y="m.bar.y + m.bar.h - 6" :width="Math.max(0, (m.bar.w - 4) * m.bar.progress / 100)" height="4" rx="2" />
                   <rect v-if="m.bar.tail?.kind === 'early'" class="tail early" :x="m.bar.tail.x" :y="m.bar.y" :width="m.bar.tail.w" :height="m.bar.h" rx="6" />
                   <rect v-if="m.bar.tail" class="tail-hatch" :x="m.bar.tail.kind === 'late' ? m.bar.tail.x : m.bar.tail.x" :y="m.bar.tail.kind === 'late' ? m.bar.y + 3 : m.bar.y" :width="m.bar.tail.w" :height="m.bar.tail.kind === 'late' ? m.bar.h - 6 : m.bar.h" fill="url(#hatch-late)" />
                   <text class="bar-text" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + m.bar.h / 2 + 3.5" :fill="m.bar.text">{{ m.bar.label }}</text>
@@ -726,7 +726,7 @@ function noteLabel(note) {
                 <g v-for="note in m.notes" :key="note.key" class="note" :data-tip="note.key" data-tip-kind="note" @click.stop="actions.openNoteEditor({ noteKey: note.key })" @pointerdown.stop>
                   <path :d="`M${note.x - 5} ${note.y + 5} a5 5 0 1 1 10 0 c0 3 -5 9 -5 9 c0 0 -5 -6 -5 -9 Z`" :fill="note.color" />
                   <circle :cx="note.x" :cy="note.y + 5" r="1.8" fill="#fff" />
-                  <text :x="note.x + 8" :y="note.y + 9" :fill="note.color" class="note-text">{{ noteLabel(note).length > 40 ? noteLabel(note).slice(0, 39) + '…' : noteLabel(note) }}</text>
+                  <text :x="note.x + 8" :y="note.y + 9" :fill="note.textColor || note.color" class="note-text">{{ noteLabel(note).length > 40 ? noteLabel(note).slice(0, 39) + '…' : noteLabel(note) }}</text>
                 </g>
               </g>
             </g>
@@ -861,7 +861,7 @@ function noteLabel(note) {
 .caret:hover { background: #e6eaf3; color: var(--color-text); }
 .caret-space { width: 18px; flex-shrink: 0; }
 .mark { width: 16px; display: flex; align-items: center; justify-content: center; color: var(--color-text-muted); flex-shrink: 0; }
-.type-milestone .mark { color: #0f9b8e; }
+.type-milestone .mark { color: #0f766e; }
 .name-block { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
 .name { font-size: 12.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .type-group .name { font-weight: 700; }
@@ -889,12 +889,12 @@ function noteLabel(note) {
 .gantt.is-dragging .task.editable { cursor: grabbing; }
 .bar { transition: filter 0.12s; }
 .task:hover .bar { filter: brightness(1.06) drop-shadow(0 2px 4px rgba(20, 25, 40, 0.18)); }
-.progress { fill: rgba(0, 0, 0, 0.22); pointer-events: none; }
+.progress { fill: rgba(0, 0, 0, 0.3); pointer-events: none; }
 .bar-text { font-size: 10px; font-weight: 700; text-anchor: middle; pointer-events: none; }
 .tail.late { fill: #ef4444; opacity: 0.6; }
 .tail.early { fill: #22c55e; opacity: 0.7; }
 .tail-hatch { pointer-events: none; }
-.tail-text { font-size: 9.5px; font-weight: 700; fill: #c53030; pointer-events: none; }
+.tail-text { font-size: 9.5px; font-weight: 700; fill: #b91c1c; pointer-events: none; }
 .st-done .bar { opacity: 0.78; }
 .st-done .outline { fill: none; stroke: #22c55e; stroke-width: 2.5; }
 .st-blocked .bar { opacity: 0.7; }

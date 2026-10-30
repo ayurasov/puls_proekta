@@ -5,7 +5,7 @@
  */
 import { addDays, diffDays, formatDayNoYear } from './domain/dates'
 import { buildHeader, dayX, layoutMilestoneLabels, pxPerDay, totalDays } from './domain/layout'
-import { resolveColor, STATUS_BY_KEY } from './domain/colors'
+import { BAR_OPACITY, readableText, resolveColor, STATUS_BY_KEY, textColorOnWhite } from './domain/colors'
 import { groupSpan, shiftedEnd } from './domain/tree'
 
 export const BAR_HEIGHT = 24
@@ -33,8 +33,8 @@ export function createChartContext({ range, scale, zoom, rowHeight, display, cal
       .map((n) => ({ ...n, x: dayX(range, px, n.date) + Math.floor(px / 2), color: resolveColor(n.color, 'orange').color }))
     : []
   const laneEntries = [
-    ...milestoneLines.filter((m) => m.text).map((m) => ({ kind: 'milestone', key: m.key, x: m.x, text: m.text, color: m.color })),
-    ...globalNotes.map((n) => ({ kind: 'note', key: n.key, x: n.x, text: n.text, color: n.color, date: n.date, showDate: n.showDate })),
+    ...milestoneLines.filter((m) => m.text).map((m) => ({ kind: 'milestone', key: m.key, x: m.x, text: m.text, color: m.color, textColor: textColorOnWhite(m.color) })),
+    ...globalNotes.map((n) => ({ kind: 'note', key: n.key, x: n.x, text: n.text, color: n.color, textColor: textColorOnWhite(n.color), date: n.date, showDate: n.showDate })),
   ]
   const lane = laneEntries.length ? layoutMilestoneLabels(laneEntries, 90) : { labels: [], levels: 0 }
   const laneHeight = lane.labels.length ? 8 + lane.levels * 15 : 0
@@ -89,7 +89,10 @@ export function rowModel(row, i, ctx, preview = null) {
   if (display.showNotes) {
     model.notes = ctx.notes
       .filter((n) => n.rowKey === item.key && n.date >= range.start && n.date <= range.end)
-      .map((n) => ({ ...n, x: dayX(range, px, n.date) + Math.floor(px / 2), y: y + 2, color: resolveColor(n.color, 'orange').color }))
+      .map((n) => {
+        const color = resolveColor(n.color, 'orange').color
+        return { ...n, x: dayX(range, px, n.date) + Math.floor(px / 2), y: y + 2, color, textColor: textColorOnWhite(color) }
+      })
   } else {
     model.notes = []
   }
@@ -103,7 +106,8 @@ export function rowModel(row, i, ctx, preview = null) {
     const label = barLabel(item, display)
     const h = roomForNote ? BAR_HEIGHT_WITH_NOTE : BAR_HEIGHT
     model.bar = {
-      x, w, y: roomForNote ? y + ctx.rowHeight - h - 6 : mid - h / 2, h, fill: color.color, text: color.text,
+      x, w, y: roomForNote ? y + ctx.rowHeight - h - 6 : mid - h / 2, h, fill: color.color,
+      text: readableText(color.color, BAR_OPACITY[item.status] || 1),
       label: fitText(label, w), fullLabel: label,
       progress: display.showProgress ? Math.max(0, Math.min(100, Number(item.progress || 0))) : 0,
       status: item.status || 'new', offset,
