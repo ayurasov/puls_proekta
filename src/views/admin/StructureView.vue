@@ -130,7 +130,8 @@ async function saveHeads() {
 
 // ---------- типы подразделений и глубина ----------
 function openSettings() {
-  settingsDraft.value = { unitKinds: org.settings.unitKinds.map((k) => ({ ...k })), maxDepth: org.settings.maxDepth }
+  // «Используется» — по типам на момент открытия: новый тип можно править, даже если набранный код совпал с занятым
+  settingsDraft.value = { unitKinds: org.settings.unitKinds.map((k) => ({ ...k, used: kindsInUse.value.has(k.value) })), maxDepth: org.settings.maxDepth }
 }
 function addKind() {
   settingsDraft.value.unitKinds.push({ value: '', label: '', color: '#4f7cff' })
@@ -138,7 +139,10 @@ function addKind() {
 async function saveSettings() {
   busy.value = true
   try {
-    await api.put('/org/settings', settingsDraft.value)
+    await api.put('/org/settings', {
+      maxDepth: settingsDraft.value.maxDepth,
+      unitKinds: settingsDraft.value.unitKinds.map(({ value, label, color }) => ({ value, label, color })),
+    })
     settingsDraft.value = null
     await org.reload()
     ui.success('Настройки структуры сохранены')
@@ -295,8 +299,8 @@ const peopleWithoutUnit = computed(() => org.people.filter((p) => p.isActive && 
         <div v-for="(k, i) in settingsDraft.unitKinds" :key="i" class="kind-row">
           <input v-model="k.color" class="color" type="color" :aria-label="`Цвет типа ${k.label}`" />
           <input v-model="k.label" class="input" placeholder="Подпись" maxlength="60" />
-          <input v-model="k.value" class="input mono" placeholder="code" maxlength="32" :readonly="kindsInUse.has(k.value) && !!k.value" />
-          <button class="btn btn-ghost btn-icon btn-sm" type="button" :disabled="kindsInUse.has(k.value)" :title="kindsInUse.has(k.value) ? 'Тип используется' : 'Убрать'" @click="settingsDraft.unitKinds.splice(i, 1)"><AppIcon name="close" :size="13" /></button>
+          <input v-model="k.value" class="input mono" placeholder="code" maxlength="32" :readonly="k.used" />
+          <button class="btn btn-ghost btn-icon btn-sm" type="button" :disabled="k.used" :title="k.used ? 'Тип используется' : 'Убрать'" @click="settingsDraft.unitKinds.splice(i, 1)"><AppIcon name="close" :size="13" /></button>
         </div>
       </div>
       <button class="btn btn-sm" type="button" @click="addKind"><AppIcon name="plus" :size="13" /> Тип</button>

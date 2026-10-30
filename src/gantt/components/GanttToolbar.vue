@@ -139,7 +139,8 @@ const columnLabels = computed(() => ({
   ...(jira.state.connected ? { jira: 'Задача Jira' } : {}),
 }))
 const jiraLinked = computed(() => (jira.state.connected ? jira.linkedItems().length : 0))
-const jiraDiffering = computed(() => (jira.state.loaded ? jira.linkedItems().filter((item) => jira.changesFor(item).length).length : 0))
+// Число на кнопке J — строки, где в Jira иной статус, сроки или прогресс (одно лишь название не считается)
+const jiraDiffering = computed(() => (jira.state.loaded ? jira.linkedItems().filter((item) => jira.differs(item)).length : 0))
 function jiraAction(name) {
   menu.value = null
   if (name === 'refresh') jira.load({ refresh: true })

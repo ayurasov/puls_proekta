@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { useOrgStore } from '../../stores/org'
 import { api, downloadFrom } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { useDirectoryStore } from '../../stores/directory'
@@ -134,6 +135,7 @@ async function apply() {
     result.value = { create: applied.summary.create, update: applied.summary.update, photos: 0, photoErrors: [] }
     await uploadPhotos(applied)
     directory.loaded = false
+    useOrgStore().loaded = false // списки подразделений на других страницах перечитаются
     ui.success('Сотрудники загружены', `Новых: ${result.value.create}, обновлено: ${result.value.update}`)
   } catch (err) {
     if (err?.payload?.summary) plan.value = err.payload

@@ -1,5 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
+import { useOrgStore } from '../../stores/org'
 import { api, downloadFrom } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import AppIcon from '../common/AppIcon.vue'
@@ -52,6 +53,7 @@ async function run(apply) {
     const result = await api.post('/org/import/structure', { bundle: bundle.value, applySettings: applySettings.value, apply })
     plan.value = result
     applied.value = Boolean(result.applied)
+    if (applied.value) useOrgStore().loaded = false // структура на других страницах перечитается
     if (applied.value) ui.success('Структура загружена')
   } catch (err) {
     if (err?.payload?.summary) plan.value = err.payload

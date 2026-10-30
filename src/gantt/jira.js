@@ -39,10 +39,12 @@ export function jiraLinkFromInput(value, baseUrl) {
 }
 
 /**
- * Что можно перенести из задачи Jira в строку: [{ field, label, from, to, fields }].
- * Без данных в Jira поле не предлагается; «Заблокирована» не меняется на «В работе».
+ * Что можно перенести из задачи Jira в строку: [{ field, label, from, to, fields, note? }].
+ * Без данных в Jira поле не предлагается. «Заблокирована» меняется только на «Завершена»: блокировка в Jira
+ * обычно не отдельная категория статуса. Если сроки задачи задаёт связь (автосдвиг), из Jira берётся только
+ * та дата, которую связь не определяет: при FS/SS — окончание, при FF/SF — начало.
  */
-export function jiraChanges(item, issue, { calendar, today } = {}) {
+export function jiraChanges(item, issue, { calendar, today, linked = false } = {}) {
   if (!item || !issue) return []
   const out = []
   if (issue.summary && issue.summary !== item.name) {
@@ -51,7 +53,7 @@ export function jiraChanges(item, issue, { calendar, today } = {}) {
   if (item.type === 'task') {
     const status = STATUS_FROM_CATEGORY[issue.statusCategory]
     const current = item.status || 'new'
-    if (status && status !== current && !(current === 'blocked' && status === 'inwork')) {
+    if (status && status !== current && !(current === 'blocked' && status !== 'done')) {
       const fields = { status }
       if (status === 'done') {
         const done = issue.resolved || today
@@ -61,14 +63,16 @@ export function jiraChanges(item, issue, { calendar, today } = {}) {
       }
       out.push({ field: 'status', label: 'Статус', from: current, to: status, fields, jiraStatus: issue.status })
     }
-    const start = issue.start || item.start
-    const end = issue.due || item.end
+    const endDriven = linked && ['FF', 'SF'].includes(item.dependencyType)
+    const start = linked && !endDriven ? item.start : issue.start || item.start
+    const end = endDriven ? item.end : issue.due || item.end
     if ((start !== item.start || end !== item.end) && start <= end) {
       const fields = { start, end }
       if (item.endMode === 'duration') {
         fields.duration = item.durationType === 'working' && calendar ? calendar.countWorkingDays(start, end) : diffDays(start, end) + 1
       }
-      out.push({ field: 'dates', label: 'Сроки', from: [item.start, item.end], to: [start, end], fields })
+      const note = linked ? (endDriven ? 'окончание задаёт связь' : 'начало задаёт связь') : null
+      out.push({ field: 'dates', label: 'Сроки', from: [item.start, item.end], to: [start, end], fields, note })
     }
     const progress = out.some((c) => c.fields.progress === 100) ? null : issue.progress
     if (progress !== null && progress !== undefined && progress !== (item.progress || 0) && item.status !== 'done') {
@@ -84,8 +88,12 @@ export function createJira(editor, ui) {
   const state = reactive({
     connected: false, baseUrl: null, hasStartField: false,
     issues: {}, error: null, fetchedAt: null, loading: false, loaded: false,
+    // По задачам, запрошенным отдельно: почему не получены и когда получены
+    failed: {}, fetchedAtByKey: {},
   })
   let loadSeq = 0
+  const inFlight = new Set()
+  let reloadTimer = null
 
   async function init() {
     try {
@@ -129,39 +137,61 @@ export function createJira(editor, ui) {
     }
   }
 
-  /** Задача по ключу — сразу после того, как сотрудник привязал строку (план ещё не сохранён на сервере). */
+  /**
+   * Задачи по ключам — сразу после того, как строку привязали (сам сотрудник или коллега). Ключ, который уже
+   * запрашивается, повторно не запрашивается. Сотрудник с доступом «просмотр» поиск Jira не вызывает — для него
+   * перечитываются задачи плана (сервер знает ссылку: она пришла с изменениями коллеги).
+   */
   async function fetchKeys(keys, { refresh = false } = {}) {
-    const wanted = keys.filter((k) => refresh || !(k in state.issues))
-    if (!state.connected || !wanted.length || editor.state.access === 'view') return
+    if (!state.connected) return
+    if (editor.state.access === 'view') {
+      clearTimeout(reloadTimer)
+      reloadTimer = setTimeout(() => load({ refresh }), refresh ? 0 : 800)
+      return
+    }
+    const wanted = keys.filter((k) => !inFlight.has(k) && (refresh || !(k in state.issues) || state.failed[k]))
+    if (!wanted.length) return
+    for (const key of wanted) inFlight.add(key)
     try {
       const res = await api.post('/jira/search', { keys: wanted.join(' '), refresh })
       const next = { ...state.issues }
-      for (const issue of res.issues) next[issue.key] = issue
-      for (const key of res.missing) next[key] = null
+      const failed = { ...state.failed }
+      const now = new Date().toISOString()
+      for (const issue of res.issues) { next[issue.key] = issue; delete failed[issue.key]; state.fetchedAtByKey[issue.key] = now }
+      for (const key of res.missing) { next[key] = null; delete failed[key]; state.fetchedAtByKey[key] = now }
+      // Jira не ответила: задачи без сохранённых данных помечаются, карточка предложит повторить
+      for (const key of wanted) if (!(key in next) && res.error) failed[key] = res.error
       state.issues = next
+      state.failed = failed
     } catch (err) {
+      const failed = { ...state.failed }
+      for (const key of wanted) if (!(key in state.issues) || refresh) failed[key] = err.message
+      state.failed = failed
       if (refresh) ui.error(err)
+    } finally {
+      for (const key of wanted) inFlight.delete(key)
     }
   }
 
   function changesFor(item) {
-    return jiraChanges(item, issueFor(item), { calendar: editor.calendar, today: editor.state.today })
+    // Сроки задачи со связью задаёт автосдвиг — из Jira берётся только свободная дата
+    const linked = !!(item?.dependencyKey && editor.state.items[item.dependencyKey] && editor.settings.display.autoShift)
+    return jiraChanges(item, issueFor(item), { calendar: editor.calendar, today: editor.state.today, linked })
+  }
+
+  /** Строки, которые расходятся с Jira не только названием: названия в плане часто короче темы в Jira. */
+  function differs(item) {
+    return changesFor(item).some((c) => c.field !== 'name')
   }
 
   /** Перенести выбранные изменения: [{ key, fields }] — одна правка, отменяется целиком. */
   function apply(list, label = 'Данные из Jira') {
+    // Сдвиг завершённой задачи редактор пересчитывает сам от итоговых сроков и даты завершения
     const merged = new Map()
     for (const { key, fields } of list) merged.set(key, { ...(merged.get(key) || {}), ...fields })
-    for (const [key, fields] of merged) {
-      // Сдвиг завершения считается от сроков, которые будут у строки после переноса
-      const item = editor.state.items[key]
-      if (item && fields.completedDate) {
-        const start = fields.start ?? item.start
-        fields.offset = diffDays(start, fields.completedDate) - diffDays(start, fields.end ?? item.end)
-      }
-    }
+    for (const fields of merged.values()) if (fields.status === undefined || fields.status === 'done') delete fields.offset
     editor.updateItems([...merged].map(([key, fields]) => ({ key, fields })), label)
   }
 
-  return reactive({ state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, apply })
+  return reactive({ state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, differs, apply })
 }

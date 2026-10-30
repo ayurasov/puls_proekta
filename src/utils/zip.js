@@ -39,7 +39,7 @@ export function readZip(buffer) {
   const decoder = new TextDecoder()
   const entries = new Map()
   for (let index = 0; index < count; index++) {
-    if (view.getUint32(offset, true) !== CENTRAL) throw new ZipFormatError('Повреждён каталог ZIP-архива')
+    if (offset + 46 > buffer.byteLength || view.getUint32(offset, true) !== CENTRAL) throw new ZipFormatError('Повреждён каталог ZIP-архива')
     const method = view.getUint16(offset + 10, true)
     const compressedSize = view.getUint32(offset + 20, true)
     const size = view.getUint32(offset + 24, true)
@@ -53,11 +53,17 @@ export function readZip(buffer) {
     entries.set(name, {
       size,
       async read() {
-        if (view.getUint32(localOffset, true) !== LOCAL) throw new ZipFormatError(`Повреждён файл ${name} в архиве`)
+        // Размеры и смещения из архива проверяются: повреждённый файл — понятная ошибка, а не RangeError
+        if (localOffset + 30 > buffer.byteLength || view.getUint32(localOffset, true) !== LOCAL) {
+          throw new ZipFormatError(`Повреждён файл ${name} в архиве`)
+        }
         const start = localOffset + 30 + view.getUint16(localOffset + 26, true) + view.getUint16(localOffset + 28, true)
+        if (start + compressedSize > buffer.byteLength) throw new ZipFormatError(`Повреждён файл ${name} в архиве`)
         const bytes = new Uint8Array(buffer, start, compressedSize)
         if (method === 0) return bytes.slice()
-        if (method === 8) return inflate(bytes)
+        if (method === 8) {
+          try { return await inflate(bytes) } catch { throw new ZipFormatError(`Повреждён файл ${name} в архиве`) }
+        }
         throw new ZipFormatError(`Файл ${name} сжат неподдерживаемым способом`)
       },
     })

@@ -575,6 +575,14 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       for (const [field, value] of Object.entries(fields)) {
         if ((item[field] ?? null) !== (value ?? null)) diff[field] = value
       }
+      // Сдвиг завершённой задачи — от планового окончания до даты завершения: перенос сроков или даты
+      // завершения пересчитывает его, иначе «просрочка» на графике не совпала бы с фактической датой
+      const next = { ...item, ...diff }
+      if (item.type === 'task' && next.status === 'done' && next.completedDate && !('offset' in fields)
+          && ('end' in diff || 'completedDate' in diff || 'status' in diff)) {
+        const offset = diffDays(next.end, next.completedDate)
+        if (offset !== (item.offset || 0)) diff.offset = offset
+      }
       if (!Object.keys(diff).length) continue
       ops.push({ op: 'item.update', key, fields: diff })
       changes.set(key, { ...(changes.get(key) || {}), ...diff })

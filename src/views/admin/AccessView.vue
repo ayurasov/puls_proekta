@@ -34,7 +34,7 @@ const busy = ref(false)
 
 async function load() {
   try {
-    const [u, r, d] = await Promise.all([api.get('/users'), api.get('/access'), api.get('/access/departments'), org.load()])
+    const [u, r, d] = await Promise.all([api.get('/users'), api.get('/access'), api.get('/access/departments'), org.reload()])
     users.value = u.filter((x) => x.isActive)
     rules.value = r
     depRules.value = d

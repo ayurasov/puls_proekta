@@ -165,3 +165,22 @@ describe('ширина колонки названий', () => {
     expect(fitGridWidth(420, 1920)).toBe(420)
   })
 })
+
+describe('сдвиг завершённой задачи', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
+  it('перенос сроков пересчитывает сдвиг от фактической даты завершения', async () => {
+    const editor = await openEditor([{ ...task('a', 'A'), status: 'done', completedDate: '2026-11-08', offset: 2, progress: 100 }])
+    editor.updateItem('a', { end: '2026-11-10' }, 'Сроки')
+    expect(editor.state.items.a.offset).toBe(-2)
+    editor.undo()
+    expect(editor.state.items.a.offset).toBe(2)
+  })
+
+  it('незавершённой задаче сдвиг при переносе сроков не меняется', async () => {
+    const editor = await openEditor([{ ...task('a', 'A'), offset: 3 }])
+    editor.updateItem('a', { end: '2026-11-10' }, 'Сроки')
+    expect(editor.state.items.a.offset).toBe(3)
+  })
+})

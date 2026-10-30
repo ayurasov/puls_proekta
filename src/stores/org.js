@@ -41,7 +41,9 @@ export const useOrgStore = defineStore('org', {
       }).finally(() => { this.loading = null })
       return this.loading
     },
-    reload() {
+    /** Перечитать структуру после правок: если загрузка уже идёт, — ещё раз после неё (она могла начаться до правки). */
+    async reload() {
+      if (this.loading) await this.loading.catch(() => {})
       this.loaded = false
       return this.load(true)
     },

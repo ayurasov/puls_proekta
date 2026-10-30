@@ -14,6 +14,8 @@ const refreshing = ref(false)
 
 const key = computed(() => jira.keyFor(props.item))
 const issue = computed(() => jira.issueFor(props.item))
+const failure = computed(() => (key.value ? jira.state.failed[key.value] : null))
+const fetchedAt = computed(() => (key.value && jira.state.fetchedAtByKey[key.value]) || jira.state.fetchedAt)
 const changes = computed(() => (issue.value ? jira.changesFor(props.item) : []))
 const hours = (h) => `${String(h).replace('.', ',')} ч`
 const known = (h) => h !== null && h !== undefined
@@ -50,7 +52,10 @@ async function refresh() {
 
 <template>
   <div v-if="key" class="jira-card" data-testid="jira-card">
-    <div v-if="issue === undefined" class="muted small">Загружаем задачу {{ key }} из Jira…</div>
+    <div v-if="issue === undefined && failure" class="failure small" role="status">
+      <AppIcon name="warning" :size="13" /> <span>Задачу {{ key }} не удалось получить: {{ failure }}</span>
+    </div>
+    <div v-else-if="issue === undefined" class="muted small">Загружаем задачу {{ key }} из Jira…</div>
     <div v-else-if="issue === null" class="muted small">
       <AppIcon name="warning" :size="13" /> Задачи {{ key }} нет в Jira или учётной записи подключения она недоступна.
     </div>
@@ -74,24 +79,24 @@ async function refresh() {
       </dl>
       <div v-if="issue.progress !== null" class="progress" :title="`Прогресс по трудозатратам: ${issue.progress}%`"><span :style="{ width: issue.progress + '%' }" /></div>
 
-      <div v-if="changes.length && editor.canEdit" class="changes">
+      <div v-if="changes.length" class="changes">
         <div class="changes-head">
           <span class="small"><b>В Jira иначе</b></span>
-          <button class="btn btn-sm" type="button" data-testid="jira-apply-all" @click="applyAll">Перенести всё</button>
+          <button v-if="editor.canEdit" class="btn btn-sm" type="button" data-testid="jira-apply-all" @click="applyAll">Перенести всё</button>
         </div>
         <div v-for="change in changes" :key="change.field" class="change">
           <span class="muted small label">{{ change.label }}</span>
-          <span class="small value">{{ describe(change) }}</span>
-          <button class="link small" type="button" @click="applyOne(change)">Перенести</button>
+          <span class="small value">{{ describe(change) }}<span v-if="change.note" class="muted"> · {{ change.note }}</span></span>
+          <button v-if="editor.canEdit" class="link small" type="button" @click="applyOne(change)">Перенести</button>
         </div>
       </div>
       <div v-else-if="!changes.length" class="muted small synced"><AppIcon name="check" :size="12" /> Совпадает со строкой</div>
     </template>
     <div class="foot muted small">
-      <span v-if="jira.state.fetchedAt">Данные Jira {{ formatRelative(jira.state.fetchedAt) }}</span>
+      <span v-if="fetchedAt && issue !== undefined">Данные Jira {{ formatRelative(fetchedAt) }}</span>
       <span class="spacer" />
       <HelpLink topic="jira" :size="13" />
-      <button class="link small" type="button" :disabled="refreshing" @click="refresh"><AppIcon name="refresh" :size="12" /> {{ refreshing ? 'Обновляем…' : 'Обновить' }}</button>
+      <button class="link small" type="button" :disabled="refreshing" @click="refresh"><AppIcon name="refresh" :size="12" /> {{ refreshing ? 'Обновляем…' : failure ? 'Повторить' : 'Обновить' }}</button>
     </div>
   </div>
 </template>
@@ -112,6 +117,8 @@ async function refresh() {
 .change { display: grid; grid-template-columns: 74px 1fr auto; gap: 8px; align-items: baseline; }
 .change .value { overflow-wrap: anywhere; }
 .synced { display: flex; align-items: center; gap: 4px; color: #1f7a4c; }
+.failure { display: flex; align-items: flex-start; gap: 6px; color: #b42318; line-height: 1.4; }
+.failure :deep(svg) { flex-shrink: 0; margin-top: 2px; }
 .foot { display: flex; align-items: center; gap: 6px; }
 .link { border: 0; background: none; color: var(--color-primary-dark); padding: 0; display: inline-flex; align-items: center; gap: 3px; }
 .link:hover:not(:disabled) { text-decoration: underline; }

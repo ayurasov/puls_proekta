@@ -66,3 +66,18 @@ describe('что перенести из Jira', () => {
     expect(jiraChanges(task(), null)).toEqual([])
   })
 })
+
+describe('ревью 0.3.0: перенос из Jira', () => {
+  it('«Заблокирована» меняется только на «Завершена»', () => {
+    expect(jiraChanges(task({ status: 'blocked' }), issue({ statusCategory: 'new' }))).toEqual([])
+    expect(jiraChanges(task({ status: 'blocked' }), issue({ statusCategory: 'done', resolved: '2026-11-06' }))[0].fields.status).toBe('done')
+  })
+
+  it('сроки задачи со связью: из Jira — только свободная дата', () => {
+    const fs = jiraChanges(task({ dependencyKey: 'p', dependencyType: 'FS' }), issue({ start: '2026-11-03', due: '2026-11-09' }), { linked: true })
+    expect(fs[0].fields).toEqual({ start: '2026-11-02', end: '2026-11-09' })
+    expect(fs[0].note).toBe('начало задаёт связь')
+    const ff = jiraChanges(task({ dependencyKey: 'p', dependencyType: 'FF' }), issue({ start: '2026-11-01', due: '2026-11-09' }), { linked: true })
+    expect(ff[0].fields).toEqual({ start: '2026-11-01', end: '2026-11-06' })
+  })
+})

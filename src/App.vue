@@ -14,7 +14,9 @@ const ui = useUiStore()
 const isPublic = computed(() => route.meta?.public === true)
 const fill = computed(() => route.meta?.layout === 'fill')
 // Страница пересоздаётся при смене адреса, но не #…: переход по разделам руководства — та же страница
-const viewKey = computed(() => (route.name === 'project' ? route.params.projectId : route.fullPath.replace(/#.*$/, '')))
+// Страница пересоздаётся при смене пути, но не параметров ?… и раздела #…: «Структура компании» и
+// руководство переходят по ним внутри одной страницы, не теряя развёрнутое дерево и прокрутку
+const viewKey = computed(() => (route.name === 'project' ? route.params.projectId : route.path))
 
 // ---------- меню на телефоне: выдвижная панель с фоном, фокус внутри, Esc закрывает ----------
 const navButton = ref(null)

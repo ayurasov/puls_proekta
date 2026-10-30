@@ -25,6 +25,7 @@ onMounted(async () => {
     await org.reload()
     // По умолчанию верхние два уровня развёрнуты
     collapsed.value = new Set(org.departments.filter((d) => d.level >= 2 && d.childCount).map((d) => d.id))
+    if (route.query.unit) reveal(route.query.unit)
     if (!route.query.unit && !route.query.user) {
       const me = org.personById[auth.user?.id]
       const start = me?.departmentId || org.children.get(null)?.[0]?.id
@@ -49,11 +50,11 @@ function reveal(id) {
 }
 function openUnit(id) {
   router.push({ query: { unit: id } })
-  reveal(id)
 }
+// Переход по ссылке, «Назад» браузера или щелчок — выбранное подразделение раскрыто в дереве
+watch(() => route.query.unit, (id) => { if (id && org.loaded) reveal(id) })
 function openFound(person) {
   router.push({ query: { unit: person.departmentId || route.query.unit, user: person.id } })
-  if (person.departmentId) reveal(person.departmentId)
   search.value = ''
 }
 function openPerson(id) {
@@ -85,7 +86,7 @@ const treeRows = computed(() => {
   })
 })
 const foundPeople = computed(() => (q.value
-  ? org.people.filter((p) => `${p.name} ${p.position}`.toLowerCase().includes(q.value)).slice(0, 30)
+  ? org.people.filter((p) => p.isActive && `${p.name} ${p.position}`.toLowerCase().includes(q.value)).slice(0, 30)
   : []))
 
 const members = computed(() => {

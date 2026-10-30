@@ -1,5 +1,6 @@
 <script setup>
 import { reactive, ref } from 'vue'
+import { useOrgStore } from '../../stores/org'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { decodeCsv } from '../../utils/employeeImport'
@@ -53,6 +54,7 @@ async function run(apply) {
     const result = await api.post('/org/import/csv', { csv: csv.text, createMissing: csv.createMissing, apply })
     plan.value = result
     applied.value = Boolean(result.applied)
+    if (applied.value) useOrgStore().loaded = false // структура на других страницах перечитается
     if (applied.value) ui.success('Изменения применены', 'Структура обновлена')
   } catch (err) {
     // 409 — план с ошибками: показываем его, ничего не применено

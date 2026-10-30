@@ -21,7 +21,13 @@ const picked = ref(new Set())
 
 const groups = computed(() => editor.itemList.filter((i) => i.type === 'group'))
 const selectedItem = computed(() => editor.state.items[editor.state.view.selectedKey] || null)
-const parentKey = ref(selectedItem.value?.type === 'group' ? selectedItem.value.key : (selectedItem.value?.parentKey || ''))
+// По умолчанию — группа выбранной строки (ближайшая вверх по дереву): в списке «Куда добавить» только группы
+function groupOf(item) {
+  let current = item
+  while (current && current.type !== 'group') current = editor.state.items[current.parentKey]
+  return current?.key || ''
+}
+const parentKey = ref(groupOf(selectedItem.value))
 const linked = computed(() => new Set(jira.linkedItems().map((item) => jira.keyFor(item))))
 
 async function search() {
@@ -43,11 +49,21 @@ function toggle(key) {
   picked.value = next
 }
 const chosen = computed(() => (result.value?.issues || []).filter((i) => picked.value.has(i.key)))
+// Ключи, по которым Jira ничего не вернула (не ответила): не «не найдены», а «не получены»
+const notReceived = computed(() => {
+  if (!result.value || mode.value !== 'keys' || !result.value.error) return []
+  const known = new Set([...result.value.issues.map((i) => i.key), ...result.value.missing])
+  return keys.value.toUpperCase().split(/[\s,;]+/).filter((k) => /^[A-Z][A-Z0-9_]*-\d+$/.test(k) && !known.has(k))
+})
 
-/** Сроки строки: из Jira, если есть; без начала — пять дней до срока, без срока — пять дней с сегодня. */
+/**
+ * Сроки строки: из Jira, если есть; без начала — пять дней до срока; без срока — пять дней до даты решения
+ * (решённая задача) или с сегодня.
+ */
 function datesFor(issue) {
-  const start = issue.start || (issue.due ? addDays(issue.due, -4) : editor.state.today)
-  const end = issue.due && issue.due >= start ? issue.due : addDays(start, 4)
+  const anchor = issue.due || (issue.statusCategory === 'done' ? issue.resolved : null)
+  const start = issue.start || (anchor ? addDays(anchor, -4) : editor.state.today)
+  const end = anchor && anchor >= start ? anchor : addDays(start, 4)
   return { start, end }
 }
 function add() {
@@ -114,6 +130,7 @@ function add() {
         <template v-if="result.invalid.length">Не похожи на ключ задачи: {{ result.invalid.join(', ') }}.</template>
       </p>
       <p v-if="result.truncated" class="muted small">Показаны первые 200 задач — уточните запрос.</p>
+      <p v-if="notReceived.length" class="error small"><AppIcon name="warning" :size="13" /> Не удалось получить из Jira: {{ [...new Set(notReceived)].join(', ') }} — {{ result.error }}</p>
       <label v-if="result.issues.length" class="field place">
         <span class="field-label">Куда добавить</span>
         <select v-model="parentKey" class="select">

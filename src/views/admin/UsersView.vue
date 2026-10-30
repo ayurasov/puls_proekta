@@ -40,7 +40,7 @@ async function load() {
   loading.value = true
   try { users.value = await api.get('/users') } catch (err) { ui.error(err) } finally { loading.value = false }
 }
-onMounted(() => { load(); org.load().catch(() => {}) })
+onMounted(() => { load(); org.reload().catch(() => {}) })
 
 const visible = computed(() => {
   const q = search.value.trim().toLowerCase()
@@ -67,12 +67,16 @@ function openEdit(user) {
     mode: 'edit', id: user.id, ...user, password: '', departmentId: user.departmentId || '',
     managerChoice: user.reportsToNone ? 'none' : user.managerId ? String(user.managerId) : 'structure',
   }
+  editor.value.original = { departmentId: editor.value.departmentId, managerChoice: editor.value.managerChoice }
 }
 const structureManager = computed(() => {
   const person = editor.value && org.personById[editor.value.id]
   return person && person.managerSource === 'structure' ? org.personById[person.directManagerId] : null
 })
-const managerOptions = computed(() => org.people.filter((p) => p.isActive && p.id !== editor.value?.id))
+// Отключённый руководитель остаётся в списке, если он назначен сейчас: иначе список был бы пуст, а сохранение
+// карточки — невозможно; заменить его можно любым активным сотрудником
+const managerOptions = computed(() => org.people.filter((p) => p.id !== editor.value?.id
+  && (p.isActive || String(p.id) === editor.value?.managerChoice)))
 
 async function save() {
   const e = editor.value
@@ -86,10 +90,12 @@ async function save() {
       users.value.push({ ...created, projectsCreated: 0 })
       ui.success('Сотрудник добавлен', created.name)
     } else {
-      const payload = {
-        name: e.name, login: e.login, position: e.position, email: e.email, role: e.role, authSource: e.authSource,
-        departmentId: e.departmentId || '', managerId: e.managerChoice === 'none' || e.managerChoice === 'structure' ? 0 : Number(e.managerChoice),
-        reportsToNone: e.managerChoice === 'none',
+      const payload = { name: e.name, login: e.login, position: e.position, email: e.email, role: e.role, authSource: e.authSource }
+      // Подразделение и руководитель — только если их изменили (руководитель мог быть отключён после назначения)
+      if ((e.departmentId || null) !== (e.original.departmentId || null)) payload.departmentId = e.departmentId || ''
+      if (e.managerChoice !== e.original.managerChoice) {
+        payload.managerId = e.managerChoice === 'none' || e.managerChoice === 'structure' ? 0 : Number(e.managerChoice)
+        payload.reportsToNone = e.managerChoice === 'none'
       }
       if (e.password) payload.password = e.password
       const updated = await api.patch(`/users/${e.id}`, payload)
@@ -279,7 +285,7 @@ async function removePhoto() {
             <select v-model="editor.managerChoice" class="select">
               <option value="structure">По структуре{{ structureManager ? `: ${structureManager.name}` : '' }}</option>
               <option value="none">Первое лицо — никому не подчиняется</option>
-              <option v-for="p in managerOptions" :key="p.id" :value="String(p.id)">{{ p.name }}</option>
+              <option v-for="p in managerOptions" :key="p.id" :value="String(p.id)">{{ p.name }}{{ p.isActive ? '' : ' (отключён)' }}</option>
             </select>
           </label>
         </div>

@@ -95,7 +95,7 @@ function open(key) {
           <span class="muted label">{{ change.label }}</span>
           <span class="from ellipsis" :title="String(describe(change)[0])">{{ describe(change)[0] }}</span>
           <AppIcon name="arrowRight" :size="12" class="muted" />
-          <span class="to ellipsis" :title="String(describe(change)[1])">{{ describe(change)[1] }}</span>
+          <span class="to ellipsis" :title="String(describe(change)[1]) + (change.note ? ` · ${change.note}` : '')">{{ describe(change)[1] }}<span v-if="change.note" class="muted"> · {{ change.note }}</span></span>
         </label>
       </template>
     </div>
