@@ -72,7 +72,7 @@ function saveDefaultView() {
 </script>
 
 <template>
-  <BaseModal title="Настройки графика" size="wide" @close="emit('close')">
+  <BaseModal title="Настройки графика" size="wide" initial-focus=".modal-footer .btn-primary" @close="emit('close')">
     <p v-if="readonly" class="muted small">Только просмотр — изменить настройки может сотрудник с правом редактирования.</p>
     <div class="settings">
       <section>

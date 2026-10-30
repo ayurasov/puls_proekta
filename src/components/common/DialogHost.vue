@@ -54,7 +54,7 @@ function submit() {
       <button type="submit" class="sr-only" tabindex="-1">ok</button>
     </form>
     <template #footer>
-      <button v-if="dialog.type !== 'alert'" class="btn btn-ghost" type="button" @click="cancel">{{ dialog.cancelText || 'Отмена' }}</button>
+      <button v-if="dialog.type !== 'alert'" class="btn btn-ghost" type="button" data-cancel @click="cancel">{{ dialog.cancelText || 'Отмена' }}</button>
       <template v-if="dialog.type === 'choice'">
         <button
           v-for="choice in dialog.choices" :key="choice.value" class="btn" :class="choice.danger ? 'btn-danger' : 'btn-primary'"
