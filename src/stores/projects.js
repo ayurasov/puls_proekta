@@ -35,6 +35,11 @@ export const useProjectsStore = defineStore('projects', {
       await this.load()
       return project
     },
+    async createDirection(name) {
+      const direction = await api.post('/directions', { name })
+      this.directions = [...this.directions, direction]
+      return direction
+    },
     async update(id, payload) {
       const project = await api.patch(`/projects/${id}`, payload)
       const index = this.projects.findIndex((p) => p.id === id)

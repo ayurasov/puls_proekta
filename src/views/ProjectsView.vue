@@ -14,7 +14,7 @@ const projects = useProjectsStore()
 const auth = useAuthStore()
 const ui = useUiStore()
 const router = useRouter()
-const { confirm } = useDialogs()
+const { confirm, prompt } = useDialogs()
 
 const search = ref('')
 const editor = ref(null)
@@ -38,6 +38,25 @@ function progress(project) {
   const s = project.stats
   if (!s || !s.total) return 0
   return Math.round((s.done / s.total) * 100)
+}
+
+// Менеджер создаёт направления прямо из окна проекта (страница «Направления» — только администратору)
+const NEW_DIRECTION = 'new'
+async function pickDirection(event) {
+  const value = event.target.value
+  if (value !== NEW_DIRECTION) {
+    editor.value.directionId = value === '' ? null : Number(value)
+    return
+  }
+  event.target.value = editor.value.directionId ?? ''
+  const name = await prompt({ title: 'Новое направление', label: 'Название', value: '', confirmText: 'Создать' })
+  if (!name?.trim()) return
+  try {
+    const direction = await projects.createDirection(name.trim())
+    if (editor.value) editor.value.directionId = direction.id
+  } catch (err) {
+    ui.error(err)
+  }
 }
 
 function openCreate(directionId = null) {
@@ -246,9 +265,10 @@ function onDragEnd() {
         </label>
         <label class="field">
           <span class="field-label">Направление</span>
-          <select v-model="editor.directionId" class="select">
-            <option :value="null">Без направления</option>
+          <select :value="editor.directionId ?? ''" class="select" data-testid="project-direction" @change="pickDirection">
+            <option value="">Без направления</option>
             <option v-for="d in projects.directions" :key="d.id" :value="d.id">{{ d.name }}</option>
+            <option v-if="auth.canCreateProjects" :value="NEW_DIRECTION">+ Новое направление…</option>
           </select>
         </label>
         <button type="submit" class="sr-only" tabindex="-1">ok</button>

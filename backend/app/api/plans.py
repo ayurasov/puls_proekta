@@ -94,6 +94,9 @@ def create_plan_route(project_id):
 @login_required
 def get_plan(plan_id):
     plan, _project, level = _plan_with_access(plan_id)
+    # Открывший план сразу виден коллегам в «сейчас на плане», не дожидаясь первого опроса
+    if _touch_presence(plan.id, current_user().id):
+        db.session.commit()
     return jsonify(plan_document(plan, level))
 
 

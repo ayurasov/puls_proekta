@@ -171,12 +171,15 @@ async function userGuide() {
   await page.click('.segmented button:has-text("Месяцы")')
   await page.click('button[title="Весь период на ширину экрана"]')
   await shot(page, '20-plan-months')
+  // Обратно к неделям в масштабе 100 % (вид сохраняется у сотрудника)
   await page.click('.segmented button:has-text("Недели")')
+  await page.fill('.zoom-input', '100%')
+  await page.press('.zoom-input', 'Enter')
 
-  // Совместная работа: коллега открыл тот же план
+  // Совместная работа: коллега открыл тот же план — появляется в «Сейчас на плане» после опроса
   const colleague = await session('lebedev')
   await openProject(colleague, PORTAL)
-  await page.waitForTimeout(4500)
+  await page.waitForSelector('.presence-avatar', { timeout: 15000 })
   await shot(page, '21-presence', { clip: { x: 0, y: 0, width: 1440, height: 160 } })
   await colleague.close()
 

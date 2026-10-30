@@ -89,7 +89,7 @@ def test_quiet_poll_does_not_rewrite_presence(app, admin):
                 db.select(User.id).where(User.login == "admin")).scalar_one()))
             return row.last_seen_at, row.is_editing
 
-    admin.get(f"/api/plans/{plan_id}/changes?since=0")
+    admin.get(f"/api/plans/{plan_id}")  # открытие плана сразу отмечает присутствие
     first = seen()
     admin.get(f"/api/plans/{plan_id}/changes?since=0")
     assert seen() == first

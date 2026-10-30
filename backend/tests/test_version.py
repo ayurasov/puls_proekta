@@ -12,7 +12,9 @@ def test_backend_version_matches_package_json():
 
 
 def test_version_is_documented():
-    versions = (ROOT / "docs" / "versions.md").read_text(encoding="utf-8")
-    changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-    assert f"v{APP_VERSION}" in versions
-    assert f"v{APP_VERSION}" in changelog
+    """Новая версия описана для пользователей, администраторов, в CHANGELOG и в release notes."""
+    docs = ROOT / "docs"
+    assert f"## Версия {APP_VERSION}" in (docs / "versions.md").read_text(encoding="utf-8")
+    assert f"## Версия {APP_VERSION}" in (docs / "versions_admin.md").read_text(encoding="utf-8")
+    assert f"## v{APP_VERSION}" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert (docs / "release-notes" / f"v{APP_VERSION}.md").exists()
