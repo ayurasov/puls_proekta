@@ -23,6 +23,9 @@ import { localStorageGet, localStorageSet } from '../stores/ui'
 const POLL_VISIBLE_MS = 4000
 const POLL_HIDDEN_MS = 30000
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000, 20000, 30000]
+// Поля, от которых зависят сроки по связям: только их изменение запускает автосдвиг
+const SCHEDULE_FIELDS = new Set(['start', 'end', 'date', 'dependencyKey', 'dependencyType', 'dependencyLag', 'offset',
+  'status', 'completedDate', 'parentKey', 'duration', 'endMode', 'durationType'])
 
 export const DEFAULT_DISPLAY = {
   useRuCalendar: true, showWeekends: true, showHolidays: true, showProgress: true, showNotes: true,
@@ -507,14 +510,30 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     ui.toast({ title: `Повторено: ${entry.label}`, timeout: 2200 })
   }
 
-  /** Сдвиги по связям после правок (если включён автосдвиг). */
-  function cascadeOps(changes) {
+  /**
+   * Сдвиги по связям после правок (если включён автосдвиг) — только для изменённых задач и тех, что от
+   * них зависят (по связи или как подзадачи). Несогласованные сроки в других местах плана не трогаются:
+   * их выравнивает сотрудник кнопкой «Выровнять по связям».
+   */
+  function cascadeOps(changes, { all = false } = {}) {
     if (!settings.value.display.autoShift) return []
     const hypothetical = itemList.value.map((item) => (changes.has(item.key) ? { ...item, ...changes.get(item.key) } : item))
     for (const [key, fields] of changes) {
       if (!state.items[key] && fields.type) hypothetical.push(fields)
     }
-    const shifts = computeDependencyShifts(hypothetical)
+    let only = null
+    if (!all) {
+      only = new Set([...changes].filter(([key, fields]) => !state.items[key] || Object.keys(fields).some((f) => SCHEDULE_FIELDS.has(f))).map(([key]) => key))
+      if (!only.size) return []
+      let grew = true
+      while (grew) {
+        grew = false
+        for (const item of hypothetical) {
+          if (!only.has(item.key) && (only.has(item.dependencyKey) || only.has(item.parentKey))) { only.add(item.key); grew = true }
+        }
+      }
+    }
+    const shifts = computeDependencyShifts(hypothetical, { only })
     return [...shifts].map(([key, dates]) => ({ op: 'item.update', key, fields: dates }))
   }
 

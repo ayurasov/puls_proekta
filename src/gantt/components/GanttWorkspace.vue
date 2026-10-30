@@ -82,7 +82,7 @@ const inconsistent = computed(() => {
   return computeDependencyShifts(editor.itemList).size
 })
 function alignDependencies() {
-  const ops = editor.cascadeOps(new Map())
+  const ops = editor.cascadeOps(new Map(), { all: true })
   editor.commit(ops, 'Выравнивание по связям')
 }
 

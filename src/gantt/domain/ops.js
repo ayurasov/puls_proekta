@@ -33,7 +33,7 @@ export function inverseOf(state, op) {
   if (entity === 'plan') {
     const old = {}
     for (const field of Object.keys(op.fields || {})) {
-      old[field] = field === 'settings' ? structuredCloneSafe(state.plan?.settings) : state.plan?.[field]
+      old[field] = field === 'settings' ? settingsBefore(state.plan?.settings, op.fields.settings) : state.plan?.[field]
     }
     return [{ op: 'plan.update', fields: old }]
   }
@@ -107,6 +107,23 @@ export function touchedKeys(ops) {
     if (key) keys.add(`${entity}:${key}`)
   }
   return keys
+}
+
+/**
+ * Прежние значения только тех настроек, что меняет patch (вложенные объекты — по ключам): отмена
+ * одной настройки не возвращает остальные к старым значениям поверх правок коллег.
+ */
+function settingsBefore(current, patch) {
+  const old = {}
+  for (const [key, value] of Object.entries(patch || {})) {
+    const was = current?.[key]
+    if (value && typeof value === 'object' && !Array.isArray(value) && was && typeof was === 'object' && !Array.isArray(was)) {
+      old[key] = Object.fromEntries(Object.keys(value).map((k) => [k, structuredCloneSafe(was[k] ?? null)]))
+    } else {
+      old[key] = structuredCloneSafe(was ?? null)
+    }
+  }
+  return old
 }
 
 export function mergeSettings(base, patch) {

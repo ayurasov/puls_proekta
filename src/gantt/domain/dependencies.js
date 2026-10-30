@@ -10,15 +10,20 @@ import { shiftedEnd } from './tree'
  * Окончание предшественника берётся со сдвигом (offset), у завершённой задачи — дата
  * фактического завершения. Задача-подзадача не выходит за сроки родительской задачи.
  * Возвращает Map(key → { start, end }) только для изменившихся задач.
+ *
+ * only — сдвигать только эти задачи (зависящие от только что изменённых); остальные считаются
+ * неподвижными. Задачи, чьи связи замкнуты в цикл, не сдвигаются: цикл сдвигал бы их бесконечно.
  */
-export function computeDependencyShifts(items, { maxLoops = 30 } = {}) {
+export function computeDependencyShifts(items, { maxLoops = 30, only = null } = {}) {
   const byKey = new Map()
   for (const item of items) byKey.set(item.key, { ...item })
+  const cyclic = cyclicKeys(byKey)
   const changed = new Map()
   for (let loop = 0; loop < maxLoops; loop += 1) {
     let any = false
     for (const task of byKey.values()) {
       if (task.type !== 'task' || !task.dependencyKey) continue
+      if (cyclic.has(task.key) || (only && !only.has(task.key))) continue
       const dep = byKey.get(task.dependencyKey)
       if (!dep || dep.key === task.key || (dep.type !== 'task' && dep.type !== 'milestone')) continue
       const ds = dep.type === 'task' ? dep.start : dep.date
@@ -40,7 +45,13 @@ export function computeDependencyShifts(items, { maxLoops = 30 } = {}) {
         if (ns < parent.start) ns = parent.start
         if (ne > parent.end) ne = parent.end
       }
-      const end = type === 'FF' || type === 'SF' ? ne : addDays(ns, dur - 1)
+      let end = type === 'FF' || type === 'SF' ? ne : addDays(ns, dur - 1)
+      if (end < ns) {
+        // FF/SF-подзадача упёрлась в окончание родителя: начало сдвигается назад, но не раньше родителя
+        const back = addDays(end, -(dur - 1))
+        ns = parent && parent.type === 'task' && back < parent.start ? parent.start : back
+        if (end < ns) end = ns
+      }
       if (ns !== task.start || end !== task.end) {
         task.start = ns
         task.end = end
@@ -51,6 +62,22 @@ export function computeDependencyShifts(items, { maxLoops = 30 } = {}) {
     if (!any) break
   }
   return changed
+}
+
+/** Задачи, чья цепочка «предшественник» возвращается к ним самим. */
+function cyclicKeys(byKey) {
+  const cyclic = new Set()
+  for (const start of byKey.keys()) {
+    const seen = new Set([start])
+    let node = byKey.get(start)?.dependencyKey
+    while (node && byKey.has(node)) {
+      if (node === start) { for (const k of seen) cyclic.add(k); break }
+      if (seen.has(node)) break
+      seen.add(node)
+      node = byKey.get(node).dependencyKey
+    }
+  }
+  return cyclic
 }
 
 /**

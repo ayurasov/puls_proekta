@@ -72,9 +72,11 @@ function follow() {
 }
 
 watch(() => [props.x, props.y, props.anchor], () => place(true))
+let listenTimer = 0
 onMounted(() => {
   place(true)
-  setTimeout(() => {
+  // Щелчок, открывший меню, не должен сразу его закрыть — подписка со следующего такта
+  listenTimer = setTimeout(() => {
     document.addEventListener('mousedown', onPointer, true)
     document.addEventListener('contextmenu', onPointer, true)
   })
@@ -84,6 +86,7 @@ onMounted(() => {
   if (props.anchor) frame = requestAnimationFrame(follow)
 })
 onBeforeUnmount(() => {
+  clearTimeout(listenTimer)
   cancelAnimationFrame(frame)
   document.removeEventListener('mousedown', onPointer, true)
   document.removeEventListener('contextmenu', onPointer, true)

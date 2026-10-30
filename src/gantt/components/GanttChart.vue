@@ -7,6 +7,7 @@ import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { dayX, fitZoom, nextZoom } from '../domain/layout'
 import { STATUSES, STATUS_BY_KEY, resolveColor } from '../domain/colors'
 import { descendantKeys, parentOf } from '../domain/tree'
+import { resolveEnd } from '../domain/calendar'
 
 const editor = inject('gantt')
 const actions = inject('ganttActions')
@@ -84,8 +85,11 @@ onMounted(() => {
   })
   if (scroller.value) observer.observe(scroller.value)
 })
+let stopResize = null
 onBeforeUnmount(() => {
   observer?.disconnect()
+  stopResize?.()
+  cancelAnimationFrame(raf)
   window.removeEventListener('pointermove', onRowDragMove)
   window.removeEventListener('pointerup', onRowDragEnd)
 })
@@ -153,8 +157,10 @@ function startResize(event) {
     resizing.value = false
     window.removeEventListener('pointermove', move)
     window.removeEventListener('pointerup', up)
+    stopResize = null
     editor.saveView()
   }
+  stopResize = up
   window.addEventListener('pointermove', move)
   window.addEventListener('pointerup', up)
 }
@@ -314,10 +320,15 @@ function clampToParent(item, start, end, keepDuration) {
     start = parent.start
     if (keepDuration) end = addDays(end, shift)
   }
-  if (end > parent.end) end = parent.end
+  if (end > parent.end) {
+    // Перенос упёрся в окончание родителя: длина сохраняется, задача прижимается к концу
+    if (keepDuration) start = maxDay(parent.start, addDays(start, -diffDays(parent.end, end)))
+    end = parent.end
+  }
   if (end < start) end = start
   return { start, end }
 }
+const maxDay = (a, b) => (a > b ? a : b)
 
 function onBarMove(event) {
   const d = drag.value
@@ -336,7 +347,13 @@ function onBarMove(event) {
   if (d.kind === 'task') {
     let start = d.origin.start
     let end = d.origin.end
-    if (d.handle === 'move') { start = addDays(start, delta); end = addDays(end, delta) }
+    if (d.handle === 'move') {
+      start = addDays(start, delta)
+      // Длительность в рабочих днях сохраняется: окончание считается по календарю от нового начала
+      end = item.endMode === 'duration' && item.durationType === 'working' && item.duration
+        ? resolveEnd(editor.calendar, start, 'duration', end, item.duration, 'working')
+        : addDays(end, delta)
+    }
     if (d.handle === 'left') { start = addDays(start, delta); if (start > end) start = end }
     if (d.handle === 'right') { end = addDays(end, delta); if (end < start) end = start }
     const clamped = d.copy ? { start, end } : clampToParent(item, start, end, d.handle === 'move')
@@ -379,7 +396,8 @@ function onBarUp(event) {
     }
     const { start, end } = d.result
     const fields = { start, end }
-    if (item.endMode === 'duration' || d.handle !== 'move') {
+    if (d.handle !== 'move') {
+      // Длительность меняется только при растягивании за край; перенос её сохраняет
       fields.duration = item.durationType === 'working' ? editor.calendar.countWorkingDays(start, end) : diffDays(start, end) + 1
     }
     editor.updateItem(d.key, fields, d.handle === 'move' ? `Сдвиг «${item.name}»` : `Сроки «${item.name}»`)

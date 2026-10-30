@@ -136,4 +136,20 @@ describe('очередь отправки редактора', () => {
     editor.undo()
     expect(editor.state.undo).toHaveLength(1)
   })
+
+  it('переименование не сдвигает несогласованные задачи в других местах плана', async () => {
+    const editor = await openEditor([
+      task('a', 'A'), { ...task('b', 'B'), start: '2026-12-01', end: '2026-12-02', dependencyKey: 'a' }, task('c', 'C'),
+    ])
+    editor.updateItem('c', { name: 'C2' }, 'Переименование')
+    expect(editor.state.items.b.start).toBe('2026-12-01')
+    await settle()
+    expect(server.posts[0].ops).toEqual([{ op: 'item.update', key: 'c', fields: { name: 'C2' } }])
+  })
+
+  it('перенос предшественника сдвигает зависящую задачу', async () => {
+    const editor = await openEditor([task('a', 'A'), { ...task('b', 'B'), start: '2026-11-07', end: '2026-11-11', dependencyKey: 'a' }])
+    editor.updateItem('a', { start: '2026-11-09', end: '2026-11-13' }, 'Сдвиг')
+    expect(editor.state.items.b.start).toBe('2026-11-14')
+  })
 })

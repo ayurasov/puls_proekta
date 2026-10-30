@@ -7,7 +7,7 @@ import ItemHistory from './ItemHistory.vue'
 import { STATUSES, DEPENDENCY_TYPES } from '../domain/colors'
 import { addDays, diffDays, formatDay } from '../domain/dates'
 import { resolveEnd } from '../domain/calendar'
-import { dependencyConstraints } from '../domain/dependencies'
+import { dependencyConstraints, dependentKeys } from '../domain/dependencies'
 import { descendantKeys, groupSpan } from '../domain/tree'
 import { useDialogs } from '../../composables/useDialogs'
 import { useUiStore } from '../../stores/ui'
@@ -51,8 +51,10 @@ const descendants = computed(() => descendantKeys(editor.index, item.value.key))
 const parentOptions = computed(() => editor.itemList
   .filter((i) => i.type !== 'milestone' && i.key !== item.value.key && !descendants.value.has(i.key))
   .map((i) => ({ key: i.key, label: `${i.type === 'group' ? '▣ ' : ''}${i.name}` })))
+// Зависящие от этой задачи не предлагаются: связь с ними замкнула бы цикл
+const dependents = computed(() => dependentKeys(editor.itemList, item.value.key))
 const dependencyOptions = computed(() => editor.itemList
-  .filter((i) => (i.type === 'task' || i.type === 'milestone') && i.key !== item.value.key)
+  .filter((i) => (i.type === 'task' || i.type === 'milestone') && i.key !== item.value.key && !dependents.value.has(i.key))
   .map((i) => ({ key: i.key, label: `${i.type === 'milestone' ? '◆ ' : ''}${i.name}` })))
 const constraints = computed(() => (item.value.type === 'task' ? dependencyConstraints(item.value, byKey.value) : null))
 const duration = computed(() => (item.value.type === 'task' ? diffDays(item.value.start, item.value.end) + 1 : 0))
