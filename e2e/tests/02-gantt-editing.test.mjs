@@ -95,6 +95,22 @@ test('статус «Завершена» через контекстное ме
   assert.equal(task.offset, 0)
 })
 
+test('фильтры: несколько значений подряд, панель в одну строку на 1366 px', async () => {
+  await page.setViewportSize({ width: 1366, height: 900 })
+  const toolbarHeight = () => page.locator('.toolbar').evaluate((el) => el.getBoundingClientRect().height)
+  assert.ok(await toolbarHeight() < 60, 'панель инструментов умещается в одну строку')
+  await page.click('button:has-text("Фильтры")')
+  for (const status of ['Новая', 'Завершена']) await page.locator('.filter-option', { hasText: status }).locator('input').click()
+  // Строка фильтров меняет раскладку — меню не должно закрываться после первой отметки
+  assert.equal(await page.locator('.filters').count(), 1)
+  const chips = (await page.locator('.filter-bar .chip').allTextContents()).map((t) => t.trim())
+  assert.deepEqual(chips, ['Новая', 'Завершена'])
+  await page.keyboard.press('Escape')
+  await page.locator('.filter-bar button', { hasText: 'Сбросить' }).click()
+  assert.equal(await page.locator('.filter-bar').count(), 0)
+  await page.setViewportSize({ width: 1600, height: 950 })
+})
+
 test('группа: создание, перенос задачи в группу через карточку, удаление с выбором', async () => {
   await page.click('.split-caret')
   await page.locator('.menu-item', { hasText: 'Группа' }).click()

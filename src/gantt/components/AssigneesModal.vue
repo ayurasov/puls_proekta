@@ -5,6 +5,7 @@ import AppIcon from '../../components/common/AppIcon.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
 import { useDirectoryStore } from '../../stores/directory'
 import { useDialogs } from '../../composables/useDialogs'
+import { resolveColor } from '../domain/colors'
 
 /** Исполнители плана: ФИО, роль, цвет и (необязательно) связь с сотрудником системы. */
 const emit = defineEmits(['close'])
@@ -68,7 +69,7 @@ async function remove(a) {
           <button class="btn btn-sm btn-ghost" type="button" @click="editing = null">Отмена</button>
         </template>
         <template v-else>
-          <span class="dot" :style="{ background: a.color }" />
+          <span class="dot" :style="{ background: resolveColor(a.color).color }" />
           <UserAvatar v-if="a.userId && directory.byId[a.userId]" :user="directory.byId[a.userId]" :size="24" />
           <div class="who">
             <div class="name">{{ a.name }}</div>

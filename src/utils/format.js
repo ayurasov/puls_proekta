@@ -54,6 +54,12 @@ export function formatRelative(value, now = new Date()) {
   return DATETIME.format(date)
 }
 
+const NUMBER = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 1 })
+/** Число по-русски: десятичная запятая, неразрывный пробел между разрядами (27,4; 1 250). */
+export function formatNumber(value) {
+  return NUMBER.format(Number(value) || 0)
+}
+
 export function pluralize(n, one, few, many) {
   const abs = Math.abs(n) % 100
   const last = abs % 10

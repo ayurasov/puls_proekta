@@ -4,6 +4,7 @@ import BaseModal from '../../components/common/BaseModal.vue'
 import { planStatistics } from '../domain/stats'
 import { STATUSES } from '../domain/colors'
 import { formatDay } from '../domain/dates'
+import { formatNumber } from '../../utils/format'
 
 const emit = defineEmits(['close'])
 const editor = inject('gantt')
@@ -23,7 +24,7 @@ function select(key) {
       <div class="card stat"><span class="muted small">Средний прогресс</span><strong>{{ stats.avgProgress }}%</strong></div>
       <div class="card stat"><span class="muted small">Просрочено сейчас</span><strong :class="{ bad: stats.overdueNow.length }">{{ stats.overdueNow.length }}</strong></div>
       <div class="card stat"><span class="muted small">Групп / вех</span><strong>{{ stats.groups }} / {{ stats.milestones }}</strong></div>
-      <div class="card stat"><span class="muted small">Средняя длительность</span><strong>{{ stats.avgDuration }} дн.</strong></div>
+      <div class="card stat"><span class="muted small">Средняя длительность</span><strong>{{ formatNumber(stats.avgDuration) }} дн.</strong></div>
     </div>
 
     <section>
@@ -41,10 +42,10 @@ function select(key) {
         <h3>Сдвиги сроков</h3>
         <dl class="kv">
           <dt>Задач со сдвигом</dt><dd>{{ stats.withOffset }} из {{ stats.total }}</dd>
-          <dt>Среднее отклонение</dt><dd>{{ stats.avgOffset > 0 ? '+' : '' }}{{ stats.avgOffset }} дн.</dd>
-          <dt>Максимальная просрочка</dt><dd>{{ stats.maxOverdue ? '+' + stats.maxOverdue : 0 }} дн.</dd>
-          <dt>Средняя просрочка</dt><dd>{{ stats.avgOverdue ? '+' + stats.avgOverdue : 0 }} дн.</dd>
-          <dt>Среднее опережение</dt><dd>{{ stats.avgEarly }} дн.</dd>
+          <dt>Среднее отклонение</dt><dd>{{ stats.avgOffset > 0 ? '+' : '' }}{{ formatNumber(stats.avgOffset) }} дн.</dd>
+          <dt>Максимальная просрочка</dt><dd>{{ stats.maxOverdue ? '+' + formatNumber(stats.maxOverdue) : 0 }} дн.</dd>
+          <dt>Средняя просрочка</dt><dd>{{ stats.avgOverdue ? '+' + formatNumber(stats.avgOverdue) : 0 }} дн.</dd>
+          <dt>Среднее опережение</dt><dd>{{ formatNumber(stats.avgEarly) }} дн.</dd>
         </dl>
         <template v-if="stats.topShifted.length">
           <div class="muted small sub">Больше всего сдвинуты</div>

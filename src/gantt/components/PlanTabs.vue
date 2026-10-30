@@ -206,6 +206,7 @@ async function onDrop() {
     <button v-if="archivedPlans.length" class="btn btn-ghost btn-sm archive-btn" type="button" @click="openMenu('archive', $event)">
       <AppIcon name="archive" :size="14" /> Архив · {{ archivedPlans.length }}
     </button>
+    <div id="plan-actions-slot" class="plan-actions" />
     <input ref="fileInput" type="file" accept=".json,application/json" hidden @change="onImportFile" />
 
     <PopupMenu v-if="menu?.type === 'add'" :anchor="menu.anchor" @close="menu = null">
@@ -240,6 +241,8 @@ async function onDrop() {
 
 <style scoped>
 .plan-tabs { display: flex; align-items: flex-end; gap: 8px; padding: 0 12px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); flex-shrink: 0; min-height: 38px; }
+.plan-actions { display: flex; align-items: center; gap: 2px; align-self: center; flex-shrink: 0; }
+.plan-actions:empty { display: none; }
 .tabs-scroll { display: flex; align-items: flex-end; gap: 2px; overflow-x: auto; min-width: 0; flex: 1; }
 .plan-tab { display: flex; align-items: center; gap: 2px; max-width: 280px; border-bottom: 2px solid transparent; padding: 0 2px; flex-shrink: 0; }
 .plan-tab.is-active { border-bottom-color: var(--color-primary); }
@@ -252,7 +255,7 @@ async function onDrop() {
 .tab-menu:hover { background: var(--color-hover); color: var(--color-text); }
 .plan-tab .input { margin: 4px 0 6px; width: 220px; }
 .tab-add { margin-bottom: 4px; }
-.archive-btn { margin-bottom: 4px; flex-shrink: 0; color: var(--color-text-secondary); }
+.archive-btn { align-self: center; flex-shrink: 0; color: var(--color-text-secondary); }
 .archived-row { display: flex; align-items: center; gap: 2px; }
 .archived-row .menu-item { flex: 1; min-width: 0; }
 </style>

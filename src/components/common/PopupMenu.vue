@@ -3,7 +3,9 @@ import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 /**
  * Всплывающее меню в точке (контекстное меню) или под элементом.
- * Закрывается по щелчку вне меню, Esc, прокрутке; не выходит за края окна.
+ * Закрывается по щелчку вне меню и Esc; не выходит за края окна. Меню под элементом следует за ним,
+ * когда раскладка меняется (например, под панелью появилась строка фильтров) — иначе фильтры
+ * закрывались бы после первой же отметки. Меню в точке закрывается при прокрутке и изменении окна.
  */
 const props = defineProps({
   x: { type: Number, default: 0 },
@@ -16,7 +18,7 @@ const emit = defineEmits(['close'])
 const menu = ref(null)
 const style = ref({ left: '0px', top: '0px', visibility: 'hidden' })
 
-async function place() {
+async function place(initial = false) {
   await nextTick()
   const el = menu.value
   if (!el) return
@@ -31,7 +33,7 @@ async function place() {
   const maxTop = window.innerHeight - el.offsetHeight - 8
   if (top > maxTop && props.anchor) top = props.anchor.getBoundingClientRect().top - el.offsetHeight - 4
   style.value = { left: Math.max(8, Math.min(left, maxLeft)) + 'px', top: Math.max(8, Math.min(top, maxTop)) + 'px', minWidth: props.minWidth + 'px' }
-  el.querySelector('.menu-item:not(:disabled)')?.focus({ preventScroll: true })
+  if (initial === true) el.querySelector('.menu-item:not(:disabled)')?.focus({ preventScroll: true })
 }
 
 function onPointer(event) {
@@ -48,25 +50,46 @@ function onKey(event) {
   }
 }
 function onScroll(event) {
-  if (menu.value && !menu.value.contains(event.target)) emit('close')
+  if (!props.anchor && menu.value && !menu.value.contains(event.target)) emit('close')
+}
+function onResize() {
+  if (props.anchor) place()
+  else emit('close')
 }
 
-watch(() => [props.x, props.y, props.anchor], place)
+// Следим за положением элемента, к которому привязано меню, пока меню открыто
+let frame = 0
+let lastRect = ''
+function follow() {
+  const rect = props.anchor?.getBoundingClientRect()
+  if (rect) {
+    if (!props.anchor.isConnected || (rect.width === 0 && rect.height === 0)) { emit('close'); return }
+    const key = `${rect.left}:${rect.top}:${rect.right}:${rect.bottom}`
+    if (lastRect && key !== lastRect) place()
+    lastRect = key
+  }
+  frame = requestAnimationFrame(follow)
+}
+
+watch(() => [props.x, props.y, props.anchor], () => place(true))
 onMounted(() => {
-  place()
+  place(true)
   setTimeout(() => {
     document.addEventListener('mousedown', onPointer, true)
     document.addEventListener('contextmenu', onPointer, true)
   })
   document.addEventListener('keydown', onKey, true)
   window.addEventListener('scroll', onScroll, true)
-  window.addEventListener('resize', () => emit('close'), { once: true })
+  window.addEventListener('resize', onResize)
+  if (props.anchor) frame = requestAnimationFrame(follow)
 })
 onBeforeUnmount(() => {
+  cancelAnimationFrame(frame)
   document.removeEventListener('mousedown', onPointer, true)
   document.removeEventListener('contextmenu', onPointer, true)
   document.removeEventListener('keydown', onKey, true)
   window.removeEventListener('scroll', onScroll, true)
+  window.removeEventListener('resize', onResize)
 })
 </script>
 

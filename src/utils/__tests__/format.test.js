@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatRelative, parseDay, pluralize } from '../format'
+import { formatDate, formatNumber, formatRelative, parseDay, pluralize } from '../format'
 
 describe('format', () => {
   it('parses calendar days without timezone shift', () => {
@@ -16,5 +16,14 @@ describe('format', () => {
     expect(formatRelative(new Date('2026-10-30T11:59:40'), now)).toBe('только что')
     expect(formatRelative(new Date('2026-10-30T11:50:00'), now)).toBe('10 мин назад')
     expect(formatRelative(new Date('2026-10-29T09:05:00'), now)).toMatch(/^вчера в 09:05/)
+  })
+})
+
+describe('formatNumber', () => {
+  it('по-русски: десятичная запятая и пробел между разрядами', () => {
+    expect(formatNumber(27.4)).toBe('27,4')
+    expect(formatNumber(1250)).toBe('1 250')
+    expect(formatNumber(3.25)).toBe('3,3')
+    expect(formatNumber(null)).toBe('0')
   })
 })

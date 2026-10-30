@@ -3,7 +3,7 @@ import { computed, inject, ref } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
 import { SCALES, nextZoom } from '../domain/layout'
-import { STATUSES } from '../domain/colors'
+import { STATUSES, resolveColor } from '../domain/colors'
 import { NONE } from '../domain/filters'
 import { exportPlan } from '../export'
 import { useUiStore } from '../../stores/ui'
@@ -52,7 +52,7 @@ const filterGroups = computed(() => [
   { key: 'statuses', label: 'Статус', options: STATUSES.map((s) => ({ value: s.key, label: s.label, color: s.color })) },
   {
     key: 'assignees', label: 'Исполнитель',
-    options: [...editor.assigneeList.map((a) => ({ value: a.key, label: a.name, color: a.color })), { value: NONE, label: 'Без исполнителя' }],
+    options: [...editor.assigneeList.map((a) => ({ value: a.key, label: a.name, color: resolveColor(a.color).color })), { value: NONE, label: 'Без исполнителя' }],
   },
   { key: 'categories', label: 'Категория', options: [...editor.categories.map((c) => ({ value: c, label: c })), { value: NONE, label: 'Без категории' }] },
 ])
@@ -110,6 +110,7 @@ function toggleColumn(column) {
 </script>
 
 <template>
+  <div class="toolbar-wrap">
   <div class="toolbar">
     <div class="group">
       <div v-if="editor.canEdit" class="split">
@@ -136,14 +137,6 @@ function toggleColumn(column) {
       <button class="btn btn-sm" :class="{ 'is-active': activeFilterCount }" type="button" @click="open('filters', $event)">
         <AppIcon name="filter" :size="14" /> Фильтры<span v-if="activeFilterCount" class="count">{{ activeFilterCount }}</span>
       </button>
-      <div v-if="activeFilterCount" class="chips">
-        <template v-for="group in ['statuses', 'assignees', 'categories']" :key="group">
-          <button v-for="value in [...view[group]]" :key="group + value" class="chip" type="button" title="Убрать фильтр" @click="toggleFilter(group, value)">
-            {{ filterLabel(group, value) }} <AppIcon name="close" :size="11" />
-          </button>
-        </template>
-        <button class="btn btn-ghost btn-sm" type="button" @click="clearFilters">Сбросить</button>
-      </div>
     </div>
 
     <div class="group">
@@ -156,11 +149,12 @@ function toggleColumn(column) {
         <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Увеличить (Ctrl + колесо)" @click="zoom(1)"><AppIcon name="plus" :size="14" /></button>
       </div>
       <button class="btn btn-ghost btn-sm" type="button" title="Весь период на ширину экрана" @click="emit('fit')"><AppIcon name="fit" :size="14" /></button>
-      <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /> Сегодня</button>
+      <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /><span class="today-label">Сегодня</span></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Вид" @click="open('view', $event)"><AppIcon name="layers" /></button>
     </div>
 
-    <div class="group">
+    <!-- Действия с планом целиком — в строке вкладок планов, рядом с выбранным планом -->
+    <Teleport defer to="#plan-actions-slot">
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Исполнители" @click="emit('open-modal', 'assignees')"><AppIcon name="users" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Статистика" @click="emit('open-modal', 'stats')"><AppIcon name="chart" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="История и сохранённые версии" data-testid="history" @click="emit('open-modal', 'history')"><AppIcon name="history" /></button>
@@ -168,7 +162,7 @@ function toggleColumn(column) {
       <button class="btn btn-sm" type="button" :disabled="exporting" title="Экспорт" @click="open('export', $event)">
         <AppIcon name="download" :size="14" /> {{ exporting ? 'Готовим…' : 'Экспорт' }}
       </button>
-    </div>
+    </Teleport>
 
     <PopupMenu v-if="menu?.type === 'add'" :anchor="menu.anchor" @close="menu = null">
       <button class="menu-item" type="button" @click="addRow('task')"><AppIcon name="gantt" /> Задача</button>
@@ -217,20 +211,32 @@ function toggleColumn(column) {
       <button class="menu-item" type="button" @click="runExport('json')"><AppIcon name="download" /> JSON (открывается и в 1.0)</button>
     </PopupMenu>
   </div>
+  <div v-if="activeFilterCount" class="filter-bar">
+    <span class="muted small">Фильтры:</span>
+    <template v-for="group in ['statuses', 'assignees', 'categories']" :key="group">
+      <button v-for="value in [...view[group]]" :key="group + value" class="chip" type="button" title="Убрать фильтр" @click="toggleFilter(group, value)">
+        {{ filterLabel(group, value) }} <AppIcon name="close" :size="11" />
+      </button>
+    </template>
+    <button class="btn btn-ghost btn-sm" type="button" @click="clearFilters">Сбросить</button>
+  </div>
+  </div>
 </template>
 
 <style scoped>
-.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+.toolbar-wrap { flex-shrink: 0; background: var(--color-surface); border-bottom: 1px solid var(--color-border); container-type: inline-size; }
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; }
 .group { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
-.group.grow { flex: 1; min-width: 220px; }
+.group.grow { flex: 1; min-width: 240px; flex-wrap: nowrap; }
+.filter-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; padding: 0 12px 8px; }
+.today-label { margin-left: 4px; }
 .split { display: inline-flex; margin-right: 4px; }
 .split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255,255,255,.35); padding: 3px 6px; }
-.search { position: relative; width: 210px; }
+.search { position: relative; flex: 0 1 240px; min-width: 140px; }
 .search .input { padding-left: 26px; }
 .search-icon { position: absolute; left: 8px; top: 6px; color: var(--color-text-muted); }
 .count { background: var(--color-primary); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 700; }
-.chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #c9d6ff; background: var(--color-primary-soft); color: var(--color-primary-dark); border-radius: 999px; font-size: 11.5px; padding: 2px 8px; }
 .zoom { display: flex; align-items: center; }
 .zoom-input { width: 52px; text-align: center; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: 12px; min-height: 26px; }
@@ -242,5 +248,7 @@ function toggleColumn(column) {
 .filter-option .ellipsis { flex: 1; }
 .filters-foot { display: flex; align-items: center; gap: 8px; padding: 4px 8px; justify-content: space-between; }
 label.menu-item { cursor: pointer; }
-@media (max-width: 900px) { .search { width: 150px; } .filters { grid-template-columns: 1fr; } }
+/* Узкая рабочая область: «Сегодня» — только значком, чтобы панель оставалась в одну строку */
+@container (max-width: 1000px) { .today-label { display: none; } }
+@media (max-width: 900px) { .filters { grid-template-columns: 1fr; } }
 </style>
