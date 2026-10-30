@@ -47,6 +47,11 @@ test('реестр изменений перенесён и фильтруетс
   assert.ok(total >= 4098, `в реестре ${total} записей`)
   await page.selectOption('.filters select >> nth=0', 'karatyshhev.av')
   await page.waitForTimeout(800)
+  // Фильтр — по логину, в таблице — ФИО автора; разделы и объекты 1.0.x — понятными словами
   const cells = await page.locator('tbody tr td:nth-child(2)').allTextContents()
-  assert.ok(cells.length && cells.every((c) => c === 'karatyshhev.av'))
+  assert.ok(cells.length && cells.every((c) => c.trim() === 'Каратыщев Андрей Викторович'), cells.slice(0, 3).join(', '))
+  const sections = await page.locator('tbody tr td:nth-child(4)').allTextContents()
+  assert.ok(!sections.some((c) => c.trim() === 'Гант'), 'раздел «Гант» показан как «Планы»')
+  const entities = await page.locator('tbody tr td:nth-child(6)').allTextContents()
+  assert.ok(!entities.some((c) => /project #|plan #|user #/.test(c)), entities.slice(0, 3).join(', '))
 })
