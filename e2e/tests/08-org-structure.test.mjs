@@ -19,17 +19,18 @@ async function addUnit(name, parentLabel, kindLabel) {
 }
 
 test('администратор строит структуру и назначает руководителей', async () => {
+  // Набор не зависит от того, что в структуре уже есть (набор 07 загружает её из файла)
   await page.goto(`${BASE}/admin/structure`)
-  await page.locator('text=Подразделения ещё не созданы').waitFor()
+  await page.waitForSelector('[data-testid=dep-name]')
   await addUnit('ООО «Пульс»', 'Верхний уровень', 'Компания')
   await addUnit('Проектный офис', 'ООО «Пульс»', 'Отдел')
-  assert.equal(await page.locator('[data-testid=dep-row]').count(), 2)
 
   const users = (await api(page, 'GET', '/users')).body
   const admin = users.find((u) => u.login === 'admin')
   const editor = users.find((u) => u.login === 'e2e.editor')
   const deps = (await api(page, 'GET', '/org/tree')).body.departments
-  const office = deps.find((d) => d.name === 'Проектный офис')
+  const company = deps.find((d) => d.name === 'ООО «Пульс»' && !d.parentId)
+  const office = deps.find((d) => d.name === 'Проектный офис' && d.parentId === company.id)
 
   await page.locator('[data-testid=dep-row]', { hasText: 'Проектный офис' }).locator('[data-testid=dep-heads]').click()
   await page.fill('.modal input[type=search]', admin.name.split(' ')[0])
@@ -51,7 +52,9 @@ test('структура компании видна сотрудникам', as
   await login(viewer, 'e2e.viewer')
   await viewer.click('[data-testid=org-link]')
   await viewer.locator('[data-testid=org-unit]').waitFor()
-  await viewer.locator('.node-name', { hasText: 'Проектный офис' }).click()
+  await viewer.fill('[data-testid=org-search]', 'Проектный офис')
+  await viewer.locator('.node-name', { hasText: 'Проектный офис' }).first().click()
+  await viewer.fill('[data-testid=org-search]', '')
   const unit = viewer.locator('[data-testid=org-unit]')
   await unit.locator('h2', { hasText: 'Проектный офис' }).waitFor()
   await unit.locator('.person-row', { hasText: 'E2E editor' }).click()

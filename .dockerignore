@@ -4,7 +4,8 @@ backend
 legacy
 docs
 # Руководства пользователя и администратора читаются и скачиваются из приложения: сборка клиента
-# (src/docs/guides.js) берёт их текст, снимки экранов, PDF и DOCX — остальное из docs образу не нужно
+# (src/docs/guides.js) берёт их текст, снимки экранов, PDF и DOCX, окно «Что нового» — docs/versions.md;
+# остальное из docs образу не нужно (проверяет src/__tests__/dockerContext.test.js)
 !docs/manuals/user-guide.md
 !docs/manuals/user-guide.pdf
 !docs/manuals/user-guide.docx
@@ -13,6 +14,7 @@ docs
 !docs/manuals/admin-guide.docx
 !docs/manuals/images/user
 !docs/manuals/images/admin
+!docs/versions.md
 docs/**/*.build.html
 e2e
 .git

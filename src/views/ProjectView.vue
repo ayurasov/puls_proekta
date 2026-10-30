@@ -106,15 +106,14 @@ onBeforeRouteUpdate(leaveGuard)
               <AppIcon name="edit" :size="14" />
             </button>
           </div>
-          <div class="meta muted small">
-            <span>{{ project.directionName || 'Без направления' }}</span>
+          <div class="meta muted small" :title="[project.directionName || 'Без направления', ACCESS_LABELS[project.access], project.subtitle].filter(Boolean).join(' · ')">
+            <span class="meta-part">{{ project.directionName || 'Без направления' }}</span>
             <span class="dot">·</span>
-            <span :class="{ 'access-view': project.access === 'view' }">{{ ACCESS_LABELS[project.access] }}</span>
+            <span class="meta-part" :class="{ 'access-view': project.access === 'view' }">{{ ACCESS_LABELS[project.access] }}</span>
             <span v-if="project.subtitle" class="dot">·</span>
-            <span v-if="project.subtitle" class="ellipsis">{{ project.subtitle }}</span>
+            <span v-if="project.subtitle" class="meta-part subtitle">{{ project.subtitle }}</span>
           </div>
         </div>
-        <div class="spacer" />
         <div id="project-header-slot" class="header-slot" />
       </header>
       <PlanTabs
@@ -147,12 +146,20 @@ onBeforeRouteUpdate(leaveGuard)
 <style scoped>
 .project-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 .project-header { display: flex; align-items: center; gap: 8px; padding: 10px 16px 6px 10px; background: var(--color-surface); flex-shrink: 0; }
-.titles { min-width: 0; display: flex; flex-direction: column; }
+.titles { min-width: 0; flex: 1 1 auto; display: flex; flex-direction: column; }
 .title-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .project-title { font-size: 17px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.dot { opacity: 0.6; }
+/* Строка под названием не переносится по словам: части целиком, описание обрезается многоточием */
+.meta { display: flex; align-items: center; gap: 6px; min-width: 0; white-space: nowrap; overflow: hidden; }
+.meta-part { flex-shrink: 0; }
+.meta-part.subtitle { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.dot { opacity: 0.6; flex-shrink: 0; }
 .access-view { color: #a8670f; }
-.header-slot { display: flex; align-items: center; gap: 10px; }
+.header-slot { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-width: 0; }
+@media (max-width: 768px) {
+  .project-header { padding: 8px 10px 6px 60px; min-height: 60px; }
+  .project-header > .btn-icon:first-child { display: none; }
+  .project-title { font-size: 16px; }
+}
 .loading { padding: 40px; text-align: center; }
 </style>

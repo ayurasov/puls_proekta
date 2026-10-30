@@ -28,7 +28,8 @@ async function runAction(toast) {
 </template>
 
 <style scoped>
-.toast-viewport { position: fixed; right: 20px; bottom: 20px; z-index: 600; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+/* Уведомления — справа сверху, как в «По Делу»: не закрывают строку быстрого добавления и полосу прокрутки */
+.toast-viewport { position: fixed; top: max(16px, env(safe-area-inset-top)); right: max(16px, env(safe-area-inset-right)); z-index: 600; display: flex; flex-direction: column; gap: 8px; width: min(380px, calc(100vw - 32px)); pointer-events: none; }
 .toast { display: flex; align-items: flex-start; gap: 10px; padding: 12px 12px 12px 14px; box-shadow: var(--shadow-2); pointer-events: auto; }
 .toast-icon { margin-top: 1px; color: var(--color-primary); }
 .toast-success .toast-icon { color: var(--color-success); }
@@ -40,6 +41,10 @@ async function runAction(toast) {
 .toast-close { border: 0; background: transparent; color: var(--color-text-muted); padding: 2px; border-radius: 4px; }
 .toast-close:hover { background: var(--color-hover); color: var(--color-text); }
 .toast-enter-active, .toast-leave-active { transition: all 0.18s ease; }
-.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(8px); }
-@media (max-width: 768px) { .toast-viewport { right: 16px; bottom: 16px; } }
+.toast-enter-from, .toast-leave-to { opacity: 0; transform: translateY(-8px); }
+.toast-close { min-width: 24px; min-height: 24px; display: flex; align-items: center; justify-content: center; }
+@media (max-width: 768px) {
+  .toast-viewport { top: max(8px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); left: max(8px, env(safe-area-inset-left)); width: auto; }
+  .toast-close { min-width: 40px; min-height: 40px; }
+}
 </style>

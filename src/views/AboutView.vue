@@ -1,12 +1,14 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import packageJson from '../../package.json'
 import AppIcon from '../components/common/AppIcon.vue'
+import ReleaseNotesModal from '../components/common/ReleaseNotesModal.vue'
 import { useAuthStore } from '../stores/auth'
 import { availableGuides, guideDownloads } from '../docs/guides'
 
 const version = packageJson.version
 const auth = useAuthStore()
+const releaseNotesOpen = ref(false)
 // Руководство администратора — только администраторам
 const guides = computed(() => availableGuides(auth).map((guide) => ({ ...guide, files: guideDownloads(guide.key) })))
 </script>
@@ -40,11 +42,15 @@ const guides = computed(() => availableGuides(auth).map((guide) => ({ ...guide, 
           <li>одновременная работа без потери чужих правок, индикатор «сейчас на плане»;</li>
           <li>окна приложения вместо системных подтверждений браузера;</li>
           <li>закрытые вкладки-версии не теряются — уходят в архив;</li>
-          <li>данные 1.0.1 перенесены полностью, включая историю и комментарии.</li>
+          <li>данные прежней версии перенесены полностью, включая историю и комментарии.</li>
         </ul>
+        <p class="guide">
+          <button class="btn btn-sm" type="button" @click="releaseNotesOpen = true"><AppIcon name="star" :size="14" /> Что нового по версиям</button>
+        </p>
         <p class="muted small">Автор — Alexander Yurasov.</p>
       </section>
     </div>
+    <ReleaseNotesModal v-if="releaseNotesOpen" @close="releaseNotesOpen = false" />
 
     <section class="docs" aria-labelledby="about-docs-title">
       <h2 id="about-docs-title" class="section-title">Документация</h2>
@@ -67,6 +73,7 @@ const guides = computed(() => availableGuides(auth).map((guide) => ({ ...guide, 
 </template>
 
 <style scoped>
+.guide { margin: 12px 0 8px; display: flex; flex-wrap: wrap; gap: 8px; }
 .about { max-width: 980px; }
 .hero { display: flex; align-items: center; gap: 18px; padding: 22px; margin-bottom: 14px; }
 .hero h1 { font-size: 22px; }

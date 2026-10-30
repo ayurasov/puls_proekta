@@ -18,7 +18,7 @@ const routes = [
   { path: '/admin/audit', name: 'admin-audit', component: () => import('../views/admin/AuditView.vue'), meta: { admin: true, title: 'Реестр изменений' } },
   { path: '/admin/settings', name: 'admin-settings', component: () => import('../views/admin/SettingsView.vue'), meta: { admin: true, title: 'Настройки' } },
   { path: '/admin/integrations', name: 'admin-integrations', component: () => import('../views/admin/IntegrationsView.vue'), meta: { admin: true, title: 'Интеграции' } },
-  { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { admin: true, title: 'Корзина' } },
+  { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { trash: true, title: 'Корзина' } },
   { path: '/about', name: 'about', component: () => import('../views/AboutView.vue'), meta: { title: 'О программе' } },
   // Руководства внутри приложения (docs/guides.js); раздел — в #…: /guide#экран-плана
   { path: '/guide', name: 'guide', component: () => import('../views/GuideView.vue'), meta: { title: 'Руководство пользователя', guide: 'user' } },
@@ -58,6 +58,8 @@ router.beforeEach((to) => {
   }
   if (!auth.user) return { name: 'login', query: to.fullPath !== '/' ? { next: to.fullPath } : {} }
   if (to.meta.admin && !auth.isAdmin) return to.meta.fallback ? { path: to.meta.fallback, replace: true } : { name: 'projects' }
+  // Корзину видят и менеджеры — удалённые планы своих проектов (вернуть их может «полное управление»)
+  if (to.meta.trash && !auth.canCreateProjects) return { name: 'projects' }
   return true
 })
 

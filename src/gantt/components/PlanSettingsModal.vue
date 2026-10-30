@@ -7,6 +7,7 @@ import ColorPicker from './ColorPicker.vue'
 import { addDays, maxDay, minDay } from '../domain/dates'
 import { SCALES } from '../domain/layout'
 import { useUiStore } from '../../stores/ui'
+import { countLabel } from '../../utils/format'
 
 /** Настройки графика — общие для всех, кто работает с планом (изменения видны коллегам). */
 const emit = defineEmits(['close'])
@@ -44,7 +45,7 @@ function fitRange() {
 function setToday(fields) {
   patch({ today: { ...s.value.today, ...fields } }, 'Линия «сегодня»')
 }
-const TOOLTIP = { status: 'Статус', dates: 'Сроки и сдвиг', progress: 'Прогресс', dependency: 'Предшественник', assignee: 'Ответственный', lastChange: 'Последнее изменение' }
+const TOOLTIP = { status: 'Статус', dates: 'Сроки и сдвиг', progress: 'Прогресс', dependency: 'Предшественник', assignee: 'Исполнитель', lastChange: 'Последнее изменение' }
 function toggleTooltip(field) {
   const list = [...(d.value.tooltipFields || [])]
   const i = list.indexOf(field)
@@ -61,7 +62,7 @@ function addCategory() {
 }
 function removeCategory(name) {
   const used = editor.itemList.filter((i) => i.category === name).length
-  if (used) { ui.error(`Категория используется в ${used} задачах — сначала смените её у задач`); return }
+  if (used) { ui.error(`Категория используется в ${countLabel(used, 'задаче', 'задачах', 'задачах')} — сначала смените её у задач`); return }
   patch({ categories: (s.value.categories || []).filter((c) => c !== name) }, 'Удаление категории')
 }
 function saveDefaultView() {
@@ -72,7 +73,7 @@ function saveDefaultView() {
 </script>
 
 <template>
-  <BaseModal title="Настройки графика" size="wide" @close="emit('close')">
+  <BaseModal title="Настройки графика" size="wide" initial-focus=".modal-footer .btn-primary" @close="emit('close')">
     <template #header-actions><HelpLink topic="plan-settings" /></template>
     <p v-if="readonly" class="muted small">Только просмотр — изменить настройки может сотрудник с правом редактирования.</p>
     <div class="settings">
@@ -95,7 +96,7 @@ function saveDefaultView() {
           <label class="field">
             <span class="field-label">Линия</span>
             <select class="select" :value="s.today?.style || 'dashed'" :disabled="readonly" @change="setToday({ style: $event.target.value })">
-              <option value="dashed">Пунктир</option><option value="solid">Сплошная</option><option value="dotted">Точки</option>
+              <option value="dashed">Пунктирная</option><option value="solid">Сплошная</option><option value="dotted">Точечная</option>
             </select>
           </label>
           <div class="field"><span class="field-label">Цвет</span><ColorPicker :model-value="s.today?.color || 'red'" :disabled="readonly" @update:model-value="(c) => setToday({ color: c })" /></div>
@@ -117,7 +118,7 @@ function saveDefaultView() {
         <label class="switch"><input type="checkbox" :checked="d.showWeekends" :disabled="readonly" @change="toggle('showWeekends')" /><span class="switch-track" />Выделять выходные</label>
         <label class="switch"><input type="checkbox" :checked="d.showHolidays" :disabled="readonly" @change="toggle('showHolidays')" /><span class="switch-track" />Выделять праздники</label>
         <label class="switch"><input type="checkbox" :checked="d.autoShift" :disabled="readonly" @change="toggle('autoShift')" /><span class="switch-track" />Автосдвиг задач по связям</label>
-        <p class="muted small">Праздники и переносы — по календарю администратора (Настройки → Календарь).</p>
+        <p class="muted small">Праздники и переносы — по календарю администратора (Настройки → Производственный календарь).</p>
       </section>
       <section>
         <h3>Легенда</h3>
@@ -158,6 +159,7 @@ function saveDefaultView() {
 <style scoped>
 .settings { display: grid; grid-template-columns: 1fr 1fr; gap: 18px 28px; }
 section { display: flex; flex-direction: column; gap: 10px; }
+section > .btn { align-self: flex-start; }
 section.wide { grid-column: 1 / -1; }
 h3 { font-size: 12px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
 .narrow { max-width: 180px; }

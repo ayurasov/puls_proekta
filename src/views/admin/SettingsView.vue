@@ -1,5 +1,6 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeRouteLeave } from 'vue-router'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
@@ -30,6 +31,30 @@ onMounted(async () => {
 })
 
 function change() { dirty.value = true; testResult.value = null }
+// Включили вход через домен — режим «Только пароли системы» не имеет смысла: по умолчанию «сначала домен»
+function toggleEnabled() {
+  if (ldap.value.enabled && ldap.value.authMode === 'local') ldap.value.authMode = 'hybrid'
+  change()
+}
+
+// Несохранённые настройки входа не пропадают молча: при уходе со страницы — вопрос, при закрытии вкладки — предупреждение браузера
+onBeforeRouteLeave(async () => {
+  if (!dirty.value) return true
+  const choice = await ui.openDialog({
+    type: 'choice', title: 'Сохранить настройки входа?',
+    message: 'Изменения настроек входа через домен ещё не сохранены.',
+    cancelText: 'Остаться', choices: [{ value: 'discard', label: 'Не сохранять', danger: true }, { value: 'save', label: 'Сохранить' }],
+  })
+  if (choice === 'save') { await saveLdap(); return !dirty.value }
+  return choice === 'discard'
+})
+function onBeforeUnload(event) {
+  if (!dirty.value) return
+  event.preventDefault()
+  event.returnValue = ''
+}
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload))
+onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload))
 async function saveLdap() {
   try {
     ldap.value = await api.put('/settings/ldap', ldap.value)
@@ -65,7 +90,7 @@ async function removeDay(day) {
 </script>
 
 <template>
-  <div class="page narrow">
+  <div class="page">
     <div class="page-header">
       <h1 class="page-title">Настройки</h1>
       <HelpLink :topic="tab === 'calendar' ? 'admin-calendar' : 'admin-ldap'" />
@@ -77,7 +102,7 @@ async function removeDay(day) {
     </div>
 
     <div v-if="tab === 'ldap' && ldap" class="card block">
-      <label class="switch"><input v-model="ldap.enabled" type="checkbox" @change="change" /><span class="switch-track" /><b>Вход по учётной записи домена (LDAP / Active Directory)</b></label>
+      <label class="switch"><input v-model="ldap.enabled" type="checkbox" @change="toggleEnabled" /><span class="switch-track" /><b>Вход по учётной записи домена (LDAP / Active Directory)</b></label>
       <template v-if="ldap.enabled">
         <label class="field">
           <span class="field-label">Режим</span>
@@ -110,9 +135,9 @@ async function removeDay(day) {
           <span v-if="testResult" :class="testResult.ok ? 'ok' : 'bad'">{{ testResult.ok ? 'Подключение успешно' : testResult.error }}</span>
         </div>
       </template>
-      <div class="footer">
-        <button class="btn btn-primary" type="button" :disabled="!dirty" @click="saveLdap">Сохранить</button>
-        <span v-if="dirty" class="muted small">Есть несохранённые изменения</span>
+      <div class="footer" :class="{ dirty }">
+        <button class="btn btn-primary" type="button" :disabled="!dirty" data-testid="ldap-save" @click="saveLdap">Сохранить</button>
+        <span v-if="dirty" class="unsaved small"><AppIcon name="warning" :size="14" /> Есть несохранённые изменения — сохраните их, прежде чем уходить со страницы</span>
       </div>
     </div>
 
@@ -142,14 +167,14 @@ async function removeDay(day) {
 </template>
 
 <style scoped>
-.narrow { max-width: 900px; }
 .block { padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
 .three { grid-template-columns: 1fr 1fr 1fr; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
 .test { display: flex; align-items: center; gap: 12px; }
 .ok { color: var(--color-success); font-weight: 600; }
 .bad { color: var(--color-danger); }
-.footer { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--color-border); padding-top: 12px; }
+.footer { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--color-border); padding-top: 12px; position: sticky; bottom: 0; background: var(--color-surface); padding-bottom: 4px; }
+.unsaved { display: inline-flex; align-items: center; gap: 6px; color: #a8670f; font-weight: 600; }
 .year { display: flex; align-items: center; gap: 8px; }
 .days { display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px; }
 .day { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; border-bottom: 1px solid #f0f2f6; }

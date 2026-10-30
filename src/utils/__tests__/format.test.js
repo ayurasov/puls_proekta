@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatDate, formatNumber, formatRelative, parseDay, pluralize } from '../format'
+import { countLabel, formatDate, formatNumber, formatRelative, parseDay, pluralize } from '../format'
 
 describe('format', () => {
   it('parses calendar days without timezone shift', () => {
@@ -25,5 +25,11 @@ describe('formatNumber', () => {
     expect(formatNumber(1250)).toBe('1 250')
     expect(formatNumber(3.25)).toBe('3,3')
     expect(formatNumber(null)).toBe('0')
+  })
+
+  it('число со словом в нужной форме', () => {
+    expect([0, 1, 2, 5, 11, 21, 104].map((n) => countLabel(n, 'строка', 'строки', 'строк')))
+      .toEqual(['0 строк', '1 строка', '2 строки', '5 строк', '11 строк', '21 строка', '104 строки'])
+    expect(countLabel(3, 'заблокирована', 'заблокированы', 'заблокировано')).toBe('3 заблокированы')
   })
 })

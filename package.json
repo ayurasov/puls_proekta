@@ -1,7 +1,7 @@
 {
   "name": "puls-proekta",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Пульс Проекта — планирование проектов на диаграммах Ганта",
   "type": "module",
   "engines": {

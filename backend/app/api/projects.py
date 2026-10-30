@@ -62,11 +62,36 @@ class ReorderIn(BaseModel):
     items: list[ReorderEntry]
 
 
+def _default_plans(project_ids):
+    """Основной план каждого проекта: первый открытый (не в архиве) по порядку вкладок.
+
+    Копии плана и черновики — отдельные вкладки; если считать задачи всех планов, одна и та же
+    задача в копии посчитается дважды, и процент на карточке разойдётся со «Статистикой» плана.
+    """
+    rows = db.session.execute(
+        select(Plan.project_id, Plan.id, Plan.title)
+        .where(Plan.project_id.in_(project_ids), Plan.deleted_at.is_(None), Plan.is_archived.is_(False))
+        .order_by(Plan.position, Plan.id)
+    ).all()
+    plans = {}
+    for project_id, plan_id, title in rows:
+        plans.setdefault(project_id, (plan_id, title))
+    return plans
+
+
 def _task_stats(project_ids):
-    """Число задач по статусам и ближайшая веха — для карточек на главной."""
+    """Задачи основного плана по статусам, средний прогресс и ближайшая веха — для карточек на главной.
+
+    Средний прогресс считается так же, как «Средний прогресс» в окне «Статистика» плана:
+    среднее поля «Прогресс» по всем задачам плана.
+    """
     if not project_ids:
         return {}
-    alive = and_(PlanItem.deleted_at.is_(None), Plan.deleted_at.is_(None), Plan.is_archived.is_(False))
+    default_plans = _default_plans(project_ids)
+    plan_ids = [plan_id for plan_id, _title in default_plans.values()]
+    if not plan_ids:
+        return {}
+    alive = and_(PlanItem.deleted_at.is_(None), PlanItem.plan_id.in_(plan_ids))
     rows = db.session.execute(
         select(
             Plan.project_id,
@@ -75,23 +100,34 @@ def _task_stats(project_ids):
             func.sum(case((PlanItem.status == "inwork", 1), else_=0)),
             func.sum(case((PlanItem.status == "blocked", 1), else_=0)),
             func.sum(case((and_(PlanItem.status != "done", PlanItem.end_date < func.current_date()), 1), else_=0)),
+            func.sum(func.coalesce(PlanItem.progress, 0)),
         )
         .join(Plan, Plan.id == PlanItem.plan_id)
-        .where(Plan.project_id.in_(project_ids), PlanItem.type == "task", alive)
+        .where(PlanItem.type == "task", alive)
         .group_by(Plan.project_id)
     ).all()
-    stats = {pid: {"total": total or 0, "done": int(done or 0), "inwork": int(inwork or 0),
-                   "blocked": int(blocked or 0), "overdue": int(overdue or 0)}
-             for pid, total, done, inwork, blocked, overdue in rows}
+
+    def empty(pid):
+        plan_id, title = default_plans[pid]
+        return {"total": 0, "done": 0, "inwork": 0, "blocked": 0, "overdue": 0, "progress": 0,
+                "planId": plan_id, "planTitle": title}
+
+    stats = {}
+    for pid, total, done, inwork, blocked, overdue, progress_sum in rows:
+        entry = empty(pid)
+        total = int(total or 0)
+        entry.update({"total": total, "done": int(done or 0), "inwork": int(inwork or 0), "blocked": int(blocked or 0),
+                      "overdue": int(overdue or 0),
+                      "progress": round(float(progress_sum or 0) / total) if total else 0})
+        stats[pid] = entry
     milestones = db.session.execute(
         select(Plan.project_id, PlanItem.name, PlanItem.start_date)
         .join(Plan, Plan.id == PlanItem.plan_id)
-        .where(Plan.project_id.in_(project_ids), PlanItem.type == "milestone", alive,
-               PlanItem.start_date >= func.current_date())
+        .where(PlanItem.type == "milestone", alive, PlanItem.start_date >= func.current_date())
         .order_by(PlanItem.start_date)
     ).all()
     for pid, name, day in milestones:
-        entry = stats.setdefault(pid, {"total": 0, "done": 0, "inwork": 0, "blocked": 0, "overdue": 0})
+        entry = stats.setdefault(pid, empty(pid))
         entry.setdefault("nextMilestone", {"name": name, "date": day.isoformat()})
     return stats
 
@@ -267,22 +303,31 @@ def restore_project(project_id):
 
 
 @bp.get("/trash")
-@admin_required
+@login_required
 def trash():
+    """Корзина. Администратор видит всё; остальные — удалённые планы проектов, которыми полностью
+    управляют (вернуть план может «полное управление», удалить навсегда — только администратор)."""
+    user = current_user()
+    is_admin = user.role == "admin"
     projects = db.session.execute(
         select(Project).where(Project.deleted_at.is_not(None)).order_by(Project.deleted_at.desc())
-    ).scalars().all()
+    ).scalars().all() if is_admin else []
     plans = db.session.execute(
         select(Plan, Project).join(Project, Project.id == Plan.project_id)
         .where(Plan.deleted_at.is_not(None), Project.deleted_at.is_(None)).order_by(Plan.deleted_at.desc())
     ).all()
+    if not is_admin:
+        levels = project_levels(user, list({pr.id: pr for _pl, pr in plans}.values()))
+        plans = [(pl, pr) for pl, pr in plans if levels.get(pr.id) == "manage"]
     user_ids = {p.deleted_by_id for p in projects} | {pl.deleted_by_id for pl, _ in plans}
     names = {u.id: u.name for u in db.session.execute(select(User).where(User.id.in_(user_ids - {None})))
              .scalars()} if user_ids - {None} else {}
     return jsonify({
         "projects": [{**serialize_project(p, "manage"), "deletedByName": names.get(p.deleted_by_id)} for p in projects],
         "plans": [{"id": pl.id, "title": pl.title, "projectId": pr.id, "projectTitle": pr.title,
+                   "isArchived": pl.is_archived,
                    "deletedAt": iso(pl.deleted_at), "deletedByName": names.get(pl.deleted_by_id)} for pl, pr in plans],
+        "canPurge": is_admin,
     })
 
 

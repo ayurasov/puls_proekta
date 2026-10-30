@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, ref } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
@@ -18,6 +18,12 @@ const state = editor.state
 const view = state.view
 const menu = ref(null)
 const exporting = ref(false)
+// Телефон: поиск и фильтры — отдельной строкой над прокручиваемой панелью (одна копия кнопок в разметке)
+const phoneQuery = typeof window !== 'undefined' && window.matchMedia ? window.matchMedia('(max-width: 768px)') : null
+const isPhone = ref(Boolean(phoneQuery?.matches))
+const onPhoneChange = (event) => { isPhone.value = event.matches }
+phoneQuery?.addEventListener?.('change', onPhoneChange)
+onBeforeUnmount(() => phoneQuery?.removeEventListener?.('change', onPhoneChange))
 
 function open(type, event) {
   menu.value = menu.value?.type === type ? null : { type, anchor: event.currentTarget }
@@ -37,8 +43,28 @@ function addRow(type) {
   editor.select(key, { openPanel: true })
 }
 
+const shortcutsButton = ref(null)
+/** Подсказка по клавишам — кнопка «?» на панели и клавиша «?» в диаграмме. */
+function showShortcuts() {
+  menu.value = menu.value?.type === 'keys' ? null : { type: 'keys', anchor: shortcutsButton.value }
+}
+const SHORTCUTS = [
+  ['Insert', 'Новая задача после выбранной строки'],
+  ['Enter', 'Открыть карточку выбранной строки'],
+  ['F2', 'Переименовать строку (или двойной щелчок)'],
+  ['Delete', 'Удалить строку (отмена — в уведомлении)'],
+  ['Ctrl+D', 'Дублировать строку'],
+  ['Ctrl+Z', 'Отменить'],
+  ['Ctrl+Y', 'Повторить (или Ctrl+Shift+Z)'],
+  ['↑ ↓', 'Соседняя строка'],
+  ['Esc', 'Закрыть карточку, снять выбор'],
+  ['Ctrl + колесо', 'Масштаб шкалы'],
+  ['Ctrl + перетаскивание', 'Копия задачи со сдвигом'],
+  ['?', 'Эта подсказка'],
+]
+
 // Insert в рабочей области добавляет задачу так же, как кнопка «Задача»
-defineExpose({ addRow })
+defineExpose({ addRow, showShortcuts })
 
 const counts = computed(() => {
   const statuses = {}
@@ -109,7 +135,7 @@ async function runExport(format) {
 }
 
 const columnLabels = computed(() => ({
-  start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Ответственный', progress: 'Прогресс',
+  start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Исполнитель', progress: 'Прогресс',
   ...(jira.state.connected ? { jira: 'Задача Jira' } : {}),
 }))
 const jiraLinked = computed(() => (jira.state.connected ? jira.linkedItems().length : 0))
@@ -128,6 +154,15 @@ function toggleColumn(column) {
 
 <template>
   <div class="toolbar-wrap">
+  <div v-if="isPhone" class="mobile-search">
+    <label class="search">
+      <AppIcon name="search" :size="14" class="search-icon" />
+      <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" data-testid="search" />
+    </label>
+    <button class="btn btn-sm" :class="{ 'is-active': activeFilterCount }" type="button" @click="open('filters', $event)">
+      <AppIcon name="filter" :size="14" /> Фильтры<span v-if="activeFilterCount" class="count">{{ activeFilterCount }}</span>
+    </button>
+  </div>
   <div class="toolbar">
     <div class="group">
       <div v-if="editor.canEdit" class="split">
@@ -146,7 +181,7 @@ function toggleColumn(column) {
       </button>
     </div>
 
-    <div class="group grow">
+    <div v-if="!isPhone" class="group grow">
       <label class="search">
         <AppIcon name="search" :size="14" class="search-icon" />
         <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" data-testid="search" />
@@ -168,6 +203,9 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-sm" type="button" title="Весь период на ширину экрана" @click="emit('fit')"><AppIcon name="fit" :size="14" /></button>
       <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /><span class="today-label">Сегодня</span></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Вид" @click="open('view', $event)"><AppIcon name="layers" /></button>
+      <button ref="shortcutsButton" class="btn btn-ghost btn-icon btn-sm" type="button" title="Клавиши (?)" aria-label="Сочетания клавиш" data-testid="shortcuts" @click="showShortcuts">
+        <AppIcon name="keyboard" />
+      </button>
       <HelpLink topic="plan" />
     </div>
 
@@ -182,7 +220,7 @@ function toggleColumn(column) {
         <span class="jira-mark" aria-hidden="true">J</span><span v-if="jiraDiffering" class="count">{{ jiraDiffering }}</span>
       </button>
       <button class="btn btn-sm" type="button" :disabled="exporting" title="Экспорт" @click="open('export', $event)">
-        <AppIcon name="download" :size="14" /> {{ exporting ? 'Готовим…' : 'Экспорт' }}
+        <AppIcon name="download" :size="14" /> <span class="export-label">{{ exporting ? 'Готовим…' : 'Экспорт' }}</span>
       </button>
     </Teleport>
 
@@ -214,7 +252,7 @@ function toggleColumn(column) {
         <div v-for="group in filterGroups" :key="group.key" class="filter-col">
           <div class="menu-label">{{ group.label }}</div>
           <div class="filter-options scroll-thin">
-            <label v-for="option in group.options" :key="option.value" class="filter-option">
+            <label v-for="option in group.options" :key="option.value" class="filter-option" :title="option.label">
               <input type="checkbox" :checked="view[group.key].has(option.value)" @change="toggleFilter(group.key, option.value)" />
               <span v-if="option.color" class="status-dot" :style="{ background: option.color }" />
               <span class="ellipsis">{{ option.label }}</span>
@@ -238,6 +276,15 @@ function toggleColumn(column) {
       <div class="menu-separator" />
       <button class="menu-item" type="button" @click="editor.collapseAll(false); menu = null"><AppIcon name="expandAll" /> Развернуть все группы</button>
       <button class="menu-item" type="button" @click="editor.collapseAll(true); menu = null"><AppIcon name="collapseAll" /> Свернуть все группы</button>
+    </PopupMenu>
+
+    <PopupMenu v-if="menu?.type === 'keys'" :anchor="menu.anchor" align="end" :min-width="440" @close="menu = null">
+      <div class="menu-label">Клавиши и мышь</div>
+      <dl class="shortcuts">
+        <template v-for="[keys, text] in SHORTCUTS" :key="keys">
+          <dt><kbd>{{ keys }}</kbd></dt><dd>{{ text }}</dd>
+        </template>
+      </dl>
     </PopupMenu>
 
     <PopupMenu v-if="menu?.type === 'export'" :anchor="menu.anchor" align="end" @close="menu = null">
@@ -290,7 +337,24 @@ function toggleColumn(column) {
 .filter-option .ellipsis { flex: 1; }
 .filters-foot { display: flex; align-items: center; gap: 8px; padding: 4px 8px; justify-content: space-between; }
 label.menu-item { cursor: pointer; }
+.shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 4px 10px 8px; font-size: 12.5px; align-items: baseline; }
+.shortcuts dt { white-space: nowrap; }
+.shortcuts dd { margin: 0; color: var(--color-text-secondary); }
+kbd { font-family: inherit; font-size: 11.5px; background: var(--color-surface-2); border: 1px solid var(--color-border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--color-text); }
+@media (max-width: 768px) { .export-label { display: none; } }
 /* Узкая рабочая область: «Сегодня» — только значком, чтобы панель оставалась в одну строку */
 @container (max-width: 1000px) { .today-label { display: none; } }
 @media (max-width: 900px) { .filters { grid-template-columns: 1fr; } }
+/* Телефон: поиск и фильтры — первой строкой, остальные кнопки — одной прокручиваемой строкой */
+@media (max-width: 768px) {
+  .toolbar { gap: 6px 8px; padding: 6px 10px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .toolbar::-webkit-scrollbar { display: none; }
+  .group { flex-wrap: nowrap; flex-shrink: 0; }
+  .mobile-search { display: flex; gap: 6px; padding: 6px 10px 0; }
+  .mobile-search .search { flex: 1 1 auto; }
+  .zoom-input { min-height: 40px; }
+  .split-caret { padding: 3px 10px; }
+  .filter-option { min-height: 40px; }
+}
+
 </style>

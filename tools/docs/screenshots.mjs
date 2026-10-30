@@ -227,7 +227,7 @@ async function userGuide() {
   const viewer = await session('volkov')
   await openProject(viewer, PORTAL)
   await shot(viewer, '22-viewer')
-  await viewer.click('button[title="Профиль"]')
+  await viewer.click('.user-card')
   await viewer.waitForSelector('.modal')
   await shot(viewer, '23-profile')
 

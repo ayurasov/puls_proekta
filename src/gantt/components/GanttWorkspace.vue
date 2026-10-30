@@ -8,7 +8,8 @@ import { createPlanEditor } from '../editor'
 import { createJira } from '../jira'
 import { computeDependencyShifts } from '../domain/dependencies'
 import { descendantKeys } from '../domain/tree'
-import { formatRelative } from '../../utils/format'
+import { countLabel, formatRelative, pluralize } from '../../utils/format'
+import { isUndoRedo, keyContext } from '../keyboard'
 import AppIcon from '../../components/common/AppIcon.vue'
 import UserAvatar from '../../components/common/UserAvatar.vue'
 import GanttToolbar from './GanttToolbar.vue'
@@ -80,8 +81,9 @@ watch(() => (jira.state.loaded ? jira.linkedItems().map((item) => jira.keyFor(it
 
 const saveStatus = computed(() => {
   void savedTick.value
-  if (state.authLost) return { kind: 'offline', text: `Сессия истекла · ${editor.pendingCount} ${editor.pendingCount === 1 ? 'изменение ждёт' : 'изменений ждут'} входа` }
-  if (state.offline) return { kind: 'offline', text: `Нет связи · ${editor.pendingCount} ${editor.pendingCount === 1 ? 'изменение ждёт' : 'изменений ждут'} отправки` }
+  const waiting = `${countLabel(editor.pendingCount, 'изменение', 'изменения', 'изменений')} ${pluralize(editor.pendingCount, 'ждёт', 'ждут', 'ждут')}`
+  if (state.authLost) return { kind: 'offline', text: `Сессия истекла · ${waiting} входа` }
+  if (state.offline) return { kind: 'offline', text: `Нет связи · ${waiting} отправки` }
   if (state.inFlight || state.queue.length) return { kind: 'saving', text: 'Сохранение…' }
   if (state.lastSavedAt) return { kind: 'saved', text: `Сохранено ${formatRelative(state.lastSavedAt)}` }
   return { kind: 'idle', text: editor.canEdit ? 'Все изменения сохраняются автоматически' : '' }
@@ -107,7 +109,7 @@ async function deleteRows(keys) {
     const choice = await ui.openDialog({
       type: 'choice',
       title: items.length === 1 ? `Удалить «${items[0].name}»?` : `Удалить строки (${items.length})?`,
-      message: `Внутри ${children.size} ${children.size === 1 ? 'вложенная строка' : 'вложенных строк'}. Удалить их тоже или оставить, подняв на уровень выше?`,
+      message: `Внутри ${countLabel(children.size, 'вложенная строка', 'вложенные строки', 'вложенных строк')}. Удалить их тоже или оставить, подняв на уровень выше?`,
       choices: [
         { value: 'keep', label: 'Оставить вложенные' },
         { value: 'all', label: 'Удалить всё', danger: true },
@@ -153,32 +155,29 @@ function openNoteEditor(payload) {
   noteEditor.value = payload
 }
 
-function isTyping(event) {
-  const t = event.target
-  return t instanceof HTMLElement && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))
-}
-
 function onKeydown(event) {
-  if (document.querySelector('.modal-overlay')) return
-  const mod = event.ctrlKey || event.metaKey
-  if (mod && event.key.toLowerCase() === 'z' && !isTyping(event)) {
+  // Клавишу уже обработал элемент (меню, поле, окно) или открыто окно — сочетания диаграммы молчат
+  if (event.defaultPrevented || document.querySelector('.modal-overlay')) return
+  const where = keyContext(event)
+  if (isUndoRedo(event) && where !== 'typing') {
     event.preventDefault()
-    if (event.shiftKey) editor.redo()
+    if (event.key.toLowerCase() === 'y' || event.shiftKey) editor.redo()
     else editor.undo()
     return
   }
-  if (mod && event.key.toLowerCase() === 'y' && !isTyping(event)) {
-    event.preventDefault()
-    editor.redo()
-    return
-  }
-  if (isTyping(event)) return
-  const selected = state.view.selectedKey
+  if (where === 'typing') return
   if (event.key === 'Escape') {
+    // Esc в карточке (на её кнопке) закрывает карточку; меню закрываются сами
+    if (where === 'owned' && !event.target.closest('.panel')) return
     if (state.view.panelKey) state.view.panelKey = null
     else state.view.selectedKey = null
     return
   }
+  // Enter и пробел на кнопке нажимают кнопку, стрелки в меню ходят по пунктам, Delete в карточке — не удаление строки
+  if (where !== 'free') return
+  const mod = event.ctrlKey || event.metaKey
+  const selected = state.view.selectedKey
+  if (event.key === '?' && !mod) { event.preventDefault(); toolbar.value?.showShortcuts(); return }
   if (event.key === 'Insert' && editor.canEdit) { event.preventDefault(); toolbar.value?.addRow('task'); return }
   if (!selected) return
   if ((event.key === 'Delete') && editor.canEdit) { event.preventDefault(); deleteRows([selected]); return }
@@ -220,7 +219,7 @@ provide('ganttActions', actions)
       </span>
       <span v-if="state.presence.length > 5" class="badge">+{{ state.presence.length - 5 }}</span>
     </div>
-    <div v-if="saveStatus.text" class="save-status small" :class="`is-${saveStatus.kind}`" data-testid="save-status">
+    <div v-if="saveStatus.text" class="save-status small" :class="`is-${saveStatus.kind}`" :title="saveStatus.text" data-testid="save-status">
       <AppIcon :name="saveStatus.kind === 'offline' ? 'wifiOff' : saveStatus.kind === 'saving' ? 'refresh' : 'cloudCheck'" :size="15" />
       <span>{{ saveStatus.text }}</span>
     </div>
@@ -237,13 +236,13 @@ provide('ganttActions', actions)
   <div v-else class="workspace">
     <GanttToolbar ref="toolbar" @open-modal="(name) => (modal = { name })" @scroll-today="chart?.scrollToToday()" @fit="chart?.fitToWidth()" />
     <div v-if="state.previewSnapshot" class="banner banner-info">
-      <AppIcon name="history" /> Вы смотрите сохранённое состояние плана от {{ state.previewSnapshot.label }}. Изменения недоступны.
+      <AppIcon name="history" /> Вы смотрите версию <b>«{{ state.previewSnapshot.title }}»</b> от {{ state.previewSnapshot.label }}. Изменения недоступны.
       <span class="spacer" />
       <button class="btn btn-sm" type="button" @click="modal = { name: 'history', payload: { restore: state.previewSnapshot.id } }">Восстановить это состояние</button>
       <button class="btn btn-sm btn-primary" type="button" @click="state.previewSnapshot = null">Вернуться к текущему</button>
     </div>
     <div v-else-if="state.plan?.isArchived" class="banner banner-warning">
-      <AppIcon name="archive" /> План в архиве — только просмотр.
+      <AppIcon name="archive" /> План <b>«{{ state.plan.title }}»</b> в архиве — только просмотр.
       <span class="spacer" />
       <button v-if="['edit', 'manage'].includes(state.access)" class="btn btn-sm" type="button" @click="restoreArchived">Вернуть во вкладки</button>
     </div>
@@ -254,7 +253,7 @@ provide('ganttActions', actions)
       <AppIcon name="wifiOff" /> Нет связи с сервером. Изменения сохраняются на этой странице и будут отправлены, когда связь восстановится — не закрывайте вкладку.
     </div>
     <div v-if="inconsistent && !state.previewSnapshot" class="banner banner-info">
-      <AppIcon name="link" /> Сроки {{ inconsistent }} {{ inconsistent === 1 ? 'задачи не согласованы' : 'задач не согласованы' }} со связями «предшественник».
+      <AppIcon name="link" /> Сроки {{ countLabel(inconsistent, 'задачи', 'задач', 'задач') }} не согласованы со связями «предшественник».
       <span class="spacer" />
       <button class="btn btn-sm" type="button" @click="alignDependencies">Выровнять по связям</button>
     </div>
@@ -290,8 +289,13 @@ provide('ganttActions', actions)
 .presence-avatar.editing { box-shadow: 0 0 0 2px #fff, 0 0 0 4px var(--color-success); }
 .save-status { display: flex; align-items: center; gap: 6px; color: var(--color-text-muted); white-space: nowrap; }
 .save-status.is-saved { color: #1f7a4c; }
-.save-status.is-offline { color: var(--color-danger); font-weight: 600; }
+.save-status.is-offline { color: #c62933; font-weight: 600; }
 .save-status.is-saving svg { animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
-@media (max-width: 900px) { .presence-label { display: none; } }
+@media (max-width: 1100px) { .presence-label { display: none; } }
+/* Узкий экран: статус сохранения — значком (полный текст в подсказке), «сейчас на плане» — до 3 лиц */
+@media (max-width: 900px) {
+  .save-status span { display: none; }
+  .presence-avatar:nth-of-type(n+4) { display: none; }
+}
 </style>

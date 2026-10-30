@@ -7,7 +7,7 @@ import { useRoute } from 'vue-router'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { resizeImage } from '../../utils/images'
-import { formatDateTime } from '../../utils/format'
+import { countLabel, formatDateTime } from '../../utils/format'
 import AppIcon from '../../components/common/AppIcon.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import BaseModal from '../../components/common/BaseModal.vue'
@@ -111,9 +111,29 @@ function replace(updated) {
   if (i >= 0) users.value[i] = { ...users.value[i], ...updated }
 }
 
-async function setRole(user, role) {
-  if (role === user.role) return
-  try { replace(await api.patch(`/users/${user.id}`, { role })) } catch (err) { ui.error(err); load() }
+// Роль в таблице меняется сразу; изменение можно отменить из уведомления. Выдача и снятие роли
+// администратора — с подтверждением: это доступ ко всем проектам, сотрудникам и настройкам.
+async function setRole(user, role, event = null, { undo = false } = {}) {
+  const previous = user.role
+  if (role === previous) return
+  if (!undo && (role === 'admin' || previous === 'admin')) {
+    const ok = await confirm({
+      title: role === 'admin' ? `Сделать ${user.name} администратором?` : `Снять с ${user.name} роль администратора?`,
+      message: role === 'admin'
+        ? 'Администратор видит и меняет все проекты, сотрудников, доступы и настройки системы.'
+        : `Сотрудник станет «${ROLE_LABELS[role]}» и будет видеть только проекты по выданным доступам.`,
+      confirmText: role === 'admin' ? 'Сделать администратором' : 'Снять роль', danger: role !== 'admin',
+    })
+    if (!ok) { if (event?.target) event.target.value = previous; return }
+  }
+  try {
+    replace(await api.patch(`/users/${user.id}`, { role }))
+    if (undo) return
+    ui.toast({
+      title: `${user.name}: ${ROLE_LABELS[role]}`, body: `Было: ${ROLE_LABELS[previous]}`, kind: 'success', timeout: 8000,
+      action: { label: 'Отменить', handler: () => setRole(users.value.find((u) => u.id === user.id) || user, previous, null, { undo: true }) },
+    })
+  } catch (err) { ui.error(err); load() }
 }
 
 async function setActive(user, active) {
@@ -168,7 +188,7 @@ async function removePhoto() {
     <div class="page-header">
       <div>
         <h1 class="page-title">Сотрудники</h1>
-        <div class="page-subtitle">{{ counts.total }} всего<span v-if="counts.inactive"> · {{ counts.inactive }} отключено</span></div>
+        <div class="page-subtitle">{{ countLabel(counts.total, 'сотрудник', 'сотрудника', 'сотрудников') }}<span v-if="counts.inactive"> · {{ countLabel(counts.inactive, 'отключён', 'отключены', 'отключено') }}</span></div>
       </div>
       <HelpLink topic="admin-users" />
       <div class="spacer" />
@@ -216,7 +236,7 @@ async function removePhoto() {
               <div v-if="user.departmentId && org.depById[user.departmentId]" class="muted ellipsis dep" :title="org.pathText(user.departmentId)">{{ org.depById[user.departmentId].name }}</div>
             </td>
             <td>
-              <select class="select input-sm" :value="user.role" :disabled="user.id === auth.user?.id" :title="ROLE_HINTS[user.role]" @change="setRole(user, $event.target.value)">
+              <select class="select input-sm" :value="user.role" :disabled="user.id === auth.user?.id" :title="ROLE_HINTS[user.role]" @change="setRole(user, $event.target.value, $event)">
                 <option v-for="(label, key) in ROLE_LABELS" :key="key" :value="key">{{ label }}</option>
               </select>
             </td>
@@ -312,4 +332,8 @@ tr.inactive td { opacity: 0.55; }
 .actions { text-align: right; width: 50px; }
 .photo-row { display: flex; align-items: center; gap: 10px; }
 .table .select { width: 150px; }
+@media (max-width: 768px) {
+  .search { width: auto; flex: 1 1 100%; }
+  .role-filter { width: auto; flex: 1 1 140px; }
+}
 </style>

@@ -4,7 +4,9 @@ import AppIcon from './AppIcon.vue'
 
 /**
  * Модальное окно: закрывается по Esc, крестику и щелчку по фону (если щелчок начался
- * на фоне — выделение текста мышью окно не закрывает). Фокус уходит в первое поле.
+ * на фоне — выделение текста мышью окно не закрывает). Фокус уходит в первое поле, иначе на
+ * основную кнопку. В окне с опасным действием (кнопка .btn-danger) фокус — на «Отмене»:
+ * случайный Enter не удаляет.
  */
 const props = defineProps({
   title: { type: String, default: '' },
@@ -18,7 +20,8 @@ let pressStartedOnBackdrop = false
 let previouslyFocused = null
 
 function onKeydown(event) {
-  if (event.key === 'Escape' && props.closable) {
+  // Esc сначала закрывает открытое поверх окна меню (выбор цвета и т. п.), а не само окно
+  if (event.key === 'Escape' && props.closable && !document.querySelector('.menu')) {
     const stack = document.querySelectorAll('.modal-overlay')
     if (stack[stack.length - 1] === dialog.value?.parentElement) {
       event.stopPropagation()
@@ -31,8 +34,15 @@ onMounted(async () => {
   previouslyFocused = document.activeElement
   document.addEventListener('keydown', onKeydown, true)
   await nextTick()
-  const target = (props.initialFocus && dialog.value?.querySelector(props.initialFocus))
-    || dialog.value?.querySelector('input:not([type=hidden]):not([disabled]), textarea, select, button.btn-primary, button.btn-danger')
+  const root = dialog.value
+  const pick = (selector) => root?.querySelector(selector)
+  const field = pick('.modal-body input:not([type=hidden]):not([disabled]), .modal-body textarea, .modal-body select')
+  const danger = pick('.modal-footer .btn-danger')
+  const target = (props.initialFocus && pick(props.initialFocus))
+    || field
+    || (danger && pick('.modal-footer [data-cancel], .modal-footer .btn-ghost'))
+    || pick('.modal-footer .btn-primary')
+    || pick('button.btn-primary')
   target?.focus?.()
 })
 onBeforeUnmount(() => {
