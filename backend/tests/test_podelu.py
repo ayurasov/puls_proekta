@@ -15,9 +15,10 @@ import requests
 from sqlalchemy import func, select
 
 from tests.conftest import make_user, new_client
+from tests.helpers import create_project
 from app import podelu_client
 from app.extensions import db
-from app.models import AppSetting, AuditLog, Department, User, UserAvatar
+from app.models import AppSetting, AuditLog, Department, DepartmentAccessRule, DepartmentHead, User, UserAvatar
 from app.podelu_client import SESSION_COOKIE
 from scripts.org_transfer import run
 
@@ -486,22 +487,192 @@ def test_cli_sync_podelu_reports_unavailable_podelu(app, admin, podelu, capsys):
     assert _counts(app)[0] == 0
 
 
-def test_department_link_moves_when_path_no_longer_matches(app, admin, podelu):
-    """Подразделение, переименованное в «Пульсе», уже не совпадает по пути: «По Делу» получает новое, его UUID
-    занят — новое создаётся со своим id, а ссылка на «По Делу» переходит к нему."""
+# ---------------------------------------------------------------- подразделения по связи с «По Делу»
+def _item(podelu, name):
+    return next(d for d in podelu.structure["departments"] if d["name"] == name)
+
+
+def _moved(podelu, old, new):
+    """Подразделение переименовано или перенесено в «По Делу»: у сотрудников в выгрузке — новые пути."""
+    def fix(path):
+        return new + path[len(old):] if path[:len(old)] == old else path
+
+    for item in podelu.document["employees"]:
+        item["department"] = fix(item["department"])
+        for head in item["heads"]:
+            head["department"] = fix(head["department"])
+
+
+def _apply_sync(admin, **options):
+    plan = _sync(admin, **options).get_json()
+    res = _sync(admin, apply=True, fingerprint=plan["fingerprint"], **options)
+    assert res.status_code == 200, res.get_json()
+    return plan
+
+
+def _change(plan, path):
+    entry = next(d for d in plan["structure"]["departments"] if d["path"] == path)
+    return entry["action"], {c["field"]: (c["old"], c["new"]) for c in entry["changes"]}
+
+
+def test_department_renamed_in_podelu_is_renamed_in_place(app, admin, podelu):
     _connect(admin)
-    plan = _sync(admin).get_json()
-    assert _sync(admin, apply=True, fingerprint=plan["fingerprint"]).status_code == 200
-    sales_key = next(d["key"] for d in podelu.structure["departments"] if d["name"] == "Продажи")
-    assert admin.patch(f"/api/departments/{sales_key}", json={"name": "Коммерция"}).status_code == 200
-    plan = _sync(admin).get_json()
-    assert [d["path"] for d in plan["structure"]["departments"] if d["action"] == "create"] == \
-        ["ООО «Вектор» / Продажи", "ООО «Вектор» / Продажи / Группа B2B"]
-    assert plan["structure"]["missingInFile"] == ["ООО «Вектор» / Коммерция", "ООО «Вектор» / Коммерция / Группа B2B"]
-    assert _sync(admin, apply=True, fingerprint=plan["fingerprint"]).status_code == 200
+    _apply_sync(admin, newUsers="file", photos=False)
+    sales = _item(podelu, "Продажи")
+    project_id, _plan_id = create_project(admin, "Воронка продаж")
+    granted = admin.post("/api/access/departments", json={"departmentIds": [sales["key"]], "projectIds": [project_id],
+                                                          "level": "edit"})
+    assert granted.status_code == 201, granted.get_json()
+
+    sales["name"] = "Коммерция"
+    _moved(podelu, ["ООО «Вектор»", "Продажи"], ["ООО «Вектор»", "Коммерция"])
+    plan = _sync(admin, photos=False).get_json()
+    assert plan["canApply"], plan["structure"]["errors"]
+    assert plan["structure"]["summary"]["create"] == 0
+    assert _change(plan, "ООО «Вектор» / Коммерция") == ("update", {"name": ("Продажи", "Коммерция")})
+    assert _change(plan, "ООО «Вектор» / Коммерция / Группа B2B") == ("unchanged", {})
+    assert plan["structure"]["missingInFile"] == [] and plan["structure"]["removedInPodelu"] == []
+    # Сотрудники — по структуре после переименования: новых подразделений и переводов нет
+    employees = plan["employees"]
+    assert employees["summary"]["createDepartments"] == 0
+    assert [r["key"] for r in employees["records"] if r["action"] != "unchanged"] == []
+    _apply_sync(admin, photos=False)
     with app.app_context():
-        renamed = db.session.get(Department, sales_key)
-        created = db.session.execute(select(Department).where(Department.name == "Продажи")).scalar_one()
-        assert renamed.name == "Коммерция" and renamed.podelu_id is None
-        assert created.id != sales_key and created.podelu_id == sales_key
-        assert db.session.query(Department).filter(Department.podelu_id.is_not(None)).count() == 5
+        row = db.session.get(Department, sales["key"])
+        assert row.name == "Коммерция" and row.podelu_id == sales["key"] and db.session.query(Department).count() == 5
+        kovaleva = db.session.execute(select(User).where(User.login == "a.kovaleva")).scalar_one()
+        assert kovaleva.department_id == sales["key"]
+        assert db.session.get(DepartmentHead, (sales["key"], kovaleva.id)).is_primary
+        assert db.session.execute(select(DepartmentAccessRule.department_id)).scalars().all() == [sales["key"]]
+        entry = db.session.execute(select(AuditLog).where(AuditLog.field == "name")).scalar_one()
+        assert (entry.old_value, entry.new_value) == ("Продажи", "Коммерция")
+    # Загрузка обычного файла по-прежнему сопоставляет по пути: другое название — новое подразделение
+    bundle = json.loads(json.dumps(podelu.structure))
+    next(d for d in bundle["departments"] if d["key"] == sales["key"])["name"] = "Маркетинг"
+    file_plan = admin.post("/api/org/import/structure", json={"bundle": bundle}).get_json()
+    assert [d["path"] for d in file_plan["departments"] if d["action"] == "create"] == \
+        ["ООО «Вектор» / Маркетинг", "ООО «Вектор» / Маркетинг / Группа B2B"]
+    assert "removedInPodelu" not in file_plan
+
+
+def test_department_moved_in_podelu_under_renamed_and_new_departments(app, admin, podelu):
+    _connect(admin)
+    _apply_sync(admin, newUsers="file", photos=False)
+    lab, sales, root = _item(podelu, "Лаборатория"), _item(podelu, "Продажи"), _item(podelu, "ООО «Вектор»")
+    # В одной загрузке: «Продажи» переименованы, «Лаборатория» перенесена в них (родитель в файле — раньше детей)
+    sales["name"] = "Коммерция"
+    lab["parent"] = sales["key"]
+    podelu.structure["departments"].remove(lab)
+    podelu.structure["departments"].append(lab)
+    _moved(podelu, ["ООО «Вектор»", "Продажи"], ["ООО «Вектор»", "Коммерция"])
+    _moved(podelu, ["ООО «Вектор»", "Разработка", "Лаборатория"], ["ООО «Вектор»", "Коммерция", "Лаборатория"])
+    plan = _sync(admin, photos=False).get_json()
+    assert plan["canApply"], plan["structure"]["errors"]
+    assert _change(plan, "ООО «Вектор» / Коммерция") == ("update", {"name": ("Продажи", "Коммерция")})
+    assert _change(plan, "ООО «Вектор» / Коммерция / Лаборатория") == \
+        ("update", {"parent": ("ООО «Вектор» / Разработка", "ООО «Вектор» / Коммерция")})
+    assert [r["key"] for r in plan["employees"]["records"] if r["action"] != "unchanged"] == []
+    _apply_sync(admin, photos=False)
+    with app.app_context():
+        row = db.session.get(Department, lab["key"])
+        assert row.parent_id == sales["key"] and row.name == "Лаборатория"
+        smirnova = db.session.execute(select(User).where(User.login == "e.smirnova")).scalar_one()
+        sokolova = db.session.execute(select(User).where(User.login == "i.sokolova")).scalar_one()
+        assert smirnova.department_id == lab["key"]
+        assert db.session.get(DepartmentHead, (lab["key"], sokolova.id)) is not None
+
+    # Перенос в подразделение, которое появилось в этой же загрузке
+    science = {"key": str(uuid.uuid4()), "name": "Наука", "parent": root["key"], "kind": "department", "sortOrder": 5,
+               "externalId": None, "heads": []}
+    podelu.structure["departments"].insert(1, science)
+    lab["parent"] = science["key"]
+    _moved(podelu, ["ООО «Вектор»", "Коммерция", "Лаборатория"], ["ООО «Вектор»", "Наука", "Лаборатория"])
+    plan = _sync(admin, photos=False).get_json()
+    assert _change(plan, "ООО «Вектор» / Наука") == ("create", {})
+    assert _change(plan, "ООО «Вектор» / Наука / Лаборатория") == \
+        ("update", {"parent": ("ООО «Вектор» / Коммерция", "ООО «Вектор» / Наука")})
+    _apply_sync(admin, photos=False)
+    with app.app_context():
+        assert db.session.get(Department, lab["key"]).parent_id == science["key"]
+        assert db.session.get(Department, science["key"]).podelu_id == science["key"]
+
+    # Перенос на верхний уровень
+    lab["parent"] = None
+    _moved(podelu, ["ООО «Вектор»", "Наука", "Лаборатория"], ["Лаборатория"])
+    plan = _sync(admin, photos=False).get_json()
+    assert _change(plan, "Лаборатория") == ("update", {"parent": ("ООО «Вектор» / Наука", "верхний уровень")})
+    _apply_sync(admin, photos=False)
+    with app.app_context():
+        assert db.session.get(Department, lab["key"]).parent_id is None
+
+
+def test_department_kind_and_order_change_and_sibling_name_clash(app, admin, podelu):
+    _connect(admin)
+    _apply_sync(admin, newUsers="file", photos=False)
+    group, sales, root = _item(podelu, "Группа B2B"), _item(podelu, "Продажи"), _item(podelu, "ООО «Вектор»")
+    group["kind"], group["sortOrder"] = "sector", 7
+    plan = _sync(admin, photos=False).get_json()
+    assert _change(plan, "ООО «Вектор» / Продажи / Группа B2B") == \
+        ("update", {"kind": ("group", "sector"), "sortOrder": (0, 7)})
+    _apply_sync(admin, photos=False)
+    with app.app_context():
+        row = db.session.get(Department, group["key"])
+        assert (row.kind, row.sort_order) == ("sector", 7)
+
+    # Переименование в название подразделения «Пульса», которого нет в «По Делу», — ошибка плана, а не два «Маркетинга»
+    assert admin.post("/api/departments", json={"name": "Маркетинг", "parentId": root["key"]}).status_code == 201
+    sales["name"] = "Маркетинг"
+    _moved(podelu, ["ООО «Вектор»", "Продажи"], ["ООО «Вектор»", "Маркетинг"])
+    plan = _sync(admin, photos=False).get_json()
+    assert not plan["canApply"]
+    assert plan["structure"]["errors"] == ["ООО «Вектор» / Маркетинг: на этом уровне в «Пульсе» уже есть подразделение "
+                                           "«Маркетинг», которого нет в «По Делу», — переименуйте или перенесите его"]
+    before = _counts(app)
+    assert _sync(admin, apply=True, fingerprint=plan["fingerprint"], photos=False).status_code == 409
+    assert _counts(app) == before
+
+
+def test_department_removed_in_podelu_stays_and_relinks_by_path(app, admin, podelu):
+    _connect(admin)
+    _apply_sync(admin, newUsers="file", photos=False)
+    group = _item(podelu, "Группа B2B")
+    podelu.structure["departments"].remove(group)
+    plan = _sync(admin, photos=False).get_json()
+    assert plan["canApply"]
+    assert plan["structure"]["removedInPodelu"] == ["ООО «Вектор» / Продажи / Группа B2B"]
+    assert plan["structure"]["summary"]["removedInPodelu"] == 1 and plan["structure"]["missingInFile"] == []
+    _apply_sync(admin, photos=False)
+    with app.app_context():
+        row = db.session.get(Department, group["key"])
+        assert row is not None and row.podelu_id == group["key"]   # ничего не удаляется
+        orlov = db.session.execute(select(User).where(User.login == "d.orlov")).scalar_one()
+        assert orlov.department_id == group["key"]
+
+    # В «По Делу» на том же месте появилось подразделение с другим UUID: по пути, связь переходит к нему
+    again = {**group, "key": str(uuid.uuid4())}
+    podelu.structure["departments"].append(again)
+    plan = _sync(admin, photos=False).get_json()
+    assert _change(plan, "ООО «Вектор» / Продажи / Группа B2B") == ("unchanged", {})
+    assert plan["structure"]["removedInPodelu"] == []
+    _apply_sync(admin, photos=False)
+    with app.app_context():
+        assert db.session.get(Department, group["key"]).podelu_id == again["key"]
+        assert db.session.query(Department).count() == 5
+
+
+def test_cli_sync_podelu_renames_and_moves(app, admin, podelu):
+    _connect(admin)
+    assert run(app, ["sync-podelu", "--actor", "admin", "--create-missing", "--no-photos", "--apply"],
+               out=io.StringIO()) == 0
+    sales, lab = _item(podelu, "Продажи"), _item(podelu, "Лаборатория")
+    sales["name"] = "Коммерция"
+    lab["parent"] = sales["key"]
+    podelu.structure["departments"].remove(lab)
+    podelu.structure["departments"].append(lab)
+    out = io.StringIO()
+    assert run(app, ["sync-podelu", "--actor", "admin", "--no-photos", "--apply"], out=out) == 0
+    assert json.loads(out.getvalue().splitlines()[0])["structure"]["update"] == 2
+    with app.app_context():
+        assert db.session.get(Department, sales["key"]).name == "Коммерция"
+        assert db.session.get(Department, lab["key"]).parent_id == sales["key"]
+        assert db.session.query(Department).count() == 5

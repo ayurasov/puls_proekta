@@ -38,14 +38,22 @@ const chips = computed(() => {
     { label: 'Назначить руководителями', value: s.addHeads },
     ...(s.pendingHeads ? [{ label: 'Руководителей нет в системе', value: s.pendingHeads, info: true }] : []),
     ...(s.missingInFile ? [{ label: text.value.missing, value: s.missingInFile, info: true }] : []),
+    ...(s.removedInPodelu ? [{ label: 'Удалены в «По Делу» (останутся)', value: s.removedInPodelu, info: true }] : []),
     { label: 'Ошибок', value: s.errors, warn: s.errors > 0 },
   ]
 })
 const departments = computed(() => (props.plan.departments || []).filter((d) => showUnchanged.value || d.action !== 'unchanged'))
 const pendingHeads = computed(() => (props.plan.heads || []).filter((h) => h.action === 'pending'))
 const addedHeads = computed(() => (props.plan.heads || []).filter((h) => h.action === 'add'))
-const FIELD = { kind: 'тип', sortOrder: 'порядок' }
+const FIELD = { kind: 'тип', sortOrder: 'порядок', name: 'переименовано', parent: 'перенесено' }
 const ACTION = { create: ['новое', 'badge-success'], update: ['изменится', 'badge-primary'], unchanged: ['без изменений', ''] }
+// Подразделение, связанное с «По Делу», переименовано или перенесено там — меняется на месте (ADR-0009)
+function badge(d) {
+  const fields = new Set((d.changes || []).map((c) => c.field))
+  if (fields.has('parent')) return ['перенесено', 'badge-primary']
+  if (fields.has('name')) return ['переименовано', 'badge-primary']
+  return ACTION[d.action]
+}
 </script>
 
 <template>
@@ -72,7 +80,7 @@ const ACTION = { create: ['новое', 'badge-success'], update: ['измени
       </div>
       <ul class="list" data-testid="structure-departments">
         <li v-for="d in departments" :key="d.key">
-          <span class="badge badge-action" :class="ACTION[d.action][1]">{{ ACTION[d.action][0] }}</span>
+          <span class="badge badge-action" :class="badge(d)[1]">{{ badge(d)[0] }}</span>
           {{ d.path }}
           <span v-for="c in d.changes" :key="c.field" class="muted small"> · {{ FIELD[c.field] || c.field }}: {{ c.old }} → {{ c.new }}</span>
         </li>
@@ -91,6 +99,10 @@ const ACTION = { create: ['новое', 'badge-success'], update: ['измени
     <div v-if="plan.missingInFile?.length" class="plan-block">
       <h4 class="section-title">{{ text.missingTitle }}</h4>
       <p class="hint">{{ plan.missingInFile.join('; ') }}</p>
+    </div>
+    <div v-if="plan.removedInPodelu?.length" class="plan-block" data-testid="structure-removed">
+      <h4 class="section-title">Удалены в «По Делу» — в «Пульсе» останутся</h4>
+      <p class="hint">{{ plan.removedInPodelu.join('; ') }}. Сотрудников и правила доступа перенесите вручную, затем подразделение можно удалить.</p>
     </div>
 
     <slot />
