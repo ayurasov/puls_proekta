@@ -1,0 +1,246 @@
+<script setup>
+import { computed, inject, ref } from 'vue'
+import AppIcon from '../../components/common/AppIcon.vue'
+import PopupMenu from '../../components/common/PopupMenu.vue'
+import { SCALES, nextZoom } from '../domain/layout'
+import { STATUSES } from '../domain/colors'
+import { NONE } from '../domain/filters'
+import { exportPlan } from '../export'
+import { useUiStore } from '../../stores/ui'
+
+const emit = defineEmits(['open-modal', 'scroll-today', 'fit'])
+const editor = inject('gantt')
+const actions = inject('ganttActions')
+const ui = useUiStore()
+const state = editor.state
+const view = state.view
+const menu = ref(null)
+const exporting = ref(false)
+
+function open(type, event) {
+  menu.value = menu.value?.type === type ? null : { type, anchor: event.currentTarget }
+}
+
+function addRow(type) {
+  menu.value = null
+  if (type === 'note') {
+    actions.openNoteEditor({ date: editor.state.today >= editor.range.start && editor.state.today <= editor.range.end ? editor.state.today : editor.range.start, rowKey: null })
+    return
+  }
+  const after = view.selectedKey && state.items[view.selectedKey] ? view.selectedKey : null
+  let parentKey
+  if (after && state.items[after].type === 'group' && type !== 'group') parentKey = after
+  const key = editor.createItem(type, {}, { afterKey: parentKey ? null : after, parentKey })
+  editor.revealItem(key)
+  editor.select(key, { openPanel: true })
+}
+
+const counts = computed(() => {
+  const statuses = {}
+  const assignees = {}
+  const categories = {}
+  for (const item of editor.itemList) {
+    if (item.type !== 'task') continue
+    statuses[item.status || 'new'] = (statuses[item.status || 'new'] || 0) + 1
+    assignees[item.assigneeKey || NONE] = (assignees[item.assigneeKey || NONE] || 0) + 1
+    categories[item.category || NONE] = (categories[item.category || NONE] || 0) + 1
+  }
+  return { statuses, assignees, categories }
+})
+
+const filterGroups = computed(() => [
+  { key: 'statuses', label: 'Статус', options: STATUSES.map((s) => ({ value: s.key, label: s.label, color: s.color })) },
+  {
+    key: 'assignees', label: 'Исполнитель',
+    options: [...editor.assigneeList.map((a) => ({ value: a.key, label: a.name, color: a.color })), { value: NONE, label: 'Без исполнителя' }],
+  },
+  { key: 'categories', label: 'Категория', options: [...editor.categories.map((c) => ({ value: c, label: c })), { value: NONE, label: 'Без категории' }] },
+])
+const activeFilterCount = computed(() => view.statuses.size + view.assignees.size + view.categories.size)
+
+function toggleFilter(group, value) {
+  const set = view[group]
+  if (set.has(value)) set.delete(value)
+  else set.add(value)
+}
+function clearFilters() {
+  view.statuses.clear()
+  view.assignees.clear()
+  view.categories.clear()
+  view.search = ''
+}
+function filterLabel(group, value) {
+  const g = filterGroups.value.find((f) => f.key === group)
+  return g?.options.find((o) => o.value === value)?.label || value
+}
+
+function setScale(scale) {
+  view.scale = scale
+  editor.saveView()
+}
+function zoom(direction) {
+  view.zoom = nextZoom(view.zoom, direction)
+  editor.saveView()
+}
+function setZoomPercent(event) {
+  const value = parseInt(String(event.target.value).replace('%', ''), 10)
+  if (value >= 2 && value <= 600) {
+    view.zoom = value / 100
+    editor.saveView()
+  }
+  event.target.value = Math.round(view.zoom * 100) + '%'
+}
+
+async function runExport(format) {
+  menu.value = null
+  exporting.value = true
+  try {
+    await exportPlan(editor, format)
+  } catch (err) {
+    ui.error(err.message || 'Не удалось выгрузить план')
+  } finally {
+    exporting.value = false
+  }
+}
+
+function toggleColumn(column) {
+  view.columns[column] = !view.columns[column]
+  editor.saveView()
+}
+</script>
+
+<template>
+  <div class="toolbar">
+    <div class="group">
+      <div v-if="editor.canEdit" class="split">
+        <button class="btn btn-primary btn-sm" type="button" title="Новая задача после выбранной строки (Insert)" data-testid="add-task" @click="addRow('task')">
+          <AppIcon name="plus" :size="14" /> Задача
+        </button>
+        <button class="btn btn-primary btn-sm split-caret" type="button" title="Добавить…" @click="open('add', $event)">
+          <AppIcon name="chevronDown" :size="13" />
+        </button>
+      </div>
+      <button v-if="editor.canEdit" class="btn btn-ghost btn-icon btn-sm" type="button" :disabled="!state.undo.length" :title="state.undo.length ? `Отменить: ${state.undo[state.undo.length - 1].label} (Ctrl+Z)` : 'Отменить (Ctrl+Z)'" data-testid="undo" @click="editor.undo()">
+        <AppIcon name="undo" />
+      </button>
+      <button v-if="editor.canEdit" class="btn btn-ghost btn-icon btn-sm" type="button" :disabled="!state.redo.length" title="Повторить (Ctrl+Shift+Z)" @click="editor.redo()">
+        <AppIcon name="redo" />
+      </button>
+    </div>
+
+    <div class="group grow">
+      <label class="search">
+        <AppIcon name="search" :size="14" class="search-icon" />
+        <input v-model="view.search" class="input input-sm" type="search" placeholder="Поиск по названию" data-testid="search" />
+      </label>
+      <button class="btn btn-sm" :class="{ 'is-active': activeFilterCount }" type="button" @click="open('filters', $event)">
+        <AppIcon name="filter" :size="14" /> Фильтры<span v-if="activeFilterCount" class="count">{{ activeFilterCount }}</span>
+      </button>
+      <div v-if="activeFilterCount" class="chips">
+        <template v-for="group in ['statuses', 'assignees', 'categories']" :key="group">
+          <button v-for="value in [...view[group]]" :key="group + value" class="chip" type="button" title="Убрать фильтр" @click="toggleFilter(group, value)">
+            {{ filterLabel(group, value) }} <AppIcon name="close" :size="11" />
+          </button>
+        </template>
+        <button class="btn btn-ghost btn-sm" type="button" @click="clearFilters">Сбросить</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <div class="segmented" role="group" aria-label="Шкала">
+        <button v-for="scale in SCALES" :key="scale.key" type="button" :class="{ 'is-active': view.scale === scale.key }" @click="setScale(scale.key)">{{ scale.label }}</button>
+      </div>
+      <div class="zoom">
+        <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Уменьшить (Ctrl + колесо)" @click="zoom(-1)"><AppIcon name="minus" :size="14" /></button>
+        <input class="zoom-input" :value="Math.round(view.zoom * 100) + '%'" aria-label="Масштаб" @change="setZoomPercent" @keydown.enter="$event.target.blur()" />
+        <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Увеличить (Ctrl + колесо)" @click="zoom(1)"><AppIcon name="plus" :size="14" /></button>
+      </div>
+      <button class="btn btn-ghost btn-sm" type="button" title="Весь период на ширину экрана" @click="emit('fit')"><AppIcon name="fit" :size="14" /></button>
+      <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /> Сегодня</button>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Вид" @click="open('view', $event)"><AppIcon name="layers" /></button>
+    </div>
+
+    <div class="group">
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Исполнители" @click="emit('open-modal', 'assignees')"><AppIcon name="users" /></button>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Статистика" @click="emit('open-modal', 'stats')"><AppIcon name="chart" /></button>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" title="История и сохранённые версии" data-testid="history" @click="emit('open-modal', 'history')"><AppIcon name="history" /></button>
+      <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Настройки графика" @click="emit('open-modal', 'settings')"><AppIcon name="settings" /></button>
+      <button class="btn btn-sm" type="button" :disabled="exporting" title="Экспорт" @click="open('export', $event)">
+        <AppIcon name="download" :size="14" /> {{ exporting ? 'Готовим…' : 'Экспорт' }}
+      </button>
+    </div>
+
+    <PopupMenu v-if="menu?.type === 'add'" :anchor="menu.anchor" @close="menu = null">
+      <button class="menu-item" type="button" @click="addRow('task')"><AppIcon name="gantt" /> Задача</button>
+      <button class="menu-item" type="button" @click="addRow('milestone')"><AppIcon name="diamond" /> Веха</button>
+      <button class="menu-item" type="button" @click="addRow('group')"><AppIcon name="folder" /> Группа</button>
+      <button class="menu-item" type="button" @click="addRow('note')"><AppIcon name="note" /> Пометка на шкале</button>
+    </PopupMenu>
+
+    <PopupMenu v-if="menu?.type === 'filters'" :anchor="menu.anchor" :min-width="560" @close="menu = null">
+      <div class="filters">
+        <div v-for="group in filterGroups" :key="group.key" class="filter-col">
+          <div class="menu-label">{{ group.label }}</div>
+          <div class="filter-options scroll-thin">
+            <label v-for="option in group.options" :key="option.value" class="filter-option">
+              <input type="checkbox" :checked="view[group.key].has(option.value)" @change="toggleFilter(group.key, option.value)" />
+              <span v-if="option.color" class="status-dot" :style="{ background: option.color }" />
+              <span class="ellipsis">{{ option.label }}</span>
+              <span class="muted small">{{ counts[group.key][option.value] || 0 }}</span>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="menu-separator" />
+      <div class="filters-foot">
+        <span class="muted small">Внутри фильтра — любое из отмеченного, между фильтрами — все условия</span>
+        <button class="btn btn-ghost btn-sm" type="button" :disabled="!activeFilterCount" @click="clearFilters">Сбросить</button>
+      </div>
+    </PopupMenu>
+
+    <PopupMenu v-if="menu?.type === 'view'" :anchor="menu.anchor" align="end" @close="menu = null">
+      <div class="menu-label">Колонки слева</div>
+      <label v-for="(label, column) in { start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Ответственный', progress: 'Прогресс' }" :key="column" class="menu-item">
+        <input type="checkbox" :checked="view.columns[column]" @change="toggleColumn(column)" /> {{ label }}
+      </label>
+      <div class="menu-separator" />
+      <button class="menu-item" type="button" @click="editor.collapseAll(false); menu = null"><AppIcon name="expandAll" /> Развернуть все группы</button>
+      <button class="menu-item" type="button" @click="editor.collapseAll(true); menu = null"><AppIcon name="collapseAll" /> Свернуть все группы</button>
+    </PopupMenu>
+
+    <PopupMenu v-if="menu?.type === 'export'" :anchor="menu.anchor" align="end" @close="menu = null">
+      <button class="menu-item" type="button" @click="runExport('png')"><AppIcon name="image" /> Изображение PNG</button>
+      <button class="menu-item" type="button" @click="runExport('pdf')"><AppIcon name="file" /> Документ PDF</button>
+      <button class="menu-item" type="button" @click="runExport('svg')"><AppIcon name="image" /> Векторное SVG</button>
+      <div class="menu-separator" />
+      <button class="menu-item" type="button" @click="runExport('csv')"><AppIcon name="table" /> Таблица для Excel (CSV)</button>
+      <button class="menu-item" type="button" @click="runExport('json')"><AppIcon name="download" /> JSON (открывается и в 1.0)</button>
+    </PopupMenu>
+  </div>
+</template>
+
+<style scoped>
+.toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; background: var(--color-surface); border-bottom: 1px solid var(--color-border); flex-shrink: 0; }
+.group { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.group.grow { flex: 1; min-width: 220px; }
+.split { display: inline-flex; margin-right: 4px; }
+.split .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.split-caret { border-top-left-radius: 0; border-bottom-left-radius: 0; border-left: 1px solid rgba(255,255,255,.35); padding: 3px 6px; }
+.search { position: relative; width: 210px; }
+.search .input { padding-left: 26px; }
+.search-icon { position: absolute; left: 8px; top: 6px; color: var(--color-text-muted); }
+.count { background: var(--color-primary); color: #fff; border-radius: 999px; padding: 0 6px; font-size: 10.5px; font-weight: 700; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid #c9d6ff; background: var(--color-primary-soft); color: var(--color-primary-dark); border-radius: 999px; font-size: 11.5px; padding: 2px 8px; }
+.zoom { display: flex; align-items: center; }
+.zoom-input { width: 52px; text-align: center; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-size: 12px; min-height: 26px; }
+.filters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 4px; }
+.filter-col { min-width: 0; }
+.filter-options { max-height: 260px; overflow: auto; display: flex; flex-direction: column; }
+.filter-option { display: flex; align-items: center; gap: 7px; padding: 5px 8px; border-radius: 6px; font-size: 12.5px; cursor: pointer; }
+.filter-option:hover { background: var(--color-hover); }
+.filter-option .ellipsis { flex: 1; }
+.filters-foot { display: flex; align-items: center; gap: 8px; padding: 4px 8px; justify-content: space-between; }
+label.menu-item { cursor: pointer; }
+@media (max-width: 900px) { .search { width: 150px; } .filters { grid-template-columns: 1fr; } }
+</style>

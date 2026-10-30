@@ -16,6 +16,23 @@ permissions:
   contents: read
 
 jobs:
+  frontend:
+    name: 'Клиент: eslint + vitest + сборка'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Lint (eslint)
+        run: npm run lint
+      - name: Unit tests (vitest)
+        run: npm run test
+      - name: Build
+        run: npm run build
+
   backend:
     name: 'Сервер: ruff + pytest (SQLite)'
     runs-on: ubuntu-latest
