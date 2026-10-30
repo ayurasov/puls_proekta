@@ -1,7 +1,10 @@
 <script setup>
+import { ref } from 'vue'
 import packageJson from '../../package.json'
 import AppIcon from '../components/common/AppIcon.vue'
+import ReleaseNotesModal from '../components/common/ReleaseNotesModal.vue'
 const version = packageJson.version
+const releaseNotesOpen = ref(false)
 </script>
 
 <template>
@@ -35,15 +38,19 @@ const version = packageJson.version
           <li>закрытые вкладки-версии не теряются — уходят в архив;</li>
           <li>данные прежней версии перенесены полностью, включая историю и комментарии.</li>
         </ul>
-        <p class="guide"><a class="btn btn-sm" href="/user-guide.pdf" target="_blank" rel="noopener"><AppIcon name="file" :size="14" /> Руководство пользователя (PDF)</a></p>
+        <p class="guide">
+          <button class="btn btn-sm" type="button" @click="releaseNotesOpen = true"><AppIcon name="star" :size="14" /> Что нового по версиям</button>
+          <a class="btn btn-sm" href="/user-guide.pdf" target="_blank" rel="noopener"><AppIcon name="file" :size="14" /> Руководство пользователя (PDF)</a>
+        </p>
         <p class="muted small">Автор — Alexander Yurasov.</p>
       </section>
     </div>
+    <ReleaseNotesModal v-if="releaseNotesOpen" @close="releaseNotesOpen = false" />
   </div>
 </template>
 
 <style scoped>
-.guide { margin: 12px 0 8px; }
+.guide { margin: 12px 0 8px; display: flex; flex-wrap: wrap; gap: 8px; }
 .about { max-width: 980px; }
 .hero { display: flex; align-items: center; gap: 18px; padding: 22px; margin-bottom: 14px; }
 .hero h1 { font-size: 22px; }

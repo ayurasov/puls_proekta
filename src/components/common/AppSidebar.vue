@@ -7,6 +7,7 @@ import { localStorageGet, localStorageSet, useUiStore } from '../../stores/ui'
 import AppIcon from './AppIcon.vue'
 import UserAvatar from './UserAvatar.vue'
 import ProfileModal from './ProfileModal.vue'
+import ReleaseNotesModal from './ReleaseNotesModal.vue'
 import packageJson from '../../../package.json'
 
 const auth = useAuthStore()
@@ -16,6 +17,7 @@ const route = useRoute()
 const router = useRouter()
 const appVersion = packageJson.version
 const profileOpen = ref(false)
+const releaseNotesOpen = ref(false)
 const expanded = ref(readExpanded())
 
 function readExpanded() {
@@ -117,10 +119,11 @@ async function logout() {
       </button>
       <div v-if="!ui.sidebarCollapsed" class="sidebar-meta">
         <span class="author">© Alexander Yurasov <router-link to="/about" class="about-mark" title="О программе">?</router-link></span>
-        <router-link to="/about" class="version">Версия {{ appVersion }}</router-link>
+        <button class="version" type="button" title="Что нового в этой версии" data-testid="release-notes" @click="releaseNotesOpen = true">Версия {{ appVersion }} · Что нового</button>
       </div>
     </div>
     <ProfileModal v-if="profileOpen" @close="profileOpen = false" />
+    <ReleaseNotesModal v-if="releaseNotesOpen" @close="releaseNotesOpen = false" />
   </aside>
 </template>
 
@@ -161,6 +164,6 @@ async function logout() {
 .author { display: flex; align-items: center; gap: 6px; }
 .about-mark { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; border: 1px solid currentColor; color: inherit; font-size: 10px; font-weight: 700; text-decoration: none; }
 .about-mark:hover { background: var(--color-primary); border-color: var(--color-primary); color: #fff; }
-.version { color: inherit; text-decoration: none; }
+.version { color: inherit; text-decoration: none; border: 0; background: none; padding: 0; font: inherit; text-align: left; }
 .version:hover { color: var(--color-primary); text-decoration: underline; }
 </style>
