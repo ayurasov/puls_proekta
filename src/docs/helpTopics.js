@@ -19,6 +19,7 @@ export const HELP_TOPICS = {
   jira: { guide: 'user', id: 'задачи-jira', title: 'Задачи Jira' },
   'jira-sync': { guide: 'user', id: 'сверка-с-jira', title: 'Сверка с Jira' },
   'jira-import': { guide: 'user', id: 'задачи-из-jira', title: 'Задачи из Jira' },
+  'jira-auto': { guide: 'user', id: 'автоперенос-из-jira', title: 'Автоперенос из Jira' },
   org: { guide: 'user', id: 'структура-компании', title: 'Структура компании' },
   'admin-users': { guide: 'admin', id: 'сотрудники', title: 'Сотрудники' },
   'admin-structure': { guide: 'admin', id: 'структура-компании', title: 'Структура компании' },

@@ -84,7 +84,7 @@ function open(key) {
     </div>
     <section class="auto" :class="{ on: auto.size }" data-testid="jira-auto">
       <div class="auto-text">
-        <strong>Переносить из Jira автоматически</strong>
+        <strong>Переносить из Jira автоматически <HelpLink topic="jira-auto" /></strong>
         <span class="muted small">Выбранное переносится в строки само — при открытии плана, обновлении из Jira и привязке
           строки — одной правкой, которую можно отменить. Настройка плана: действует у всех, кто его правит.</span>
       </div>
