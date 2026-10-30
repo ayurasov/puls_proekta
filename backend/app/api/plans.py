@@ -224,13 +224,23 @@ def plan_ops(plan_id):
     return jsonify(data)
 
 
+# Отметку «сейчас на плане» обновляем не чаще раза в PRESENCE_TOUCH_SECONDS: опрос идёт каждые несколько
+# секунд, и без этого каждый тихий опрос был бы записью в базу.
+PRESENCE_TOUCH_SECONDS = 15
+
+
 def _touch_presence(plan_id, user_id, editing=False):
+    """Отметить сотрудника на плане; True — если что-то записано."""
+    now = utcnow()
     row = db.session.get(PlanPresence, (plan_id, user_id))
     if row is None:
-        db.session.add(PlanPresence(plan_id=plan_id, user_id=user_id, last_seen_at=utcnow(), is_editing=editing))
-    else:
-        row.last_seen_at = utcnow()
-        row.is_editing = editing
+        db.session.add(PlanPresence(plan_id=plan_id, user_id=user_id, last_seen_at=now, is_editing=editing))
+        return True
+    if row.is_editing == editing and now - row.last_seen_at < timedelta(seconds=PRESENCE_TOUCH_SECONDS):
+        return False
+    row.last_seen_at = now
+    row.is_editing = editing
+    return True
 
 
 def _presence(plan_id, me_id):
@@ -250,8 +260,8 @@ def plan_changes(plan_id):
     since = request.args.get("since", type=int)
     editing = request.args.get("editing") == "1" and LEVEL_ORDER[level] >= LEVEL_ORDER["edit"]
     user = current_user()
-    _touch_presence(plan.id, user.id, editing)
-    db.session.commit()
+    if _touch_presence(plan.id, user.id, editing):
+        db.session.commit()
     data = {"revision": plan.revision, "access": level, "presence": _presence(plan.id, user.id),
             "isArchived": bool(plan.is_archived)}
     if since is None or since >= plan.revision:

@@ -35,6 +35,9 @@ function addRow(type) {
   editor.select(key, { openPanel: true })
 }
 
+// Insert в рабочей области добавляет задачу так же, как кнопка «Задача»
+defineExpose({ addRow })
+
 const counts = computed(() => {
   const statuses = {}
   const assignees = {}

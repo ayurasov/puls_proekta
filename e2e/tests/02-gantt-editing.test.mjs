@@ -95,6 +95,28 @@ test('статус «Завершена» через контекстное ме
   assert.equal(task.offset, 0)
 })
 
+test('Insert добавляет задачу после выбранной строки и открывает карточку', async () => {
+  await page.locator('.grid-row .name', { hasText: 'Анализ требований' }).click()
+  await page.keyboard.press('Insert')
+  await page.waitForSelector('.panel')
+  await page.fill('[data-testid=panel-name]', 'Задача с клавиатуры')
+  await page.keyboard.press('Enter')
+  await waitSaved(page)
+  const names = (await planItems()).sort((a, b) => a.position - b.position).map((i) => i.name)
+  assert.equal(names[names.indexOf('Анализ требований') + 1], 'Задача с клавиатуры')
+  await page.keyboard.press('Escape')
+  // Одна строка без вложенных удаляется сразу, отмена — из уведомления
+  await page.locator('.grid-row .name', { hasText: 'Задача с клавиатуры' }).click()
+  await page.keyboard.press('Delete')
+  assert.equal(await page.locator('.modal-overlay').count(), 0)
+  await page.locator('.toast button', { hasText: 'Отменить' }).click()
+  await page.locator('.grid-row .name', { hasText: 'Задача с клавиатуры' }).waitFor()
+  await page.locator('.grid-row .name', { hasText: 'Задача с клавиатуры' }).click()
+  await page.keyboard.press('Delete')
+  await waitSaved(page)
+  assert.ok(!(await planItems()).some((i) => i.name === 'Задача с клавиатуры' && !i.deleted))
+})
+
 test('фильтры: несколько значений подряд, панель в одну строку на 1366 px', async () => {
   await page.setViewportSize({ width: 1366, height: 900 })
   const toolbarHeight = () => page.locator('.toolbar').evaluate((el) => el.getBoundingClientRect().height)

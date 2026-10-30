@@ -44,7 +44,6 @@ test('сохранённая версия и восстановление', asyn
   await page.keyboard.press('Escape')
   await page.locator('.grid-row', { hasText: 'Задача плана' }).click()
   await page.keyboard.press('Delete')
-  await page.click('.modal .btn-danger')
   await waitSaved(page)
   assert.equal(await page.locator('.grid-row', { hasText: 'Задача плана' }).count(), 0)
   await page.click('[data-testid=history]')

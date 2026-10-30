@@ -38,6 +38,7 @@ provide('gantt', editor)
 defineExpose({ editor })
 
 const chart = ref(null)
+const toolbar = ref(null)
 const modal = ref(null)
 const completion = ref(null)
 const noteEditor = ref(null)
@@ -103,16 +104,20 @@ async function deleteRows(keys) {
     })
     if (!choice) return
     withChildren = choice === 'all'
-  } else {
+  } else if (items.length > 1) {
     const ok = await confirm({
-      title: items.length === 1 ? `Удалить «${items[0].name}»?` : `Удалить строки (${items.length})?`,
+      title: `Удалить строки (${items.length})?`,
       message: 'Удаление можно отменить сочетанием Ctrl+Z или из истории плана.',
       confirmText: 'Удалить',
     })
     if (!ok) return
   }
+  // Одна строка без вложенных удаляется сразу: отмена — кнопкой в уведомлении, Ctrl+Z или из истории плана
   editor.deleteItems(keys, { withChildren, label: items.length === 1 ? `Удаление «${items[0].name}»` : 'Удаление строк' })
-  ui.toast({ title: items.length === 1 ? 'Строка удалена' : 'Строки удалены', kind: 'success', action: { label: 'Отменить', handler: () => editor.undo() } })
+  ui.toast({
+    title: items.length === 1 ? `«${items[0].name}» удалена` : 'Строки удалены', kind: 'success', timeout: 8000,
+    action: { label: 'Отменить', handler: () => editor.undo() },
+  })
 }
 
 function askCompletion(key) {
@@ -161,6 +166,7 @@ function onKeydown(event) {
     else state.view.selectedKey = null
     return
   }
+  if (event.key === 'Insert' && editor.canEdit) { event.preventDefault(); toolbar.value?.addRow('task'); return }
   if (!selected) return
   if ((event.key === 'Delete') && editor.canEdit) { event.preventDefault(); deleteRows([selected]); return }
   if (event.key === 'Enter') { event.preventDefault(); state.view.panelKey = selected; return }
@@ -216,7 +222,7 @@ provide('ganttActions', actions)
   </div>
   <div v-else-if="state.loading" class="loading muted">Загрузка плана…</div>
   <div v-else class="workspace">
-    <GanttToolbar @open-modal="(name) => (modal = { name })" @scroll-today="chart?.scrollToToday()" @fit="chart?.fitToWidth()" />
+    <GanttToolbar ref="toolbar" @open-modal="(name) => (modal = { name })" @scroll-today="chart?.scrollToToday()" @fit="chart?.fitToWidth()" />
     <div v-if="state.previewSnapshot" class="banner banner-info">
       <AppIcon name="history" /> Вы смотрите сохранённое состояние плана от {{ state.previewSnapshot.label }}. Изменения недоступны.
       <span class="spacer" />

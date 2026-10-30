@@ -3,7 +3,7 @@
 from tests.conftest import new_client
 from tests.helpers import create_project, ok_ops, ops, task
 from app.extensions import db
-from app.models import User
+from app.models import PlanPresence, User
 
 
 def _grant(app, admin, login_name, project_id, level="edit"):
@@ -77,6 +77,24 @@ def test_changes_polling_and_presence(app, admin):
     ok_ops(admin, plan_id, [{"op": "item.delete", "key": "t1"}])
     deleted = editor.get(f"/api/plans/{plan_id}/changes?since={changes['revision']}").get_json()
     assert deleted["items"][0]["deleted"] is True
+
+
+def test_quiet_poll_does_not_rewrite_presence(app, admin):
+    """Тихий опрос не пишет в базу: отметка обновляется не чаще раза в 15 с или при смене «редактирует»."""
+    _, plan_id = create_project(admin)
+
+    def seen():
+        with app.app_context():
+            row = db.session.get(PlanPresence, (plan_id, db.session.execute(
+                db.select(User.id).where(User.login == "admin")).scalar_one()))
+            return row.last_seen_at, row.is_editing
+
+    admin.get(f"/api/plans/{plan_id}/changes?since=0")
+    first = seen()
+    admin.get(f"/api/plans/{plan_id}/changes?since=0")
+    assert seen() == first
+    admin.get(f"/api/plans/{plan_id}/changes?since=0&editing=1")
+    assert seen()[1] is True
 
 
 def test_integrity_fixes_dangling_and_cyclic_references(app, admin):
