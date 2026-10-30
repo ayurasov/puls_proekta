@@ -9,7 +9,8 @@
   даже если правило выдаёт больше.
 
 Уровни доступа к проекту: view < edit < manage. Правило выдаётся на проект или на всё
-направление; действует наибольший уровень. Менеджер-автор проекта имеет manage.
+направление — сотруднику или подразделению (действует на всю ветку подразделения, ADR-0008);
+действует наибольший уровень. Менеджер-автор проекта имеет manage.
 """
 
 from functools import wraps
@@ -18,7 +19,7 @@ from flask import g, jsonify, session
 from sqlalchemy import or_, select
 
 from app.extensions import db
-from app.models import AccessRule, Project, User
+from app.models import AccessRule, Department, DepartmentAccessRule, Project, User
 
 LEVEL_ORDER = {"": 0, None: 0, "view": 1, "edit": 2, "manage": 3}
 
@@ -96,6 +97,21 @@ def cap_level(user, level):
     return level
 
 
+def department_chain(user):
+    """Подразделение сотрудника и все вышестоящие: доступ, выданный подразделению, действует на всю его ветку."""
+    if user is None or not user.department_id:
+        return []
+    cache = g.setdefault("department_chains", {})
+    if user.id not in cache:
+        out = []
+        dep_id = user.department_id
+        while dep_id and dep_id not in out and len(out) < 50:
+            out.append(dep_id)
+            dep_id = db.session.execute(select(Department.parent_id).where(Department.id == dep_id)).scalar()
+        cache[user.id] = out
+    return cache[user.id]
+
+
 def project_levels(user, projects):
     """Уровень доступа сотрудника к каждому проекту из списка: {project_id: level}."""
     if user is None:
@@ -103,6 +119,10 @@ def project_levels(user, projects):
     if user.role == "admin":
         return {p.id: "manage" for p in projects}
     rules = db.session.execute(select(AccessRule).where(AccessRule.user_id == user.id)).scalars().all()
+    chain = department_chain(user)
+    if chain:
+        rules += db.session.execute(
+            select(DepartmentAccessRule).where(DepartmentAccessRule.department_id.in_(chain))).scalars().all()
     by_project = {}
     by_direction = {}
     for rule in rules:
@@ -135,6 +155,12 @@ def accessible_projects_query(user):
     )
     project_ids = select(AccessRule.project_id).where(AccessRule.user_id == user.id, AccessRule.project_id.is_not(None))
     conditions = [Project.id.in_(project_ids), Project.direction_id.in_(direction_ids)]
+    chain = department_chain(user)
+    if chain:
+        conditions.append(Project.id.in_(select(DepartmentAccessRule.project_id).where(
+            DepartmentAccessRule.department_id.in_(chain), DepartmentAccessRule.project_id.is_not(None))))
+        conditions.append(Project.direction_id.in_(select(DepartmentAccessRule.direction_id).where(
+            DepartmentAccessRule.department_id.in_(chain), DepartmentAccessRule.direction_id.is_not(None))))
     if user.role == "manager":
         conditions.append(Project.created_by_id == user.id)
     return query.where(or_(*conditions))

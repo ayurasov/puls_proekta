@@ -8,8 +8,8 @@ from sqlalchemy import select
 
 from app import audit
 from app.extensions import db
-from app.models import AccessRule, Direction, Project, User
-from app.security import ApiError, admin_required, best_level, cap_level
+from app.models import AccessRule, DepartmentAccessRule, Direction, Project, User
+from app.security import ApiError, admin_required, best_level, cap_level, department_chain
 from app.serializers import iso
 
 bp = Blueprint("access", __name__, url_prefix="/api/access")
@@ -180,6 +180,12 @@ def effective():
     by_user = {}
     for rule in rules:
         by_user.setdefault(rule.user_id, []).append(rule)
+    by_department = {}
+    for rule in db.session.execute(select(DepartmentAccessRule)).scalars():
+        by_department.setdefault(rule.department_id, []).append(rule)
+    for user in users:
+        for dep_id in department_chain(user):
+            by_user.setdefault(user.id, []).extend(by_department.get(dep_id, []))
     matrix = {}
     for user in users:
         row = {}
@@ -203,3 +209,128 @@ def effective():
         "matrix": matrix,
     })
 
+
+
+# ---------- доступ подразделений (ADR-0008) ----------
+
+class DepartmentGrant(BaseModel):
+    departmentIds: list[str] = Field(min_length=1, max_length=1000)
+    projectIds: list[int] = Field(default_factory=list, max_length=5000)
+    directionIds: list[int] = Field(default_factory=list, max_length=500)
+    level: Level = "view"
+    mode: Literal["replace", "raise"] = "replace"
+
+
+def _department_names():
+    from app.services.org import OrgSnapshot
+
+    snap = OrgSnapshot()
+    return {dep_id: " / ".join(snap.path(dep_id)) for dep_id in snap.departments}, snap
+
+
+def _serialize_department(rule, paths, snap, projects, directions):
+    members = 0
+    if rule.department_id in snap.departments:
+        branch = set(snap.subtree(rule.department_id))
+        members = sum(1 for u in snap.users.values() if u.is_active and u.department_id in branch)
+    return {
+        "id": rule.id, "departmentId": rule.department_id, "departmentPath": paths.get(rule.department_id, ""),
+        "departmentName": snap.departments[rule.department_id].name if rule.department_id in snap.departments else "",
+        "memberCount": members, "projectId": rule.project_id, "directionId": rule.direction_id,
+        "targetName": (projects[rule.project_id].title if rule.project_id in projects
+                       else directions[rule.direction_id].name if rule.direction_id in directions else ""),
+        "level": rule.level, "createdAt": iso(rule.created_at),
+    }
+
+
+@bp.get("/departments")
+@admin_required
+def list_department_rules():
+    rules = db.session.execute(select(DepartmentAccessRule).order_by(DepartmentAccessRule.id)).scalars().all()
+    _users, projects, directions = _lookups()
+    paths, snap = _department_names()
+    return jsonify([_serialize_department(r, paths, snap, projects, directions) for r in rules])
+
+
+@bp.post("/departments")
+@admin_required
+def grant_departments():
+    """Выдать подразделениям (со всеми вложенными) доступ к проектам и направлениям."""
+    payload = DepartmentGrant.model_validate(request.get_json(silent=True) or {})
+    dep_ids = list(dict.fromkeys(payload.departmentIds))
+    project_ids = list(dict.fromkeys(payload.projectIds))
+    direction_ids = list(dict.fromkeys(payload.directionIds))
+    if not project_ids and not direction_ids:
+        raise ApiError(400, "validation_error", "Выберите проекты или направления")
+    _users, projects, directions = _lookups()
+    paths, _snap = _department_names()
+    for dep_id in dep_ids:
+        if dep_id not in paths:
+            raise ApiError(400, "validation_error", "Подразделение не найдено")
+    targets = [("project_id", pid) for pid in project_ids] + [("direction_id", did) for did in direction_ids]
+    for column, target_id in targets:
+        if column == "project_id" and (target_id not in projects or projects[target_id].deleted_at is not None):
+            raise ApiError(400, "validation_error", f"Проект #{target_id} не найден")
+        if column == "direction_id" and target_id not in directions:
+            raise ApiError(400, "validation_error", f"Направление #{target_id} не найдено")
+    existing = {}
+    for rule in db.session.execute(select(DepartmentAccessRule).where(DepartmentAccessRule.department_id.in_(dep_ids))).scalars():
+        existing[(rule.department_id, "project_id" if rule.project_id else "direction_id",
+                  rule.project_id or rule.direction_id)] = rule
+    created = updated = unchanged = 0
+    for dep_id in dep_ids:
+        for column, target_id in targets:
+            target_name = projects[target_id].title if column == "project_id" else directions[target_id].name
+            entity = f"Подразделение «{paths[dep_id]}» → {target_name}"
+            project = projects.get(target_id) if column == "project_id" else None
+            rule = existing.get((dep_id, column, target_id))
+            if rule is None:
+                db.session.add(DepartmentAccessRule(department_id=dep_id, level=payload.level, **{column: target_id}))
+                created += 1
+                audit.record("Доступы", "create", entity, "level", "", LEVEL_LABELS[payload.level], project=project)
+                continue
+            new_level = payload.level if payload.mode == "replace" else best_level(rule.level, payload.level)
+            if new_level == rule.level:
+                unchanged += 1
+                continue
+            audit.record("Доступы", "update", entity, "level", LEVEL_LABELS[rule.level], LEVEL_LABELS[new_level],
+                         project=project)
+            rule.level = new_level
+            updated += 1
+    db.session.commit()
+    return jsonify({"created": created, "updated": updated, "unchanged": unchanged}), 201
+
+
+@bp.patch("/departments/<int:rule_id>")
+@admin_required
+def update_department_rule(rule_id):
+    rule = db.session.get(DepartmentAccessRule, rule_id)
+    if rule is None:
+        raise ApiError(404, "not_found", "Правило не найдено")
+    payload = RuleUpdate.model_validate(request.get_json(silent=True) or {})
+    _users, projects, directions = _lookups()
+    paths, snap = _department_names()
+    if payload.level != rule.level:
+        target = projects[rule.project_id].title if rule.project_id else directions[rule.direction_id].name
+        audit.record("Доступы", "update", f"Подразделение «{paths.get(rule.department_id, '')}» → {target}", "level",
+                     LEVEL_LABELS[rule.level], LEVEL_LABELS[payload.level],
+                     project=projects.get(rule.project_id) if rule.project_id else None)
+        rule.level = payload.level
+        db.session.commit()
+    return jsonify(_serialize_department(rule, paths, snap, projects, directions))
+
+
+@bp.post("/departments/delete")
+@admin_required
+def delete_department_rules():
+    payload = BulkDelete.model_validate(request.get_json(silent=True) or {})
+    _users, projects, directions = _lookups()
+    paths, _snap = _department_names()
+    rules = db.session.execute(select(DepartmentAccessRule).where(DepartmentAccessRule.id.in_(payload.ids))).scalars().all()
+    for rule in rules:
+        target = projects[rule.project_id].title if rule.project_id else directions[rule.direction_id].name
+        audit.record("Доступы", "delete", f"Подразделение «{paths.get(rule.department_id, '')}» → {target}", "level",
+                     LEVEL_LABELS[rule.level], "", project=projects.get(rule.project_id) if rule.project_id else None)
+        db.session.delete(rule)
+    db.session.commit()
+    return jsonify({"deleted": len(rules)})

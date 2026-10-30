@@ -86,3 +86,44 @@ def test_only_admin_changes_structure(app, admin):
     assert editor.patch(f"/api/departments/{dep['id']}", json={"name": "Y"}).status_code == 403
     assert editor.put(f"/api/departments/{dep['id']}/heads", json={"userIds": []}).status_code == 403
     assert editor.put("/api/org/settings", json={"unitKinds": [], "maxDepth": 3}).status_code == 403
+
+
+def test_department_access_covers_the_whole_branch(app, admin):
+    from tests.conftest import login
+    from tests.helpers import create_project
+
+    company = _dep(admin, "Компания", kind="company")
+    sales = _dep(admin, "Продажи", company["id"])
+    group = _dep(admin, "Группа Север", sales["id"], kind="group")
+    other = _dep(admin, "Бухгалтерия", company["id"])
+    project_id, plan_id = create_project(admin, "Воронка продаж")
+    member = make_user(app, "seller", "editor", name="Продавец")
+    outsider = make_user(app, "accountant", "editor", name="Бухгалтер")
+    admin.patch(f"/api/users/{member}", json={"departmentId": group["id"]})
+    admin.patch(f"/api/users/{outsider}", json={"departmentId": other["id"]})
+
+    res = admin.post("/api/access/departments", json={"departmentIds": [sales["id"]], "projectIds": [project_id],
+                                                      "level": "edit"})
+    assert res.get_json()["created"] == 1
+    rules = admin.get("/api/access/departments").get_json()
+    assert rules[0]["departmentPath"] == "Компания / Продажи" and rules[0]["memberCount"] == 1
+
+    seller = app.test_client()
+    login(seller, "seller")
+    assert [p["title"] for p in seller.get("/api/projects").get_json()] == ["Воронка продаж"]
+    assert seller.post(f"/api/plans/{plan_id}/ops", json={"ops": [{"op": "item.create", "item": {
+        "key": "t1", "type": "task", "name": "Звонок", "start": "2026-05-01", "end": "2026-05-02"}}]}).status_code == 200
+    accountant = app.test_client()
+    login(accountant, "accountant")
+    assert accountant.get("/api/projects").get_json() == []
+    assert accountant.get(f"/api/plans/{plan_id}").status_code == 404
+
+    matrix = admin.get("/api/access/effective").get_json()["matrix"]
+    assert matrix[str(member)] == {str(project_id): "edit"} and matrix[str(outsider)] == {}
+
+    # Сотрудник ушёл из отдела — доступ отдела пропал
+    admin.patch(f"/api/users/{member}", json={"departmentId": other["id"]})
+    assert seller.get(f"/api/plans/{plan_id}").status_code == 404
+    rule_id = rules[0]["id"]
+    assert admin.patch(f"/api/access/departments/{rule_id}", json={"level": "view"}).get_json()["level"] == "view"
+    assert admin.post("/api/access/departments/delete", json={"ids": [rule_id]}).get_json()["deleted"] == 1

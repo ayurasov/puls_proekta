@@ -359,6 +359,34 @@ class AccessRule(db.Model):
     )
 
 
+class DepartmentAccessRule(db.Model):
+    """Доступ подразделения к проекту или ко всем проектам направления (ADR-0008): действует на сотрудников
+    подразделения и всех вложенных — новый сотрудник отдела сразу получает доступ отдела."""
+
+    __tablename__ = "department_access_rules"
+
+    id = db.Column(db.Integer, primary_key=True)
+    department_id = db.Column(db.String(36), db.ForeignKey("departments.id", ondelete="CASCADE"), nullable=False,
+                              index=True)
+    project_id = db.Column(db.Integer, db.ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
+    direction_id = db.Column(db.Integer, db.ForeignKey("directions.id", ondelete="CASCADE"), nullable=True, index=True)
+    level = db.Column(db.String(10), nullable=False, default="view")
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    created_by_id = db.Column(db.Integer, nullable=True)
+
+    __table_args__ = (
+        db.CheckConstraint("level in ('view','edit','manage')", name="level"),
+        db.CheckConstraint(
+            "(project_id is null and direction_id is not null) or (project_id is not null and direction_id is null)",
+            name="target",
+        ),
+        db.Index("uq_department_access_project", "department_id", "project_id", unique=True,
+                 sqlite_where=db.text("project_id is not null"), postgresql_where=db.text("project_id is not null")),
+        db.Index("uq_department_access_direction", "department_id", "direction_id", unique=True,
+                 sqlite_where=db.text("direction_id is not null"), postgresql_where=db.text("direction_id is not null")),
+    )
+
+
 class AuditLog(db.Model):
     """Реестр изменений для администратора. Записи 1.0.x перенесены без изменений."""
 

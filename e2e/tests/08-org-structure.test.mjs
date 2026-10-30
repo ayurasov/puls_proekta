@@ -64,3 +64,24 @@ test('структура компании видна сотрудникам', as
   assert.deepEqual(viewer.errors, [])
   assert.equal((await api(viewer, 'POST', '/departments', { name: 'Чужое' })).status, 403)
 })
+
+test('доступ подразделению получает вся его ветка', async () => {
+  const created = await api(page, 'POST', '/projects', { title: 'E2E Доступ отдела' })
+  await page.goto(`${BASE}/admin/access`)
+  await page.click('[data-testid=access-departments]')
+  await page.locator('.option', { hasText: 'ООО «Пульс»' }).locator('input').check()
+  await page.locator('.option', { hasText: 'E2E Доступ отдела' }).locator('input').check()
+  await page.selectOption('.controls select >> nth=0', 'edit')
+  await page.click('button:has-text("Выдать доступ (1 × 1)")')
+  await page.click('button:has-text("Правила")')
+  await page.locator('[data-testid=dep-rule]', { hasText: 'E2E Доступ отдела' }).waitFor()
+  await shot(page, '08-access-departments')
+
+  // Сотрудник вложенного «Проектного офиса» видит проект и может его править
+  const editor = await newPage()
+  await login(editor, 'e2e.editor')
+  const projects = (await api(editor, 'GET', '/projects')).body.map((p) => p.title)
+  assert.ok(projects.includes('E2E Доступ отдела'))
+  const plan = await api(editor, 'GET', `/plans/${created.body.plans[0].id}`)
+  assert.equal(plan.body.plan.access, 'edit')
+})
