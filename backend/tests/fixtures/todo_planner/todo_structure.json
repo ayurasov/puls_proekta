@@ -1,0 +1,132 @@
+{
+  "format": "podelu.org-structure",
+  "version": 1,
+  "exportedAt": "2026-10-30T06:17:18.757197Z",
+  "app": "1.4.0",
+  "settings": {
+    "org_terminology": {
+      "head": "Начальник"
+    },
+    "org_unit_kinds": [
+      {
+        "value": "company",
+        "label": "Компания",
+        "color": "#7c3aed"
+      },
+      {
+        "value": "division",
+        "label": "Дирекция",
+        "color": "#0369a1"
+      },
+      {
+        "value": "direction",
+        "label": "Направление",
+        "color": "#0f766e"
+      },
+      {
+        "value": "service",
+        "label": "Служба",
+        "color": "#b45309"
+      },
+      {
+        "value": "department",
+        "label": "Отдел",
+        "color": "#4f7cff"
+      },
+      {
+        "value": "sector",
+        "label": "Сектор",
+        "color": "#be185d"
+      },
+      {
+        "value": "group",
+        "label": "Группа",
+        "color": "#15803d"
+      },
+      {
+        "value": "position",
+        "label": "Позиция",
+        "color": "#64748b"
+      }
+    ],
+    "org_max_depth": 7,
+    "delegation_max_depth": 5,
+    "org_heads_any_role": false,
+    "org_default_view": "chart",
+    "delegation_scope": "direct",
+    "delegation_notify_line_manager": true,
+    "manager_visibility_scope": "branch"
+  },
+  "departments": [
+    {
+      "key": "26b70020-76d0-45a2-9150-f070f6cf1a62",
+      "name": "ООО «Вектор»",
+      "parent": null,
+      "kind": "company",
+      "sortOrder": 0,
+      "externalId": "ORG-1",
+      "heads": [
+        {
+          "email": "ceo@vector.test",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "key": "f49255a4-51ac-4968-8dc6-8462ee200320",
+      "name": "Разработка",
+      "parent": "26b70020-76d0-45a2-9150-f070f6cf1a62",
+      "kind": "department",
+      "sortOrder": 1,
+      "externalId": null,
+      "heads": [
+        {
+          "email": "cto@vector.test",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "key": "b5cb163b-bbd2-436a-bbe2-f60075389dea",
+      "name": "Лаборатория",
+      "parent": "f49255a4-51ac-4968-8dc6-8462ee200320",
+      "kind": "sector",
+      "sortOrder": 0,
+      "externalId": null,
+      "heads": [
+        {
+          "email": "ceo@vector.test",
+          "primary": false
+        }
+      ]
+    },
+    {
+      "key": "bce1a0c7-f05c-46f4-8493-505c8eb919a2",
+      "name": "Продажи",
+      "parent": "26b70020-76d0-45a2-9150-f070f6cf1a62",
+      "kind": "division",
+      "sortOrder": 2,
+      "externalId": null,
+      "heads": [
+        {
+          "email": "Sales.Head@vector.test",
+          "primary": true
+        }
+      ]
+    },
+    {
+      "key": "6db8b808-c89a-4701-9a47-99a2d40a6c78",
+      "name": "Группа B2B",
+      "parent": "bce1a0c7-f05c-46f4-8493-505c8eb919a2",
+      "kind": "group",
+      "sortOrder": 0,
+      "externalId": null,
+      "heads": [
+        {
+          "email": "d.orlov@vector.test",
+          "primary": true
+        }
+      ]
+    }
+  ]
+}
