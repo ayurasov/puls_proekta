@@ -252,7 +252,7 @@ async function userGuide() {
   await closeOverlays(page)
 
   // Структура компании
-  await page.goto(BASE + '/org')
+  await page.goto(BASE + '/org?view=tree')
   await page.locator('.node-name', { hasText: 'Разработка' }).click()
   await page.locator('[data-testid=org-unit] .person-row', { hasText: 'Лебедев' }).first().click()
   await page.waitForSelector('[data-testid=org-person]')

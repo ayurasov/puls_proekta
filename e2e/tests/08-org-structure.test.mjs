@@ -1,5 +1,6 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import { api, BASE, closeBrowser, login, newPage, shot } from '../helpers.mjs'
 
 let page
@@ -52,6 +53,8 @@ test('структура компании видна сотрудникам', as
   await login(viewer, 'e2e.viewer')
   await viewer.click('[data-testid=org-link]')
   await viewer.locator('[data-testid=org-unit]').waitFor()
+  // По умолчанию открывается оргсхема; дерево с поиском — вид «Дерево»
+  await viewer.click('[data-testid=org-view-tree]')
   await viewer.fill('[data-testid=org-search]', 'Проектный офис')
   await viewer.locator('.node-name', { hasText: 'Проектный офис' }).first().click()
   await viewer.fill('[data-testid=org-search]', '')
@@ -66,6 +69,87 @@ test('структура компании видна сотрудникам', as
   assert.equal(await viewer.locator('a:has-text("Изменить структуру")').count(), 0)
   assert.deepEqual(viewer.errors, [])
   assert.equal((await api(viewer, 'POST', '/departments', { name: 'Чужое' })).status, 403)
+})
+
+test('виды структуры: оргсхема, люди, дерево и таблица с выгрузкой CSV', async () => {
+  const users = (await api(page, 'GET', '/users')).body
+  const editor = users.find((u) => u.login === 'e2e.editor')
+  const viewer = users.find((u) => u.login === 'e2e.viewer')
+  const deps = (await api(page, 'GET', '/org/tree')).body.departments
+  const company = deps.find((d) => d.name === 'ООО «Пульс»' && !d.parentId)
+  const office = deps.find((d) => d.name === 'Проектный офис' && d.parentId === company.id)
+
+  await page.goto(`${BASE}/org`)
+  await page.locator('[data-testid=org-unit]').waitFor()
+  const tab = (view) => page.locator(`[data-testid=org-view-${view}]`)
+
+  // Оргсхема: карточки подразделений; выбор с клавиатуры (Enter) и мышью
+  await tab('chart').click()
+  assert.equal(await tab('chart').getAttribute('aria-selected'), 'true')
+  await page.locator('[data-testid=org-chart]').waitFor()
+  await page.locator(`[data-unit-id="${company.id}"] .card-main`).focus()
+  await page.keyboard.press('Enter')
+  await page.locator('[data-testid=org-unit] h2', { hasText: 'ООО «Пульс»' }).waitFor()
+  await page.locator(`[data-unit-id="${office.id}"] .card-main`).click()
+  await page.locator('[data-testid=org-unit] h2', { hasText: 'Проектный офис' }).waitFor()
+  assert.match(page.url(), new RegExp(`view=chart.*unit=${office.id}|unit=${office.id}.*view=chart`))
+  assert.match(await page.locator(`[data-unit-id="${office.id}"]`).getAttribute('class'), /is-selected/)
+  await shot(page, '08-org-chart')
+
+  // Люди: кто кому подчиняется; редактор — под руководителем «Проектного офиса»
+  await tab('people').click()
+  await page.locator('[data-testid=org-people]').waitFor()
+  await page.locator(`[data-person-id="${editor.id}"] .card-main`).click()
+  const person = page.locator('[data-testid=org-person]')
+  await person.locator('h2', { hasText: 'E2E editor' }).waitFor()
+  await person.locator('text=по структуре').waitFor()
+  assert.match(page.url(), new RegExp(`user=${editor.id}`))
+  // Поиск в схеме: найденный без руководителя и подчинённых раскрывается в группе «Без руководителя»
+  await page.fill('[data-testid=org-search]', 'E2E viewer')
+  await page.locator('[data-testid=org-search-result]', { hasText: 'E2E viewer' }).waitFor()
+  await page.keyboard.press('Enter')
+  await person.locator('h2', { hasText: 'E2E viewer' }).waitFor()
+  await page.locator(`[data-person-id="${viewer.id}"]`).waitFor()
+  await shot(page, '08-org-people')
+
+  // Дерево — вид версии 0.3
+  await tab('tree').click()
+  await page.locator('.node-name', { hasText: 'Проектный офис' }).click()
+  await page.locator('[data-testid=org-unit] h2', { hasText: 'Проектный офис' }).waitFor()
+
+  // Таблица: сортировка и выгрузка CSV (UTF-8 с BOM)
+  await tab('table').click()
+  const table = page.locator('[data-testid=org-table]')
+  await table.locator('tbody tr', { hasText: 'Проектный офис' }).waitFor()
+  await table.locator('th button', { hasText: 'Сотрудников' }).click()
+  assert.equal(await table.locator('th', { hasText: 'Сотрудников' }).getAttribute('aria-sort'), 'descending')
+  const [download] = await Promise.all([page.waitForEvent('download'), page.click('[data-testid=org-export-csv]')])
+  assert.match(download.suggestedFilename(), /^puls-structure-\d{4}-\d{2}-\d{2}\.csv$/)
+  const csv = readFileSync(await download.path(), 'utf-8')
+  assert.equal(csv.charCodeAt(0), 0xfeff)
+  assert.match(csv, /^\uFEFFПуть;Подразделение;Тип;Уровень;/)
+  assert.match(csv, /ООО «Пульс» \/ Проектный офис;Проектный офис;Отдел;2;ООО «Пульс»;/)
+  await shot(page, '08-org-table')
+
+  // Вид запоминается: без ?view= открывается последний выбранный; ссылка ?view=&user= выделяет сотрудника
+  await page.goto(`${BASE}/org`)
+  await page.locator('[data-testid=org-table]').waitFor()
+  assert.equal(await tab('table').getAttribute('aria-selected'), 'true')
+  await page.goto(`${BASE}/org?view=people&user=${editor.id}`)
+  await page.locator(`[data-person-id="${editor.id}"].is-selected`).waitFor()
+  await person.locator('h2', { hasText: 'E2E editor' }).waitFor()
+  assert.deepEqual(page.errors, [])
+
+  // Телефон: схема прокручивается внутри рамки, страница вбок не уезжает
+  const phone = await newPage({ width: 390, height: 844 })
+  await login(phone)
+  await phone.goto(`${BASE}/org?view=chart`)
+  await phone.locator('[data-testid=org-chart]').waitFor()
+  await phone.locator(`[data-unit-id="${company.id}"]`).waitFor()
+  const widths = await phone.evaluate(() => ({ page: document.documentElement.scrollWidth, main: document.querySelector('.app-main').scrollWidth }))
+  assert.ok(widths.page <= 390 && widths.main <= 390, JSON.stringify(widths))
+  await shot(phone, '08-org-chart-phone')
+  assert.deepEqual(phone.errors, [])
 })
 
 test('доступ подразделению получает вся его ветка', async () => {
