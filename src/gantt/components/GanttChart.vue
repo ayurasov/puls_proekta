@@ -259,14 +259,13 @@ function finishRename(save = true) {
   editor.updateItem(key, { name }, 'Переименование')
 }
 
+// Строка быстрого добавления — под последней строкой плана, поэтому задача добавляется в конец плана
+// (на верхний уровень), а не после выбранной строки, которая может быть в свёрнутой группе.
+// «+ Задача» и Insert по-прежнему добавляют после выбранной строки.
 function quickAdd() {
   const name = quickName.value.trim()
   if (!name) return
-  const selected = view.selectedKey && state.items[view.selectedKey]
-  let options = {}
-  if (selected?.type === 'group') options = { parentKey: selected.key }
-  else if (selected) options = { afterKey: selected.key }
-  const key = editor.createItem('task', { name }, options)
+  const key = editor.createItem('task', { name }, { parentKey: null })
   editor.revealItem(key)
   editor.select(key)
   quickName.value = ''
@@ -662,7 +661,7 @@ function noteLabel(note) {
             <form v-if="extraRows" class="grid-row quick-add" :style="{ top: rows.length * rowHeight + 'px', height: rowHeight + 'px' }" @submit.prevent="quickAdd">
               <div class="cell-name" :style="{ width: nameWidth + 'px' }">
                 <AppIcon name="plus" :size="14" class="muted" />
-                <input v-model="quickName" class="quick-input" placeholder="Новая задача — введите название и Enter" maxlength="5000" data-testid="quick-add" />
+                <input v-model="quickName" class="quick-input" placeholder="Новая задача…" title="Название новой задачи и Enter — задача добавится в конец плана" aria-label="Новая задача в конец плана" maxlength="5000" data-testid="quick-add" />
               </div>
             </form>
             <div v-if="!rows.length" class="grid-empty muted">
@@ -874,6 +873,7 @@ function noteLabel(note) {
 .rename-input { width: 100%; }
 .quick-add { background: transparent; border-bottom: 0; }
 .quick-add .cell-name { padding-left: 30px; gap: 8px; }
+.quick-input { min-width: 0; text-overflow: ellipsis; }
 .quick-input { flex: 1; border: 0; background: transparent; font-size: 12.5px; padding: 6px 4px; outline: none; color: var(--color-text); }
 .quick-input:focus { background: var(--color-surface-2); border-radius: 6px; }
 .grid-empty { position: absolute; top: 60px; left: 0; right: 0; text-align: center; font-size: 13px; }

@@ -35,8 +35,28 @@ function addRow(type) {
   editor.select(key, { openPanel: true })
 }
 
+const shortcutsButton = ref(null)
+/** Подсказка по клавишам — кнопка «?» на панели и клавиша «?» в диаграмме. */
+function showShortcuts() {
+  menu.value = menu.value?.type === 'keys' ? null : { type: 'keys', anchor: shortcutsButton.value }
+}
+const SHORTCUTS = [
+  ['Insert', 'Новая задача после выбранной строки'],
+  ['Enter', 'Открыть карточку выбранной строки'],
+  ['F2', 'Переименовать строку (или двойной щелчок)'],
+  ['Delete', 'Удалить строку (отмена — в уведомлении)'],
+  ['Ctrl+D', 'Дублировать строку'],
+  ['Ctrl+Z', 'Отменить'],
+  ['Ctrl+Y', 'Повторить (или Ctrl+Shift+Z)'],
+  ['↑ ↓', 'Соседняя строка'],
+  ['Esc', 'Закрыть карточку, снять выбор'],
+  ['Ctrl + колесо', 'Масштаб шкалы'],
+  ['Ctrl + перетаскивание', 'Копия задачи со сдвигом'],
+  ['?', 'Эта подсказка'],
+]
+
 // Insert в рабочей области добавляет задачу так же, как кнопка «Задача»
-defineExpose({ addRow })
+defineExpose({ addRow, showShortcuts })
 
 const counts = computed(() => {
   const statuses = {}
@@ -163,6 +183,9 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-sm" type="button" title="Весь период на ширину экрана" @click="emit('fit')"><AppIcon name="fit" :size="14" /></button>
       <button class="btn btn-ghost btn-sm" type="button" title="Показать сегодня" @click="emit('scroll-today')"><AppIcon name="today" :size="14" /><span class="today-label">Сегодня</span></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Вид" @click="open('view', $event)"><AppIcon name="layers" /></button>
+      <button ref="shortcutsButton" class="btn btn-ghost btn-icon btn-sm" type="button" title="Клавиши (?)" aria-label="Сочетания клавиш" data-testid="shortcuts" @click="showShortcuts">
+        <AppIcon name="help" />
+      </button>
     </div>
 
     <!-- Действия с планом целиком — в строке вкладок планов, рядом с выбранным планом -->
@@ -214,6 +237,15 @@ function toggleColumn(column) {
       <button class="menu-item" type="button" @click="editor.collapseAll(true); menu = null"><AppIcon name="collapseAll" /> Свернуть все группы</button>
     </PopupMenu>
 
+    <PopupMenu v-if="menu?.type === 'keys'" :anchor="menu.anchor" align="end" :min-width="330" @close="menu = null">
+      <div class="menu-label">Клавиши и мышь</div>
+      <dl class="shortcuts">
+        <template v-for="[keys, text] in SHORTCUTS" :key="keys">
+          <dt><kbd>{{ keys }}</kbd></dt><dd>{{ text }}</dd>
+        </template>
+      </dl>
+    </PopupMenu>
+
     <PopupMenu v-if="menu?.type === 'export'" :anchor="menu.anchor" align="end" @close="menu = null">
       <button class="menu-item" type="button" @click="runExport('png')"><AppIcon name="image" /> Изображение PNG</button>
       <button class="menu-item" type="button" @click="runExport('pdf')"><AppIcon name="file" /> Документ PDF</button>
@@ -260,6 +292,10 @@ function toggleColumn(column) {
 .filter-option .ellipsis { flex: 1; }
 .filters-foot { display: flex; align-items: center; gap: 8px; padding: 4px 8px; justify-content: space-between; }
 label.menu-item { cursor: pointer; }
+.shortcuts { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; margin: 4px 10px 8px; font-size: 12.5px; align-items: baseline; }
+.shortcuts dt { white-space: nowrap; }
+.shortcuts dd { margin: 0; color: var(--color-text-secondary); }
+kbd { font-family: inherit; font-size: 11.5px; background: var(--color-surface-2); border: 1px solid var(--color-border-strong); border-bottom-width: 2px; border-radius: 5px; padding: 1px 6px; color: var(--color-text); }
 @media (max-width: 768px) { .export-label { display: none; } }
 /* Узкая рабочая область: «Сегодня» — только значком, чтобы панель оставалась в одну строку */
 @container (max-width: 1000px) { .today-label { display: none; } }

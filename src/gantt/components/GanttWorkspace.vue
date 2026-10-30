@@ -167,6 +167,7 @@ function onKeydown(event) {
   if (where !== 'free') return
   const mod = event.ctrlKey || event.metaKey
   const selected = state.view.selectedKey
+  if (event.key === '?' && !mod) { event.preventDefault(); toolbar.value?.showShortcuts(); return }
   if (event.key === 'Insert' && editor.canEdit) { event.preventDefault(); toolbar.value?.addRow('task'); return }
   if (!selected) return
   if ((event.key === 'Delete') && editor.canEdit) { event.preventDefault(); deleteRows([selected]); return }
@@ -225,13 +226,13 @@ provide('ganttActions', actions)
   <div v-else class="workspace">
     <GanttToolbar ref="toolbar" @open-modal="(name) => (modal = { name })" @scroll-today="chart?.scrollToToday()" @fit="chart?.fitToWidth()" />
     <div v-if="state.previewSnapshot" class="banner banner-info">
-      <AppIcon name="history" /> Вы смотрите сохранённое состояние плана от {{ state.previewSnapshot.label }}. Изменения недоступны.
+      <AppIcon name="history" /> Вы смотрите версию <b>«{{ state.previewSnapshot.title }}»</b> от {{ state.previewSnapshot.label }}. Изменения недоступны.
       <span class="spacer" />
       <button class="btn btn-sm" type="button" @click="modal = { name: 'history', payload: { restore: state.previewSnapshot.id } }">Восстановить это состояние</button>
       <button class="btn btn-sm btn-primary" type="button" @click="state.previewSnapshot = null">Вернуться к текущему</button>
     </div>
     <div v-else-if="state.plan?.isArchived" class="banner banner-warning">
-      <AppIcon name="archive" /> План в архиве — только просмотр.
+      <AppIcon name="archive" /> План <b>«{{ state.plan.title }}»</b> в архиве — только просмотр.
       <span class="spacer" />
       <button v-if="['edit', 'manage'].includes(state.access)" class="btn btn-sm" type="button" @click="restoreArchived">Вернуть во вкладки</button>
     </div>
