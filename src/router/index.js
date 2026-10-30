@@ -10,6 +10,7 @@ const routes = [
   },
   { path: '/admin', redirect: '/admin/users' },
   { path: '/admin/users', name: 'admin-users', component: () => import('../views/admin/UsersView.vue'), meta: { admin: true, title: 'Сотрудники' } },
+  { path: '/admin/org-transfer', name: 'admin-org-transfer', component: () => import('../views/admin/OrgTransferView.vue'), meta: { admin: true, title: 'Импорт и экспорт структуры' } },
   { path: '/admin/directions', name: 'admin-directions', component: () => import('../views/admin/DirectionsView.vue'), meta: { admin: true, title: 'Направления' } },
   { path: '/admin/access', name: 'admin-access', component: () => import('../views/admin/AccessView.vue'), meta: { admin: true, title: 'Доступы' } },
   { path: '/admin/audit', name: 'admin-audit', component: () => import('../views/admin/AuditView.vue'), meta: { admin: true, title: 'Реестр изменений' } },

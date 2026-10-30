@@ -1,0 +1,38 @@
+/* Общие стили вкладок «Импорт и экспорт структуры» — токены дизайн-системы (как в «По Делу»). */
+.transfer-card, .plan-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 12px; margin-bottom: 12px; }
+.transfer-block { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.transfer-block + .transfer-block { padding-top: 12px; border-top: 1px solid var(--color-border); }
+.transfer-block h3 { margin: 0 0 4px; font-size: 14px; }
+.transfer-block .btn { flex-shrink: 0; }
+.grow { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.hint { margin: 0; font-size: 12.5px; color: var(--color-text-muted); line-height: 1.5; }
+.file-btn { position: relative; overflow: hidden; }
+.file-btn input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+.file-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.status { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); font-size: 13px; line-height: 1.45; margin-bottom: 12px; }
+.status.ok { background: var(--color-success-soft); color: #1d7a4c; }
+.status.error { background: var(--color-danger-soft); color: #b42318; }
+.status.info { background: var(--color-hover); color: var(--color-text-secondary); }
+.status :deep(svg) { flex-shrink: 0; margin-top: 2px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.chip { padding: 3px 10px; border-radius: 999px; background: #f2f5fb; font-size: 12.5px; color: var(--color-text-muted); }
+.chip b { color: var(--color-text); }
+.chip.warn { background: var(--color-danger-soft); color: #c62933; }
+.chip.warn b { color: #c62933; }
+.chip.info { background: var(--color-warning-soft); color: #a8670f; }
+.plan-block { display: flex; flex-direction: column; gap: 6px; }
+.plan-block p { margin: 0; font-size: 13px; }
+.plan-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.list { margin: 0; padding-left: 18px; font-size: 13px; display: flex; flex-direction: column; gap: 2px; }
+.errors { margin: 0; padding-left: 18px; font-size: 12.5px; color: #c62933; }
+.warnings, .notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: #a8670f; }
+.changes { margin: 0; padding-left: 16px; font-size: 12.5px; }
+.badge-action { min-width: 96px; justify-content: center; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+@media (max-width: 720px) {
+  .transfer-block { flex-direction: column; }
+}
+.select.input-sm { padding-right: 26px; background-position: right 7px center; }
+.filter { width: auto; }
+.grow .status, .plan-card .status { margin-bottom: 0; }
