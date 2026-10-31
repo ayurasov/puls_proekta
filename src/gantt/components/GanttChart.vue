@@ -723,8 +723,8 @@ function noteLabel(note) {
                   <rect v-if="m.bar.progress" class="progress" :x="m.bar.x + 2" :y="m.bar.y + m.bar.h - 6" :width="Math.max(0, (m.bar.w - 4) * m.bar.progress / 100)" height="4" rx="2" />
                   <rect v-if="m.bar.tail?.kind === 'early'" class="tail early" :x="m.bar.tail.x" :y="m.bar.y" :width="m.bar.tail.w" :height="m.bar.h" rx="6" />
                   <rect v-if="m.bar.tail" class="tail-hatch" :x="m.bar.tail.kind === 'late' ? m.bar.tail.x : m.bar.tail.x" :y="m.bar.tail.kind === 'late' ? m.bar.y + 3 : m.bar.y" :width="m.bar.tail.w" :height="m.bar.tail.kind === 'late' ? m.bar.h - 6 : m.bar.h" fill="url(#hatch-late)" />
-                  <text class="bar-text" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + m.bar.h / 2 + 3.5" :fill="m.bar.text">{{ m.bar.label }}</text>
-                  <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + m.bar.h / 2 + 3.5">{{ m.bar.tailLabel }}</text>
+                  <text class="bar-text" :class="m.bar.text === '#ffffff' ? 'on-dark' : 'on-light'" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + m.bar.h / 2 + 4" :fill="m.bar.text">{{ m.bar.label }}</text>
+                  <text v-if="m.bar.tailLabel && m.bar.tail?.kind === 'late'" class="tail-text" :x="m.bar.tail.x + m.bar.tail.w + 5" :y="m.bar.y + m.bar.h / 2 + 4">{{ m.bar.tailLabel }}</text>
                   <path v-if="m.bar.status === 'done' && m.bar.w > 26" class="done-check" :d="`M${m.bar.x + m.bar.w - 15} ${m.bar.y + m.bar.h / 2} l3 3 l6 -6`" />
                   <rect v-if="m.bar.status === 'done' || m.bar.status === 'blocked' || m.key === selectedKey" class="outline" :x="m.bar.x + 1" :y="m.bar.y + 1" :width="m.bar.w - 2" :height="m.bar.h - 2" rx="5" />
                   <a v-if="m.bar.jira && m.bar.w > 36" :href="m.bar.jira" target="_blank" rel="noopener noreferrer" class="jira" :class="jiraClass(m.key)" @pointerdown.stop @click.stop>
@@ -750,7 +750,7 @@ function noteLabel(note) {
                 <g v-for="note in m.notes" :key="note.key" class="note" :data-tip="note.key" data-tip-kind="note" @click.stop="actions.openNoteEditor({ noteKey: note.key })" @pointerdown.stop>
                   <path :d="`M${note.x - 5} ${note.y + 5} a5 5 0 1 1 10 0 c0 3 -5 9 -5 9 c0 0 -5 -6 -5 -9 Z`" :fill="note.color" />
                   <circle :cx="note.x" :cy="note.y + 5" r="1.8" fill="#fff" />
-                  <text :x="note.x + 8" :y="note.y + 9" :fill="note.textColor || note.color" class="note-text">{{ noteLabel(note).length > 40 ? noteLabel(note).slice(0, 39) + '…' : noteLabel(note) }}</text>
+                  <text :x="note.x + 8" :y="note.y + 9.5" :fill="note.textColor || note.color" class="note-text">{{ noteLabel(note).length > 40 ? noteLabel(note).slice(0, 39) + '…' : noteLabel(note) }}</text>
                 </g>
               </g>
             </g>
@@ -852,17 +852,17 @@ function noteLabel(note) {
 .resizer:hover, .is-resizing .resizer { background: rgba(79, 124, 255, 0.25); }
 .header-svg { display: block; border-bottom: 1px solid var(--color-border-strong); flex-shrink: 0; }
 .h-top { fill: var(--color-surface-2); stroke: var(--color-border); stroke-width: 0.5; }
-.h-top-text { font-size: 11px; font-weight: 700; fill: var(--color-text-secondary); }
+.h-top-text { font-size: 12px; font-weight: 700; fill: var(--color-text-secondary); }
 .h-cell { fill: var(--color-surface-2); stroke: #eceef4; stroke-width: 0.5; }
 .h-cell.weekend { fill: #eef0f4; }
 .h-cell.holiday { fill: #fde8e8; }
 .h-cell.today { fill: var(--color-primary-soft); }
-.h-text { font-size: 10.5px; font-weight: 650; fill: var(--color-text-secondary); text-anchor: middle; }
-.h-sub { font-size: 9px; fill: var(--color-text-muted); text-anchor: middle; }
+.h-text { font-size: 11.5px; font-weight: 650; font-variant-numeric: tabular-nums; fill: var(--color-text-secondary); text-anchor: middle; }
+.h-sub { font-size: 10px; fill: var(--color-text-muted); text-anchor: middle; }
 .h-text.today, .h-sub.today { fill: var(--color-primary-dark); }
 .lane-bg { fill: #fbfcfe; }
 .lane-label { cursor: pointer; }
-.lane-text { font-size: 10px; font-weight: 700; paint-order: stroke; stroke: #fbfcfe; stroke-width: 3px; }
+.lane-text { font-size: 11px; font-weight: 700; paint-order: stroke; stroke: #fbfcfe; stroke-width: 3px; }
 .today-head { stroke-width: 2; }
 .body { position: relative; display: flex; }
 .grid { position: sticky; left: 0; z-index: 4; background: var(--color-surface); border-right: 1px solid var(--color-border); flex-shrink: 0; }
@@ -887,9 +887,9 @@ function noteLabel(note) {
 .mark { width: 16px; display: flex; align-items: center; justify-content: center; color: var(--color-text-muted); flex-shrink: 0; }
 .type-milestone .mark { color: #0f766e; }
 .name-block { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
-.name { font-size: 12.5px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.name { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .type-group .name { font-weight: 700; }
-.meta { font-size: 10.5px; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
+.meta { font-size: 11.5px; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
 .meta .sep { margin: 0 4px; opacity: 0.6; }
 .open-btn { width: 24px; height: 24px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); color: var(--color-text-muted); display: flex; align-items: center; justify-content: center; opacity: 0; flex-shrink: 0; padding: 0; }
 .grid-row:hover .open-btn, .grid-row.selected .open-btn { opacity: 1; }
@@ -915,11 +915,15 @@ function noteLabel(note) {
 .bar { transition: filter 0.12s; }
 .task:hover .bar { filter: brightness(1.06) drop-shadow(0 2px 4px rgba(20, 25, 40, 0.18)); }
 .progress { fill: rgba(0, 0, 0, 0.3); pointer-events: none; }
-.bar-text { font-size: 10px; font-weight: 700; text-anchor: middle; pointer-events: none; }
+.bar-text { font-size: 11.5px; font-weight: 700; text-anchor: middle; pointer-events: none; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; paint-order: stroke; stroke-linejoin: round; }
+/* Обводка подписи: белая на насыщенной полосе — тонкая тёмная, тёмная на светлой — светлая; так подпись читается
+   и поверх полоски прогресса, штриховки сдвига и линии «сегодня» */
+.bar-text.on-dark { stroke: rgba(15, 23, 42, 0.32); stroke-width: 2.4px; }
+.bar-text.on-light { stroke: rgba(255, 255, 255, 0.55); stroke-width: 2.4px; }
 .tail.late { fill: #ef4444; opacity: 0.6; }
 .tail.early { fill: #22c55e; opacity: 0.7; }
 .tail-hatch { pointer-events: none; }
-.tail-text { font-size: 9.5px; font-weight: 700; fill: #b91c1c; pointer-events: none; }
+.tail-text { font-size: 10.5px; font-weight: 700; fill: #b91c1c; pointer-events: none; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .st-done .bar { opacity: 0.78; }
 .st-done .outline { fill: none; stroke: #22c55e; stroke-width: 2.5; }
 .st-blocked .bar { opacity: 0.7; }
@@ -936,15 +940,15 @@ function noteLabel(note) {
 .group-bar.editable { cursor: grab; }
 .group-shape { opacity: 0.55; }
 .group-bar:hover .group-shape, .group-bar.selected .group-shape { opacity: 0.85; }
-.group-text { font-size: 9.5px; font-weight: 700; fill: var(--color-text-muted); text-anchor: middle; pointer-events: none; }
+.group-text { font-size: 10.5px; font-weight: 700; fill: var(--color-text-secondary); text-anchor: middle; pointer-events: none; font-variant-numeric: tabular-nums; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .milestone { cursor: pointer; }
 .milestone.editable { cursor: grab; }
 .diamond { stroke: #fff; stroke-width: 1.5; }
 .milestone.selected .diamond { stroke: #1c2331; stroke-width: 2; }
-.milestone-text { font-size: 10.5px; font-weight: 600; fill: var(--color-text-secondary); pointer-events: none; }
+.milestone-text { font-size: 11.5px; font-weight: 600; fill: var(--color-text); pointer-events: none; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .milestone-lines line { stroke-width: 2; pointer-events: none; opacity: 0.9; }
 .note { cursor: pointer; }
-.note-text { font-size: 9.5px; font-weight: 650; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.note-text { font-size: 10.5px; font-weight: 650; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .arrows path { fill: none; stroke: #a7b0c2; stroke-width: 1.3; pointer-events: none; }
 .arrows path.active { stroke: var(--color-primary); stroke-width: 1.8; }
 .copy-ghost rect { fill: rgba(79, 124, 255, 0.25); stroke: var(--color-primary); stroke-dasharray: 4 3; pointer-events: none; }

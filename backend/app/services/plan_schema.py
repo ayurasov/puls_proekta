@@ -49,7 +49,11 @@ DEFAULT_SETTINGS = {
     "categories": list(DEFAULT_CATEGORIES),
     "defaultCollapsed": [],
     "jiraAuto": [],
+    # Источник задач плана в Jira: проект и, по желанию, уточняющий JQL. По нему «Задачи из Jira» открываются
+    # сразу на этом проекте, а план сообщает о новых задачах источника, которых в плане ещё нет (ADR-0007).
+    "jiraSource": {"project": "", "jql": ""},
 }
+_PROJECT_KEY = re.compile(r"^[A-Z][A-Z0-9_]{0,49}$")
 
 _HEX = re.compile(r"^#[0-9a-fA-F]{6}$")
 _KEY = re.compile(r"^[A-Za-z0-9_\-]{1,64}$")
@@ -169,6 +173,11 @@ def normalize_settings(raw, base=None):
         result["defaultCollapsed"] = [k for k in raw["defaultCollapsed"] if isinstance(k, str) and _KEY.match(k)][:5000]
     if isinstance(raw.get("jiraAuto"), list):
         result["jiraAuto"] = [f for f in JIRA_AUTO_FIELDS if f in raw["jiraAuto"]]
+    if isinstance(raw.get("jiraSource"), dict):
+        source = raw["jiraSource"]
+        project = str(source.get("project") or "").strip().upper()[:50]
+        jql = " ".join(str(source.get("jql") or "").split())[:1000]
+        result["jiraSource"] = {"project": project if _PROJECT_KEY.match(project) else "", "jql": jql}
     if isinstance(raw.get("legacy"), dict):
         result["legacy"] = raw["legacy"]
     return result

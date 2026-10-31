@@ -75,12 +75,11 @@ async function disconnect() {
 <template>
   <div v-if="loaded" class="card block" data-testid="podelu-settings">
     <div class="head">
-      <span class="logo" aria-hidden="true"><AppIcon name="checklist" :size="18" /></span>
       <div>
-        <h2 class="section-title">Подключение к «По Делу» <HelpLink topic="admin-podelu" /></h2>
-        <p class="muted small">Одно подключение для всей системы. «Пульс» входит в «По Делу» сервисной учётной записью и забирает
-          оттуда структуру компании и сотрудников, а в «Пульсе» появляются ссылки на подразделения и сотрудников в «По Делу».
-          Пароль хранится на сервере зашифрованным и в интерфейс не возвращается; сотрудники видят только адрес «По Делу».</p>
+        <h2 class="section-title">Структура и сотрудники из «По Делу» <HelpLink topic="admin-podelu" /></h2>
+        <p class="muted small">«Пульс» входит в «По Делу» сервисной учётной записью и забирает оттуда структуру компании и сотрудников, а в
+          «Пульсе» появляются ссылки на подразделения и сотрудников в «По Делу». Пароль хранится на сервере зашифрованным и в интерфейс не
+          возвращается; сотрудники видят только адрес «По Делу».</p>
       </div>
     </div>
 
@@ -91,7 +90,7 @@ async function disconnect() {
         <label class="field"><span class="field-label">Пароль</span><input v-model="form.password" class="input" type="password" autocomplete="new-password" :placeholder="passwordPlaceholder" data-testid="podelu-password" @input="change" /></label>
       </div>
       <p class="muted small hint">Адрес — тот, по которому сотрудники открывают «По Делу». Учётной записи нужна роль «Администратор» или полномочия
-        «Ведёт структуру компании» и «Ведёт учётные записи». API-токенов в «По Делу» нет: вход — по логину и паролю, как в браузере, поэтому используйте адрес https://.</p>
+        «Ведёт структуру компании» и «Ведёт учётные записи». Выгрузки «По Делу» отдаёт только после входа по логину и паролю, как в браузере, поэтому используйте адрес https://.</p>
       <label class="check"><input v-model="form.acceptInvalidCerts" type="checkbox" data-testid="podelu-insecure" @change="change" /> Не проверять TLS-сертификат (для самоподписанных и корпоративных сертификатов)</label>
 
       <div v-if="status" class="status" :class="status.kind" role="status" data-testid="podelu-status">
@@ -111,10 +110,9 @@ async function disconnect() {
 </template>
 
 <style scoped>
-.block { padding: 16px 18px; margin-top: 14px; }
+.block { padding: 18px 20px; margin-bottom: 16px; }
 .head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
 .head p { margin: 4px 0 0; line-height: 1.5; }
-.logo { width: 34px; height: 34px; border-radius: 9px; background: var(--color-success-soft); color: #1d7a4c; display: grid; place-items: center; flex-shrink: 0; }
 .form { display: flex; flex-direction: column; gap: 12px; }
 .wide { grid-column: 1 / -1; }
 .hint { margin: -4px 0 0; line-height: 1.5; }

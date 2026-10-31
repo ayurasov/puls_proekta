@@ -1,7 +1,7 @@
 import { reactive } from 'vue'
 import { api } from '../api/client'
 import { localStorageGet, localStorageSet } from '../stores/ui'
-import { diffDays } from './domain/dates'
+import { addDays, diffDays } from './domain/dates'
 
 /**
  * Задачи Jira строк плана (ADR-0007): статус, исполнитель, сроки и прогресс из Jira рядом с данными строки,
@@ -11,6 +11,25 @@ import { diffDays } from './domain/dates'
 export const ISSUE_KEY_RE = /^[A-Z][A-Z0-9_]*-\d+$/
 export const STATUS_FROM_CATEGORY = { new: 'new', indeterminate: 'inwork', done: 'done' }
 export const CATEGORY_LABELS = { new: 'К выполнению', indeterminate: 'В работе', done: 'Готово' }
+
+/** Ключ задачи по ссылке на подключённую Jira — по основному адресу и «другим адресам» этой Jira. */
+export function issueKeyFromLinks(url, baseUrl, linkUrls = []) {
+  for (const base of [baseUrl, ...(linkUrls || [])]) {
+    const key = issueKeyFromUrl(url, base)
+    if (key) return key
+  }
+  return null
+}
+
+/** Хост ссылки, похожей на задачу Jira (…/browse/ABC-1), если она ведёт не на подключённую Jira; иначе null. */
+export function foreignJiraHost(url, baseUrl, linkUrls = []) {
+  if (!url || issueKeyFromLinks(url, baseUrl, linkUrls)) return null
+  let link
+  try { link = new URL(url.trim()) } catch { return null }
+  const looksLikeIssue = /\/(?:browse|issues)\/[A-Za-z][A-Za-z0-9_]*-\d+\/?$/.test(link.pathname)
+    || ISSUE_KEY_RE.test((link.searchParams.get('selectedIssue') || '').toUpperCase())
+  return looksLikeIssue ? link.host.toLowerCase() : null
+}
 
 /** Ключ задачи из ссылки на подключённую Jira (те же правила, что на сервере). */
 export function issueKeyFromUrl(url, baseUrl) {
@@ -37,6 +56,98 @@ export function jiraLinkFromInput(value, baseUrl) {
   }
   if (!/^https?:\/\/\S+$/i.test(text)) return { error: 'Укажите ключ задачи (ABC-123) или ссылку, начинающуюся с http:// или https://' }
   return { url: text }
+}
+
+/**
+ * Сроки строки из задачи Jira: начало и срок из Jira; без срока — окончание спринта задачи; без начала — начало
+ * спринта или пять дней до срока; без срока и спринта — пять дней до даты решения (решённая задача) или с сегодня.
+ */
+export function issueDates(issue, today) {
+  const sprint = currentSprint(issue)
+  const anchor = issue.due || (issue.statusCategory === 'done' ? issue.resolved : null) || sprint?.end || null
+  let start = issue.start || (sprint?.start && (!anchor || sprint.start <= anchor) ? sprint.start : null)
+  start = start || (anchor ? addDays(anchor, -4) : today)
+  const end = anchor && anchor >= start ? anchor : addDays(start, 4)
+  return { start, end }
+}
+
+/** Спринт задачи, к которому она относится сейчас: последний из списка (Jira перечисляет их по порядку). */
+export function currentSprint(issue) {
+  const list = issue?.sprints || []
+  return list.length ? list[list.length - 1] : null
+}
+
+/** Строка-задача плана из задачи Jira: название, ссылка, сроки, статус и прогресс. */
+export function taskFromIssue(issue, today) {
+  const { start, end } = issueDates(issue, today)
+  const status = STATUS_FROM_CATEGORY[issue.statusCategory] || 'new'
+  const data = { name: issue.summary || issue.key, jiraUrl: issue.url, start, end, status }
+  if (status === 'done') {
+    const done = issue.resolved || end
+    Object.assign(data, { progress: 100, completedDate: done, offset: diffDays(start, done) - diffDays(start, end) })
+  } else if (issue.progress !== null && issue.progress !== undefined) data.progress = issue.progress
+  return { type: 'task', ref: issue.key, data }
+}
+
+/** Веха плана из релиза (версии) Jira: дата выпуска, ссылка на релиз. */
+export function milestoneFromVersion(version) {
+  return { type: 'milestone', data: { name: version.name, date: version.release, jiraUrl: version.url || null } }
+}
+
+/**
+ * Строки для «Задач из Jira»: [{ type, data, ref, children?, parentKey? }] для editor.createItems.
+ * group: 'none' | 'epics' | 'sprints' — эпик или спринт становится группой (уже существующая группа плана —
+ * привязанная к эпику или с названием спринта — используется повторно); выбранный эпик — только группа.
+ * links: связи «блокирует» → предшественник строки (из тех, что добавляются, или уже в плане: linkedRows —
+ * Map ключ задачи → ключ строки); при нескольких блокирующих — та, что заканчивается позже.
+ */
+export function buildImportRows(issues, { group = 'none', epics = {}, epicGroups = new Map(), groupsByName = new Map(), links = false, linkedRows = new Map(), today } = {}) {
+  const rows = []
+  const tasks = new Map()
+  const created = new Map()
+  const groupFor = (id, name, url) => {
+    if (epicGroups.has(id)) return { parentKey: epicGroups.get(id) }
+    if (!url && groupsByName.has(name)) return { parentKey: groupsByName.get(name) }
+    if (!created.has(id)) {
+      const entry = { type: 'group', data: { name, ...(url ? { jiraUrl: url } : {}) }, children: [] }
+      created.set(id, entry)
+      rows.push(entry)
+    }
+    return created.get(id)
+  }
+  const place = (entry, target) => {
+    if (target.children) target.children.push(entry)
+    else rows.push({ ...entry, parentKey: target.parentKey })
+  }
+  for (const issue of issues) {
+    if (group === 'epics' && issue.isEpic) {
+      const epic = epics[issue.key] || issue
+      groupFor(issue.key, epic.summary || issue.key, epic.url || issue.url)
+      continue
+    }
+    const entry = taskFromIssue(issue, today)
+    tasks.set(issue.key, { entry, issue })
+    if (group === 'epics' && issue.epic) {
+      const epic = epics[issue.epic] || { summary: issue.epic, url: null }
+      place(entry, groupFor(issue.epic, epic.summary || issue.epic, epic.url))
+    } else if (group === 'sprints' && currentSprint(issue)) {
+      const sprint = currentSprint(issue)
+      place(entry, groupFor(`sprint:${sprint.id}`, sprint.name, null))
+    } else rows.push(entry)
+  }
+  if (links) {
+    for (const { entry, issue } of tasks.values()) {
+      const blockers = (issue.links?.blockedBy || [])
+        .map((key) => (tasks.has(key) ? { ref: key, end: tasks.get(key).entry.data.end } : linkedRows.has(key) ? { key: linkedRows.get(key).key, end: linkedRows.get(key).end } : null))
+        .filter(Boolean)
+      if (!blockers.length) continue
+      const latest = blockers.reduce((a, b) => ((b.end || '') > (a.end || '') ? b : a))
+      if (latest.ref) entry.data.dependencyRef = latest.ref
+      else entry.data.dependencyKey = latest.key
+      entry.data.dependencyType = 'FS'
+    }
+  }
+  return rows
 }
 
 /**
@@ -87,8 +198,12 @@ export function jiraChanges(item, issue, { calendar, today, linked = false } = {
 
 export function createJira(editor, ui) {
   const state = reactive({
-    connected: false, baseUrl: null, hasStartField: false,
+    connected: false, baseUrl: null, linkUrls: [], hasStartField: false,
     issues: {}, error: null, fetchedAt: null, loading: false, loaded: false,
+    // Строки со ссылками на задачи по другому адресу Jira: [{ host, rows }] — подсказка «Другие адреса этой Jira»
+    foreign: [],
+    // Новые задачи источника плана (проект Jira в «Сверке с Jira»), которых в плане ещё нет
+    source: null,
     // По задачам, запрошенным отдельно: почему не получены и когда получены
     failed: {}, fetchedAtByKey: {},
   })
@@ -100,11 +215,19 @@ export function createJira(editor, ui) {
     try {
       Object.assign(state, await api.get('/jira'))
     } catch { state.connected = false }
-    if (state.connected) await load()
+    if (state.connected) {
+      await load()
+      loadSource()
+    }
   }
 
   function keyFor(item) {
-    return state.connected ? issueKeyFromUrl(item?.jiraUrl, state.baseUrl) : null
+    return state.connected ? issueKeyFromLinks(item?.jiraUrl, state.baseUrl, state.linkUrls) : null
+  }
+
+  /** Ссылка строки ведёт на задачу другой Jira (не основной и не «другой адрес» подключения): её хост. */
+  function foreignHostFor(item) {
+    return state.connected ? foreignJiraHost(item?.jiraUrl, state.baseUrl, state.linkUrls) : null
   }
 
   /** Данные задачи строки: undefined — нет ссылки на Jira или ещё не загружено, null — нет в Jira или нет прав. */
@@ -128,6 +251,7 @@ export function createJira(editor, ui) {
       state.issues = { ...state.issues, ...res.issues }
       state.error = res.error
       state.fetchedAt = res.fetchedAt
+      state.foreign = res.foreign || []
       state.loaded = true
       const applied = autoApply()
       if (refresh && !res.error && !applied) ui.success(`Данные Jira обновлены (${Object.keys(res.issues).length})`)
@@ -263,6 +387,39 @@ export function createJira(editor, ui) {
     return count
   }
 
+  /** Источник задач плана: { project, jql } из настроек плана. */
+  function sourceSetting() {
+    const source = editor.settings.jiraSource || {}
+    return { project: source.project || '', jql: source.jql || '' }
+  }
+
+  /** Новые задачи источника плана — только у того, кто правит план (читать Jira вне плана нельзя). */
+  async function loadSource({ refresh = false } = {}) {
+    const source = sourceSetting()
+    if (!state.connected || !editor.canEdit || !(source.project || source.jql)) { state.source = null; return null }
+    try {
+      state.source = await api.get(`/plans/${editor.state.plan.id}/jira/source`, refresh ? { refresh: 1 } : undefined)
+    } catch (err) {
+      state.source = { configured: true, error: err.message, newCount: 0, new: [] }
+    }
+    return state.source
+  }
+
+  /** Задать источник задач плана (одна правка настроек плана). */
+  function setSource(source) {
+    const next = { project: (source.project || '').toUpperCase(), jql: (source.jql || '').trim() }
+    editor.updatePlan({ settings: { jiraSource: next } }, next.project || next.jql ? 'Источник задач Jira' : 'Источник задач Jira убран')
+    state.source = null
+    if (next.project || next.jql) setTimeout(() => loadSource({ refresh: true }), 300)
+  }
+
+  /** Подсказки при привязке строки: задачи по ключу или словам названия. */
+  async function suggest(text) {
+    const res = await api.post('/jira/suggest', { planId: editor.state.plan.id, text, project: sourceSetting().project })
+    for (const issue of res.issues) if (!(issue.key in state.issues)) state.issues = { ...state.issues, [issue.key]: issue }
+    return res.issues
+  }
+
   /** Включить или выключить автоперенос полей (одна правка настроек плана). */
   function setAutoFields(list) {
     editor.updatePlan({ settings: { jiraAuto: list } }, list.length ? 'Автоперенос из Jira' : 'Автоперенос из Jira выключен')
@@ -270,7 +427,7 @@ export function createJira(editor, ui) {
   }
 
   return reactive({
-    state, init, load, fetchKeys, keyFor, issueFor, linkedItems, changesFor, differs, apply, autoFields, autoApply,
-    setAutoFields,
+    state, init, load, fetchKeys, keyFor, foreignHostFor, issueFor, linkedItems, changesFor, differs, apply, autoFields,
+    autoApply, setAutoFields, sourceSetting, loadSource, setSource, suggest,
   })
 }

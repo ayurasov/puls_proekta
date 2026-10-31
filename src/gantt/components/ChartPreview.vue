@@ -131,7 +131,7 @@ const tooltipRows = computed(() => {
           <rect :x="bar.x" :y="bar.y" :width="bar.w" :height="bar.h" rx="6" :fill="bar.fill" />
           <rect v-if="bar.progress" class="progress" :x="bar.x + 2" :y="bar.y + bar.h - 6" :width="(bar.w - 4) * bar.progress / 100" height="4" rx="2" />
           <rect v-if="bar.tail" :x="bar.tail.x" :y="bar.y + 3" :width="bar.tail.w" :height="bar.h - 6" :fill="`url(#${uid}-hatch)`" />
-          <text class="bar-text" :x="bar.x + bar.w / 2" :y="bar.y + bar.h / 2 + 3.5" :fill="bar.text">{{ bar.label }}</text>
+          <text class="bar-text" :class="bar.text === '#ffffff' ? 'on-dark' : 'on-light'" :x="bar.x + bar.w / 2" :y="bar.y + bar.h / 2 + 4" :fill="bar.text">{{ bar.label }}</text>
           <text v-if="bar.tailLabel" class="tail-text" :x="bar.tail.x + bar.tail.w + (settings.display.showDependencies ? 13 : 5)" :y="bar.y + bar.h / 2 + 3.5">{{ bar.tailLabel }}</text>
         </g>
         <path v-if="arrow" class="arrow" :d="arrow" :marker-end="`url(#${uid}-arrow)`" />
@@ -174,7 +174,7 @@ const tooltipRows = computed(() => {
 .h-cell.weekend { fill: #eef0f4; }
 .h-cell.holiday { fill: #fde8e8; }
 .h-cell.today { fill: var(--color-primary-soft); }
-.h-text { font-size: 9px; fill: var(--color-text-muted); text-anchor: middle; font-weight: 600; }
+.h-text { font-size: 10px; fill: var(--color-text-muted); text-anchor: middle; font-weight: 600; }
 .h-text.today { fill: var(--color-primary-dark); }
 .h-line, .row-line { stroke: var(--color-border); stroke-width: 1; }
 .row-line { stroke: #f0f2f6; }
@@ -184,10 +184,12 @@ const tooltipRows = computed(() => {
 .today-line { stroke-width: 2; }
 .progress { fill: rgba(0, 0, 0, 0.3); }
 .tail { fill: #ef4444; opacity: 0.6; }
-.bar-text { font-size: 10px; font-weight: 700; text-anchor: middle; }
-.tail-text { font-size: 9px; font-weight: 700; fill: #b91c1c; }
+.bar-text { font-size: 11px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; paint-order: stroke; stroke-linejoin: round; }
+.bar-text.on-dark { stroke: rgba(15, 23, 42, 0.32); stroke-width: 2.2px; }
+.bar-text.on-light { stroke: rgba(255, 255, 255, 0.55); stroke-width: 2.2px; }
+.tail-text { font-size: 10px; font-weight: 700; fill: #b91c1c; }
 .arrow { fill: none; stroke: #a7b0c2; stroke-width: 1.3; }
-.note-text { font-size: 9px; font-weight: 650; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
+.note-text { font-size: 10px; font-weight: 650; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .legend { display: flex; align-items: center; gap: 10px; padding: 5px 10px; border-top: 1px solid var(--color-border); font-size: 10.5px; color: var(--color-text-secondary); overflow: hidden; white-space: nowrap; }
 .legend.is-top { border-top: 0; border-bottom: 1px solid var(--color-border); }
 .legend-item { display: inline-flex; align-items: center; gap: 5px; min-width: 0; }

@@ -72,8 +72,9 @@ export function barLabel(task, display) {
   return display.showTaskNamesOnBars ? `${dates} — ${task.name}` : dates
 }
 
-/** Примерная обрезка текста по ширине (без измерения шрифта): ~6 px на символ при 10 px. */
-export function fitText(text, width, charWidth = 6.1) {
+/** Примерная обрезка текста по ширине (без измерения шрифта): ~6,9 px на символ полужирного 11,5 px. */
+export const BAR_CHAR_WIDTH = 6.9
+export function fitText(text, width, charWidth = BAR_CHAR_WIDTH) {
   const max = Math.floor((width - 10) / charWidth)
   if (max <= 1) return ''
   return text.length > max ? text.slice(0, Math.max(1, max - 1)) + '…' : text

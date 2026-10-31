@@ -1,6 +1,6 @@
 ---
 title: "Пульс Проекта — руководство по развёртыванию"
-subtitle: "Версия 0.4.0"
+subtitle: "Версия 0.5.0"
 date: "Октябрь 2026"
 lang: ru
 ---
@@ -54,7 +54,7 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Шаг 1. Получение дистрибутива
 
 ```bash
-sudo git clone --branch v0.4.0 <адрес репозитория puls_proekta> /opt/puls
+sudo git clone --branch v0.5.0 <адрес репозитория puls_proekta> /opt/puls
 cd /opt/puls
 ```
 
@@ -86,7 +86,7 @@ sudo docker compose ps
 
 ```bash
 curl -fsS http://127.0.0.1:39663/api/health/ready; echo
-# {"status":"ok","schema":"0005_podelu_links","version":"0.4.0"}
+# {"status":"ok","schema":"0005_podelu_links","version":"0.5.0"}
 curl -sI http://127.0.0.1:39663/ | grep -i content-security-policy
 ```
 
@@ -196,9 +196,17 @@ server {
 | `PODELU_TOTAL_TIMEOUT` | `50` | Сколько секунд одна загрузка из «По Делу» в интерфейсе может ждать её ответа целиком (вход, выгрузки, выход); меньше `GUNICORN_TIMEOUT` (60). Командная строка `sync-podelu` ждёт до 600 секунд |
 | `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` | — | Прокси для выхода backend к Jira и «По Делу», если сервер ходит в сеть через прокси. «По Делу» на той же машине — в `NO_PROXY` |
 
-Сами подключения (адрес, учётная запись, пароль или токен) задаёт администратор в интерфейсе:
-«Администрирование → Интеграции». Пароли хранятся в базе зашифрованными ключом из `SECRET_KEY`: после смены
-`SECRET_KEY` их нужно ввести заново.
+Сами подключения (адрес, учётная запись, пароль, токен или ключ) задаёт администратор в интерфейсе: блок
+**Интеграции** бокового меню. Пароли и ключи других систем хранятся в базе зашифрованными ключом из `SECRET_KEY`:
+после смены `SECRET_KEY` их нужно ввести заново.
+
+**Ссылки из задач «По Делу»** (0.5.0, нужна «По Делу» 1.5.0) работают в обе стороны: backend «Пульса» обращается к
+«По Делу» по `/api/integrations/puls/…`, а backend «По Делу» — к «Пульсу» по `/api/integration/v1/…` с заголовком
+`Authorization: Bearer puls_…` и без cookie. Обратный прокси перед «Пульсом» должен пропускать `/api/integration/`
+так же, как остальной `/api/` (в `nginx.conf` и `Caddyfile.example` из поставки так и есть), а сеть — разрешать
+запросы между серверами в обе стороны. Адреса «По Делу» ограничивает `PODELU_ALLOWED_HOSTS`, адреса «Пульса» на
+стороне «По Делу» — её переменная `PULS_ALLOWED_HOSTS`. Проверка: «Интеграции → «По Делу» → Проверить связь» в
+«Пульсе» и «Проверить подключение» в «По Делу».
 
 Если «По Делу» работает на той же машине, backend «Пульса» обращается к ней по тому же адресу, что и
 сотрудники (через HTTPS-прокси сервера или по `http://<адрес сервера>:39665`): контейнеры систем в разных сетях
@@ -241,7 +249,7 @@ docker compose exec backend python scripts/org_transfer.py import-csv /tmp/peopl
 15 6 * * * cd /opt/puls && docker compose exec -T backend python scripts/org_transfer.py sync-ad --create-missing --actor admin --apply >> /var/log/puls-ad-sync.log 2>&1
 ```
 
-Подключение к каталогу берётся из «Администрирование → Настройки → Вход через домен», параметры синхронизации — со
+Подключение к каталогу берётся из «Интеграции → Вход через домен», параметры синхронизации — со
 страницы «Импорт и экспорт → Active Directory».
 
 # Резервное копирование и восстановление
@@ -287,7 +295,7 @@ sudo docker compose start backend frontend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.4.0
+sudo sh deploy/update.sh v0.5.0
 ```
 
 Скрипт: копия `pre-update` → получение версии из git (ветка — только перемоткой вперёд) → сборка и перезапуск
@@ -393,13 +401,13 @@ sudo docker compose logs backup              # резервные копии
 cd puls_proekta
 docker compose build
 docker pull postgres:16-alpine
-docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.4.0-images.tar.gz
+docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.5.0-images.tar.gz
 ```
 
 На сервере:
 
 ```bash
-gunzip -c puls-0.4.0-images.tar.gz | sudo docker load
+gunzip -c puls-0.5.0-images.tar.gz | sudo docker load
 cd /opt/puls
 sudo docker compose up -d          # без --build: используются загруженные образы
 ```
@@ -415,7 +423,7 @@ sudo docker compose up -d          # без --build: используются з
 | backend `unhealthy`, в журнале ошибка миграции | Восстановите копию `pre-update`, верните прежнюю версию, передайте журнал разработчику |
 | Страница открывается, вход «Ошибка сети» | backend не готов: `docker compose ps`, `docker compose logs backend` |
 | После входа снова открывается страница входа | `SESSION_COOKIE_SECURE=true`, а система открыта по HTTP: откройте по HTTPS или верните `false` |
-| Сотрудники домена не входят | «Настройки → Вход через домен → Проверить подключение»; доступность сервера каталога из контейнера |
+| Сотрудники домена не входят | «Интеграции → Вход через домен → Проверить подключение»; доступность сервера каталога из контейнера |
 | backend перезапускается, в журнале `BOOTSTRAP_ADMIN_PASSWORD: Пароль должен быть не короче 8 символов` | База пустая, а пароль первого администратора короткий. Новая установка — задайте пароль длиннее; переход с 1.0.x — оставьте `BOOTSTRAP_ADMIN_PASSWORD` пустым и перенесите базу (`docker compose --profile migrate run --rm legacy-import`), затем `docker compose up -d` |
 | После запуска «Пульса» перестали работать домены или другие системы на машине; после `docker compose down` всё вернулось | Диапазон адресов сети Docker совпал с сетью компании — задайте свой диапазон (раздел «Рядом с другими системами на одной машине») |
 | Перенос 1.0.x: «В базе 0.2 уже есть данные» | Перенос — только в пустую базу. Для повторной репетиции используйте `--dry-run`. Если в базе только администратор из `BOOTSTRAP_ADMIN_PASSWORD` (backend запускали до переноса) — повторите перенос с `--replace` |

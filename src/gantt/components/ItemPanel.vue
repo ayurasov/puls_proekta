@@ -1,5 +1,5 @@
 <script setup>
-import { computed, inject, reactive, ref, watch } from 'vue'
+import { computed, inject, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import SegmentedControl from '../../components/common/SegmentedControl.vue'
@@ -8,7 +8,8 @@ import ColorPicker from './ColorPicker.vue'
 import ItemComments from './ItemComments.vue'
 import ItemHistory from './ItemHistory.vue'
 import JiraIssueCard from './JiraIssueCard.vue'
-import { issueKeyFromUrl, jiraLinkFromInput } from '../jira'
+import PodeluTaskList from '../../components/integrations/PodeluTaskList.vue'
+import { ISSUE_KEY_RE, issueKeyFromLinks, jiraLinkFromInput } from '../jira'
 import { STATUSES, STATUS_BY_KEY, DEPENDENCY_TYPES, resolveColor } from '../domain/colors'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { resolveEnd } from '../domain/calendar'
@@ -57,17 +58,56 @@ function commitText(field) {
   if (field === 'jiraUrl') {
     // Ключ задачи (ABC-123) превращается в ссылку на подключённую Jira
     const link = jiraLinkFromInput(value, jira.state.baseUrl)
+    // Слова из названия (поиск по подсказкам) без выбора задачи — поле возвращается к прежней ссылке без ошибки
+    if (link.error && jira.state.connected && !/^https?:/i.test(value) && !ISSUE_KEY_RE.test(value.toUpperCase())) {
+      drafts.jiraUrl = item.value.jiraUrl || ''
+      return
+    }
     if (link.error) { ui.error(link.error); return }
     drafts.jiraUrl = link.url || ''
     if ((item.value.jiraUrl || '') !== (link.url || '')) {
       save({ jiraUrl: link.url }, link.url ? 'Задача в Jira' : 'Отвязка от Jira')
-      const key = issueKeyFromUrl(link.url, jira.state.baseUrl)
+      const key = issueKeyFromLinks(link.url, jira.state.baseUrl, jira.state.linkUrls)
       if (key) jira.fetchKeys([key])
     }
     return
   }
   if ((item.value[field] || '') !== value) save({ [field]: value || null })
 }
+
+// Подсказки задач Jira при вводе слов из названия: выбрать задачу, не зная её ключа
+const suggestions = ref([])
+const suggestBusy = ref(false)
+let suggestTimer = null
+let suggestSeq = 0
+watch(() => drafts.jiraUrl, (value) => {
+  clearTimeout(suggestTimer)
+  const text = (value || '').trim()
+  if (focused.value !== 'jiraUrl' || readonly.value || !jira.state.connected || text.length < 3 || /^https?:/i.test(text)
+      || (ISSUE_KEY_RE.test(text.toUpperCase()) && text === item.value.jiraUrl)) {
+    suggestions.value = []
+    return
+  }
+  suggestTimer = setTimeout(async () => {
+    const seq = ++suggestSeq
+    suggestBusy.value = true
+    try {
+      const found = await jira.suggest(text)
+      if (seq === suggestSeq && focused.value === 'jiraUrl') suggestions.value = found
+    } catch { if (seq === suggestSeq) suggestions.value = [] } finally { if (seq === suggestSeq) suggestBusy.value = false }
+  }, 350)
+})
+function pickSuggestion(issue) {
+  drafts.jiraUrl = issue.url
+  suggestions.value = []
+  document.activeElement?.blur?.()
+}
+function hideSuggestions() { setTimeout(() => { suggestions.value = [] }, 150) }
+onBeforeUnmount(() => clearTimeout(suggestTimer))
+const foreignHost = computed(() => jira.foreignHostFor(item.value))
+// Задачи «По Делу», которые ссылаются на эту строку плана (ADR-0010)
+const podeluTasks = inject('podeluTasks', null)
+const rowPodeluTasks = computed(() => (podeluTasks?.state.enabled ? podeluTasks.forItem(editor.state.plan?.id, item.value.key) : []))
 
 const typeLabel = computed(() => ({ task: 'Задача', milestone: 'Веха', group: 'Группа' })[item.value.type])
 const status = computed(() => STATUS_BY_KEY[item.value.status || 'new'] || STATUS_BY_KEY.new)
@@ -449,12 +489,32 @@ function duplicate() {
           <label class="field">
             <span class="field-label">Задача в Jira</span>
             <span class="with-action">
-              <input v-model="drafts.jiraUrl" class="input" :readonly="readonly" maxlength="2000" data-testid="item-jira"
-                     :placeholder="jira.state.connected ? 'ABC-123 или ссылка на задачу' : 'https://jira.example.com/browse/PROJ-123'"
-                     @focus="focused = 'jiraUrl'" @blur="commitText('jiraUrl')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="cancelText('jiraUrl', $event)" />
+              <input v-model="drafts.jiraUrl" class="input" :readonly="readonly" maxlength="2000" data-testid="item-jira" autocomplete="off"
+                     :placeholder="jira.state.connected ? 'ABC-123, ссылка или слова из названия' : 'https://jira.example.com/browse/PROJ-123'"
+                     role="combobox" :aria-expanded="suggestions.length > 0" aria-autocomplete="list"
+                     @focus="focused = 'jiraUrl'" @blur="hideSuggestions(); commitText('jiraUrl')" @keydown.enter.prevent="$event.target.blur()" @keydown.esc.stop.prevent="suggestions = []; cancelText('jiraUrl', $event)" />
               <a v-if="item.jiraUrl" class="btn btn-icon" :href="item.jiraUrl" target="_blank" rel="noopener noreferrer" title="Открыть в Jira"><AppIcon name="external" :size="15" /></a>
             </span>
+            <span v-if="suggestBusy && !suggestions.length" class="field-hint">Ищем в Jira…</span>
           </label>
+          <ul v-if="suggestions.length" class="suggest scroll-thin" role="listbox" data-testid="item-jira-suggest">
+            <li v-for="issue in suggestions" :key="issue.key" role="option" @mousedown.prevent="pickSuggestion(issue)">
+              <span class="s-key">{{ issue.key }}</span>
+              <span class="s-summary ellipsis">{{ issue.summary }}</span>
+              <span class="jira-status" :class="`cat-${issue.statusCategory}`">{{ issue.status }}</span>
+            </li>
+          </ul>
+          <p v-if="foreignHost" class="foreign small" data-testid="item-jira-foreign">
+            <AppIcon name="warning" :size="13" /> Ссылка ведёт на {{ foreignHost }}, а подключена Jira {{ jira.state.baseUrl }} — данные задачи не загружаются.
+            Если это та же Jira, администратор добавит адрес в «Интеграции → Jira → Другие адреса этой Jira».
+          </p>
+        </div>
+      </section>
+
+      <section v-if="podeluTasks?.state.enabled && rowPodeluTasks.length" class="sec" data-testid="item-podelu">
+        <div class="sec-head"><span class="sec-title">Задачи в «По Делу»</span><span class="sec-count">{{ rowPodeluTasks.length }}</span></div>
+        <div class="sec-card">
+          <PodeluTaskList :tasks="rowPodeluTasks" :today="editor.state.today" compact />
         </div>
       </section>
 
@@ -563,4 +623,11 @@ function duplicate() {
   .number-suffix { width: 84px; }
   .range::-webkit-slider-thumb { width: 24px; height: 24px; }
 }
+.sec-count { margin-left: 6px; font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 999px; background: #dcfff1; color: #216e4e; }
+.suggest { list-style: none; margin: 4px 0 0; padding: 4px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-2, 0 8px 24px rgba(15, 23, 42, 0.12)); max-height: 240px; overflow: auto; }
+.suggest li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+.suggest li:hover { background: var(--color-hover); }
+.s-key { font-weight: 700; font-size: 12px; color: #0052cc; }
+.foreign { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; color: #8a5a00; background: var(--color-warning-soft); border-radius: var(--radius-sm); padding: 6px 8px; line-height: 1.45; }
+.foreign :deep(svg) { flex-shrink: 0; margin-top: 2px; }
 </style>

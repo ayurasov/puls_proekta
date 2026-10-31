@@ -18,6 +18,7 @@ import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { startJiraStub } from '../../e2e/jiraStub.mjs'
 
 const require = createRequire(import.meta.url)
 const { chromium } = require('playwright')
@@ -38,37 +39,46 @@ const env = {
   DEMO_JIRA_URL: JIRA,
 }
 
-// Заглушка Jira Server: задачи портала поставщиков (сегодня по сценарию — 30.10.2026, как в seed_demo.py)
+// Заглушка Jira Data Center (e2e/jiraStub.mjs): проект портала поставщиков MER с релизами, спринтами и связями
+// (сегодня по сценарию — 30.10.2026, как в seed_demo.py)
 const day = (offset) => new Date(Date.UTC(2026, 9, 30 + offset)).toISOString().slice(0, 10)
 const status = (name, key) => ({ name, statusCategory: { key } })
-const JIRA_ISSUES = {
-  'MER-12': { summary: 'Техническое задание', status: status('Готово', 'done'), assignee: { displayName: 'Ковалёва Мария' }, duedate: day(-25), resolutiondate: `${day(-22)}T17:40:00.000+0300`, issuetype: { name: 'Задача' } },
-  'MER-31': { summary: 'Личный кабинет поставщика', status: status('В работе', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(30), timespent: 3600 * 132, timeestimate: 3600 * 68, issuetype: { name: 'История' } },
-  'MER-32': { summary: 'Интеграция с ERP заказчика', status: status('Ожидание заказчика', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(54), timespent: 3600 * 40, timeestimate: 3600 * 120, issuetype: { name: 'Задача' }, priority: { name: 'Высокий' } },
-  'MER-35': { summary: 'Электронная подпись документов (КЭП)', status: status('В работе', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(35), timespent: 3600 * 10, timeestimate: 3600 * 70, issuetype: { name: 'История' } },
-  'MER-40': { summary: 'Отчёт о поставках для заказчика', status: status('Открыта', 'new'), duedate: day(48), issuetype: { name: 'История' } },
-  'MER-41': { summary: 'Уведомления поставщиков по почте', status: status('Открыта', 'new'), duedate: day(52), issuetype: { name: 'История' } },
-  'MER-42': { summary: 'Нагрузочное тестирование портала', status: status('Открыта', 'new'), duedate: day(60), issuetype: { name: 'Задача' } },
+const TYPE = { task: { name: 'Задача', hierarchyLevel: 0 }, story: { name: 'История', hierarchyLevel: 0 }, epic: { name: 'Эпик', hierarchyLevel: 1 } }
+const jiraData = {
+  projects: [{ id: '10010', key: 'MER', name: 'Портал поставщиков «Меридиан»' }, { id: '10011', key: 'OPS', name: 'Эксплуатация' }],
+  versions: { MER: [
+    { id: '30001', name: 'Этап 2 — разработка', released: false, releaseDate: day(52), startDate: day(-9) },
+    { id: '30002', name: 'Опытная эксплуатация', released: false, releaseDate: day(105) },
+    { id: '30000', name: 'Этап 1 — ТЗ', released: true, releaseDate: day(-12) },
+  ], OPS: [] },
+  boards: [{ id: 1, name: 'Доска MER', type: 'scrum', location: { projectKey: 'MER' } }],
+  sprints: { 1: [
+    { id: 11, name: 'Спринт 11', state: 'active', startDate: `${day(-10)}T09:00:00.000+03:00`, endDate: `${day(4)}T18:00:00.000+03:00` },
+    { id: 12, name: 'Спринт 12', state: 'future', startDate: `${day(4)}T09:00:00.000+03:00`, endDate: `${day(18)}T18:00:00.000+03:00` },
+  ] },
+  issues: {
+    'MER-12': { summary: 'Техническое задание', issuetype: TYPE.task, status: status('Готово', 'done'), assignee: { displayName: 'Ковалёва Мария' }, duedate: day(-25), resolutiondate: `${day(-22)}T17:40:00.000+0300`, fixVersions: ['30000'] },
+    'MER-30': { summary: 'Кабинет поставщика', issuetype: TYPE.epic, status: status('В работе', 'indeterminate') },
+    'MER-31': { summary: 'Личный кабинет поставщика', issuetype: TYPE.story, status: status('В работе', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(30), timespent: 3600 * 132, timeestimate: 3600 * 68, epic: 'MER-30', sprint: 11, fixVersions: ['30001'] },
+    'MER-32': { summary: 'Интеграция с ERP заказчика', issuetype: TYPE.task, status: status('Ожидание заказчика', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(54), timespent: 3600 * 40, timeestimate: 3600 * 120, priority: { name: 'Высокий' }, fixVersions: ['30001'] },
+    'MER-35': { summary: 'Электронная подпись документов (КЭП)', issuetype: TYPE.story, status: status('В работе', 'indeterminate'), assignee: { displayName: 'Лебедев Дмитрий' }, duedate: day(35), timespent: 3600 * 10, timeestimate: 3600 * 70, epic: 'MER-30', sprint: 11 },
+    'MER-40': { summary: 'Отчёт о поставках для заказчика', issuetype: TYPE.story, status: status('Открыта', 'new'), duedate: day(48), epic: 'MER-30', sprint: 12, fixVersions: ['30001'], links: { blockedBy: ['MER-31'] } },
+    'MER-41': { summary: 'Уведомления поставщиков по почте', issuetype: TYPE.story, status: status('Открыта', 'new'), duedate: day(52), epic: 'MER-30', sprint: 12 },
+    'MER-42': { summary: 'Нагрузочное тестирование портала', issuetype: TYPE.task, status: status('Открыта', 'new'), duedate: day(60), fixVersions: ['30002'], links: { blockedBy: ['MER-40'] } },
+  },
 }
-const jira = createServer((req, res) => {
-  let body = ''
-  req.on('data', (chunk) => { body += chunk })
-  req.on('end', () => {
-    const send = (code, data) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(data)) }
-    const path = req.url.split('?')[0].replace('/rest/api/2/', '')
-    if (path === 'myself') return send(200, { displayName: 'svc-puls (только чтение)' })
-    if (path === 'field') return send(200, [{ id: 'duedate', name: 'Срок', schema: { type: 'date' } }, { id: 'customfield_10015', name: 'Start date', custom: true, schema: { type: 'date' } }])
-    if (path === 'serverInfo') return send(200, { version: '9.12.2', deploymentType: 'DataCenter' })
-    if (path === 'search') {
-      const { jql } = JSON.parse(body || '{}')
-      const keys = jql.startsWith('key in') ? jql.slice(jql.indexOf('(') + 1, jql.lastIndexOf(')')).split(',').map((k) => k.trim()) : Object.keys(JIRA_ISSUES)
-      const found = keys.filter((k) => JIRA_ISSUES[k]).map((key) => ({ key, fields: JIRA_ISSUES[key] }))
-      return send(200, { issues: found, total: found.length })
-    }
-    return send(404, { errorMessages: ['Not found'] })
-  })
-})
-await new Promise((resolveListen) => jira.listen(JIRA_PORT, '127.0.0.1', resolveListen))
+const jira = await startJiraStub({ port: JIRA_PORT, flavor: 'server', token: 'demo-token', data: jiraData })
+
+// Задачи «По Делу», которые ссылаются на портал поставщиков (проект 1, основной план 1)
+const PODELU_KEY = 'podelu_' + 'demo'.repeat(11)
+const PODELU_TASKS = [
+  { id: 'p1', title: 'Согласовать с заказчиком доступ к тестовой ERP', status: 'in_progress', statusLabel: 'В работе', done: false, assignee: { name: 'Морозов Алексей' }, due: day(-1), path: '/my-tasks?task=p1', planId: 1, itemKey: 't22', itemName: 'Интеграция с ERP заказчика' },
+  { id: 'p2', title: 'Подготовить сертификаты КЭП для стенда', status: 'open', statusLabel: 'Открыта', done: false, assignee: { name: 'Лебедев Дмитрий' }, due: day(6), path: '/my-tasks?task=p2', planId: 1, itemKey: 't23', itemName: 'Электронная подпись документов (КЭП)' },
+  { id: 'p3', title: 'Еженедельный статус для АО «Меридиан»', status: 'open', statusLabel: 'Открыта', done: false, assignee: { name: 'Морозов Алексей' }, due: day(4), path: '/my-tasks?task=p3', planId: null, itemKey: null },
+  { id: 'p4', title: 'Протокол встречи по ТЗ', status: 'done', statusLabel: 'Выполнена', done: true, assignee: { name: 'Ковалёва Мария' }, due: day(-20), path: '/my-tasks?task=p4', planId: 1, itemKey: 't13', itemName: 'Техническое задание' },
+]
+function podeluTasksFor(path) { return path.includes('/projects/1/') ? PODELU_TASKS : [] }
+function podeluCounts() { return { 1: { total: PODELU_TASKS.length, open: PODELU_TASKS.filter((t) => !t.done).length } } }
 
 // Заглушка «По Делу»: CSRF-токен, вход сервисной учётной записи и /api/auth/me — для проверки подключения
 const podeluAccount = { id: 'svc', name: 'Сервис «Пульса»', login: 'svc-puls', globalRole: 'admin', capabilities: [], isActive: true }
@@ -82,6 +92,12 @@ const podelu = createServer((req, res) => {
     if (path === '/api/auth/login') return send(200, { user: podeluAccount }, cookie)
     if (path === '/api/auth/logout') return send(200, { message: 'logged_out' })
     if (path === '/api/auth/me') return send(200, podeluAccount)
+    // Ответная интеграция (ключ «По Делу» для «Пульса»): проверка связи и задачи, связанные с проектами
+    if (req.headers.authorization === `Bearer ${PODELU_KEY}`) {
+      if (path === '/api/integrations/puls/ping') return send(200, { ok: true, app: 'podelu', name: 'По Делу', version: '1.5.0', linksEnabled: true })
+      if (/^\/api\/integrations\/puls\/projects\/\d+\/tasks$/.test(path)) return send(200, { tasks: podeluTasksFor(path), truncated: false })
+      if (path === '/api/integrations/puls/summary') return send(200, { counts: podeluCounts() })
+    }
     return send(404, { error: 'not_found' })
   })
 })
@@ -266,9 +282,10 @@ async function userGuide() {
   await closeOverlays(page)
   await page.click('[data-testid=jira-menu]')
   await page.click('[data-testid=jira-import-open]')
-  await page.fill('[data-testid=jira-import-keys]', 'MER-40, MER-41, MER-42, MER-31')
-  await page.click('[data-testid=jira-import-search]')
-  await page.waitForSelector('[data-testid=jira-import-list]')
+  await page.selectOption('[data-testid=jira-import-project]', 'MER')
+  await page.waitForSelector('[data-testid=jira-import-list] .issue')
+  await page.click('[data-testid=jira-import-grouping] button:has-text("По спринтам")')
+  await page.waitForTimeout(800)
   await shot(page, '26-jira-import')
   await closeOverlays(page)
 
@@ -313,11 +330,13 @@ async function adminGuide() {
   await page.waitForTimeout(500)
   await shot(page, '06-audit')
 
-  await page.goto(BASE + '/admin/settings')
-  await page.waitForTimeout(800)
+  await page.goto(BASE + '/admin/integrations/ldap')
+  await page.waitForSelector('[data-testid=ldap-settings]')
+  await page.waitForTimeout(500)
   await shot(page, '07-settings-ldap')
-  await page.click('.segmented button:has-text("Производственный календарь")')
-  await page.waitForTimeout(600)
+  await page.goto(BASE + '/admin/settings')
+  await page.waitForSelector('[data-testid=calendar-settings]')
+  await page.waitForTimeout(500)
   await shot(page, '08-calendar')
 
   await page.goto(BASE + '/admin/trash')
@@ -336,19 +355,46 @@ async function adminGuide() {
   await page.waitForTimeout(800)
   await shot(page, '12-org-transfer')
 
-  await page.goto(BASE + '/admin/integrations')
-  await page.waitForSelector('[data-testid=jira-settings]')
-  await page.click('[data-testid=jira-test]')
-  await page.locator('[data-testid=jira-status]', { hasText: 'Соединение установлено' }).waitFor()
-  await shot(page, '13-integrations')
-
+  // Интеграции: обзор, Jira (проверка и диагностика), «По Делу» (обмен ключами и структура)
+  await page.goto(BASE + '/admin/integrations/podelu')
+  await page.click('[data-testid=podelu-links-issue]')
+  await page.fill('[data-testid=podelu-links-url]', PODELU)
+  await page.fill('[data-testid=podelu-links-key]', PODELU_KEY)
+  await page.click('[data-testid=podelu-links-check]')
+  await page.locator('[data-testid=podelu-links-status]', { hasText: 'Связь установлена' }).waitFor()
+  await page.locator('[data-testid=podelu-links-enabled]').click()
+  await page.waitForTimeout(500)
   await page.locator('[data-testid=podelu-settings]').scrollIntoViewIfNeeded()
   await page.fill('[data-testid=podelu-url]', PODELU)
   await page.fill('[data-testid=podelu-login]', 'svc-puls')
   await page.fill('[data-testid=podelu-password]', 'пароль-сервиса')
   await page.click('[data-testid=podelu-test]')
   await page.locator('[data-testid=podelu-status]', { hasText: 'Соединение установлено' }).waitFor()
-  await page.locator('[data-testid=podelu-settings]').screenshot({ path: join(root, 'docs/manuals/images/admin/15-podelu.png') })
+  await page.click('[data-testid=podelu-save]')
+  await page.locator('[data-testid=podelu-status]', { hasText: 'Подключение сохранено' }).waitFor()
+  await page.locator('[data-testid=podelu-links]').scrollIntoViewIfNeeded()
+  await page.locator('[data-testid=podelu-links]').screenshot({ path: join(root, 'docs/manuals/images/admin/15-podelu.png') })
+  // Для руководства пользователя: задачи «По Делу» на проекте
+  await openProject(page, PORTAL)
+  await page.click('[data-testid=podelu-tasks-open]')
+  await page.waitForSelector('[data-testid=podelu-tasks-list]')
+  await page.waitForTimeout(400)
+  await page.screenshot({ path: join(root, 'docs/manuals/images/user/29-podelu-tasks.png') })
+  await closeOverlays(page)
+
+  await page.goto(BASE + '/admin/integrations')
+  await page.waitForSelector('[data-testid=integration-podelu] .state-ok')
+  await shot(page, '13-integrations')
+
+  await page.goto(BASE + '/admin/integrations/jira')
+  await page.waitForSelector('[data-testid=jira-settings]')
+  await page.fill('[data-testid=jira-diag-key]', 'MER-31')
+  await page.click('[data-testid=jira-diagnose]')
+  await page.waitForSelector('[data-testid=jira-diag-steps]')
+  await page.click('[data-testid=jira-test]')
+  await page.locator('[data-testid=jira-status]', { hasText: 'Соединение установлено' }).waitFor()
+  await page.locator('[data-testid=jira-settings]').screenshot({ path: join(root, 'docs/manuals/images/admin/16-jira.png') })
+  await page.locator('[data-testid=jira-diagnostics]').screenshot({ path: join(root, 'docs/manuals/images/admin/17-jira-diagnostics.png') })
 
   await page.goto(BASE + '/admin/access')
   await page.click('.segmented button:has-text("Правила")')

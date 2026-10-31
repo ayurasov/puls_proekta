@@ -64,6 +64,8 @@ class FakeJira:
             ])
         if path == "serverInfo":
             return FakeResponse(200, {"version": "8.20.10", "deploymentType": "Server", "serverTitle": "Jira"})
+        if path == "project":
+            return FakeResponse(200, [{"key": "ABC", "name": "Проект ABC"}])
         if path == "search":
             body = kwargs["json"]
             jql = body["jql"]
@@ -128,16 +130,18 @@ def test_connection_is_admin_only_and_token_never_returned(app, admin, jira):
     assert editor.put("/api/settings/jira", json={"baseUrl": BASE}).status_code == 403
     conn = _connect(admin)
     assert conn == {"baseUrl": BASE, "instanceType": "server_basic", "login": "svc-puls", "acceptInvalidCerts": False,
-                    "hasToken": True, "startField": "", "endField": "duedate"}
+                    "hasToken": True, "startField": "", "endField": "duedate", "linkUrls": []}
     with app.app_context():
         stored = db.session.get(AppSetting, "jira").value
         assert "секрет" not in json.dumps(stored, ensure_ascii=False)
     assert "секрет" not in admin.get("/api/settings/jira").get_data(as_text=True)
-    assert editor.get("/api/jira").get_json() == {"connected": True, "baseUrl": BASE, "hasStartField": False}
+    assert editor.get("/api/jira").get_json() == {"connected": True, "baseUrl": BASE, "hasStartField": False,
+                                                  "linkUrls": []}
 
     # Проверка без нового пароля — сохранённым; пароль в UTF-8 (кириллица)
     res = admin.post("/api/settings/jira/test", json={"baseUrl": BASE, "instanceType": "server_basic", "login": "svc-puls"})
-    assert res.get_json() == {"ok": True, "user": "Сервисная учётка", "version": "8.20.10", "deploymentType": "Server"}
+    assert res.get_json() == {"ok": True, "user": "Сервисная учётка", "version": "8.20.10", "deploymentType": "Server",
+                              "baseUrl": "", "projects": 1, "warnings": []}
     assert jira.auth == ("svc-puls".encode(), "секрет".encode())
     # Сохранённый пароль не уходит на другой адрес
     res = admin.put("/api/settings/jira", json={"baseUrl": "https://evil.example.ru", "login": "svc-puls"})

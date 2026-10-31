@@ -120,8 +120,8 @@ const fetchedAt = computed(() => {
         <div class="grow">
           <h3>Подключение</h3>
           <p v-if="status.configured" class="hint">«По Делу» <b class="mono">{{ status.baseUrl }}</b>, учётная запись <b>{{ status.login }}</b> — из раздела
-            <router-link to="/admin/integrations">«Интеграции»</router-link>.</p>
-          <div v-else class="status info" data-testid="podelu-not-configured"><AppIcon name="warning" :size="14" /><span>«По Делу» не подключена: укажите адрес, логин и пароль сервисной учётной записи в разделе <router-link to="/admin/integrations">«Администрирование → Интеграции»</router-link>.</span></div>
+            <router-link to="/admin/integrations/podelu">«Интеграции → «По Делу»»</router-link>.</p>
+          <div v-else class="status info" data-testid="podelu-not-configured"><AppIcon name="warning" :size="14" /><span>«По Делу» не подключена: укажите адрес, логин и пароль сервисной учётной записи в разделе <router-link to="/admin/integrations/podelu">«Интеграции → «По Делу»»</router-link>.</span></div>
           <p class="hint">Структура (подразделения с типами, порядком и руководителями) и сотрудники загружаются по тем же правилам, что файлы на вкладках «Структура» и «Сотрудники»:
             подразделение, уже загруженное из «По Делу», узнаётся по её идентификатору — переименование, перенос, тип и порядок там меняют его на месте (с сотрудниками,
             руководителями и доступами); остальные сопоставляются по пути от корня. Сотрудники — по идентификатору «По Делу», email и логину. Ничего не удаляется,

@@ -108,6 +108,10 @@ const JIRA_AUTO_LABELS = { status: 'статус', dates: 'сроки', progress
 const jiraAutoLabel = computed(() => jira.autoFields().map((f) => JIRA_AUTO_LABELS[f] || f).join(', '))
 // Число на кнопке J — строки, где в Jira иной статус, сроки или прогресс (одно лишь название не считается)
 const jiraDiffering = computed(() => (jira.state.loaded ? jira.linkedItems().filter((item) => jira.differs(item)).length : 0))
+const jiraNew = computed(() => jira.state.source?.newCount || 0)
+const jiraSource = computed(() => jira.sourceSetting())
+const jiraForeign = computed(() => jira.state.foreign || [])
+const jiraForeignRows = computed(() => jiraForeign.value.reduce((sum, f) => sum + f.rows, 0))
 function jiraAction(name) {
   menu.value = null
   if (name === 'refresh') jira.load({ refresh: true })
@@ -183,9 +187,10 @@ function toggleColumn(column) {
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Статистика" @click="emit('open-modal', 'stats')"><AppIcon name="chart" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="История и сохранённые версии" data-testid="history" @click="emit('open-modal', 'history')"><AppIcon name="history" /></button>
       <button class="btn btn-ghost btn-icon btn-sm" type="button" title="Настройки графика" @click="emit('open-modal', 'settings')"><AppIcon name="settings" /></button>
-      <button v-if="jira.state.connected" class="btn btn-ghost btn-sm jira-btn" :class="{ 'has-diff': jiraDiffering }" type="button"
-              :title="jiraDiffering ? `Jira: в ${jiraDiffering} строках данные расходятся` : 'Jira'" data-testid="jira-menu" @click="open('jira', $event)">
-        <span class="jira-mark" aria-hidden="true">J</span><span v-if="jiraDiffering" class="count">{{ jiraDiffering }}</span>
+      <button v-if="jira.state.connected" class="btn btn-ghost btn-sm jira-btn" :class="{ 'has-diff': jiraDiffering, 'has-new': jiraNew }" type="button"
+              :title="[jiraDiffering ? `Jira: в ${jiraDiffering} строках данные расходятся` : 'Jira', jiraNew ? `новых задач в Jira: ${jiraNew}` : ''].filter(Boolean).join(' · ')"
+              data-testid="jira-menu" @click="open('jira', $event)">
+        <span class="jira-mark" aria-hidden="true">J</span><span v-if="jiraDiffering" class="count">{{ jiraDiffering }}</span><span v-if="jiraNew" class="new-dot" aria-hidden="true" />
       </button>
       <button class="btn btn-sm" type="button" :disabled="exporting" title="Экспорт" @click="open('export', $event)">
         <AppIcon name="download" :size="14" /> <span class="export-label">{{ exporting ? 'Готовим…' : 'Экспорт' }}</span>
@@ -205,15 +210,28 @@ function toggleColumn(column) {
 
     <PopupMenu v-if="menu?.type === 'jira'" :anchor="menu.anchor" align="end" @close="menu = null">
       <div class="menu-label">Jira · строк с задачами: {{ jiraLinked }}</div>
+      <button v-if="jiraNew && editor.canEdit" class="menu-item menu-item-accent" type="button" data-testid="jira-new-open" @click="jiraAction('jira-import')">
+        <AppIcon name="plus" /> Новые задачи в {{ jiraSource.project || 'источнике' }}<span class="menu-hint menu-hint-accent">{{ jiraNew }}</span>
+      </button>
       <button class="menu-item" type="button" :disabled="jira.state.loading || !jiraLinked" @click="jiraAction('refresh')">
         <AppIcon name="refresh" /> {{ jira.state.loading ? 'Обновляем…' : 'Обновить из Jira' }}
       </button>
-      <button class="menu-item" type="button" :disabled="!jiraLinked" data-testid="jira-sync-open" @click="jiraAction('jira-sync')">
-        <AppIcon name="checklist" /> Сверка с Jira…<span v-if="jiraDiffering" class="menu-hint">расходится: {{ jiraDiffering }}</span>
+      <button class="menu-item" type="button" :disabled="!jiraLinked && !editor.canEdit" data-testid="jira-sync-open" @click="jiraAction('jira-sync')">
+        <AppIcon name="checklist" /> Сверка и настройки…<span v-if="jiraDiffering" class="menu-hint">расходится: {{ jiraDiffering }}</span>
       </button>
-      <button v-if="editor.canEdit" class="menu-item" type="button" data-testid="jira-import-open" @click="jiraAction('jira-import')"><AppIcon name="plus" /> Задачи из Jira…</button>
+      <template v-if="editor.canEdit">
+        <div class="menu-separator" />
+        <button class="menu-item" type="button" data-testid="jira-import-open" @click="jiraAction('jira-import')"><AppIcon name="search" /> Задачи из Jira…</button>
+        <button class="menu-item" type="button" data-testid="jira-versions-open" @click="jiraAction('jira-versions')"><AppIcon name="diamond" /> Релизы Jira → вехи…</button>
+      </template>
+      <div v-if="jiraSource.project || jiraSource.jql" class="menu-note small" data-testid="jira-source-note">Источник задач: {{ jiraSource.project || 'запрос JQL' }}{{ jiraSource.project && jiraSource.jql ? ' + JQL' : '' }}</div>
       <div v-if="jira.autoFields().length" class="menu-note small" data-testid="jira-auto-note">Автоперенос: {{ jiraAutoLabel }}</div>
-      <div v-if="jira.state.error" class="menu-note small">{{ jira.state.error }}</div>
+      <div v-if="jiraForeignRows" class="menu-note small menu-warn" data-testid="jira-foreign-note">
+        {{ jiraForeignRows }} {{ jiraForeignRows === 1 ? 'строка ссылается' : 'строк ссылаются' }} на задачи по адресу {{ jiraForeign.map((f) => f.host).join(', ') }} — это не подключённая Jira, статусы не загружаются.
+        Если это та же Jira, администратор добавит адрес в «Интеграции → Jira → Другие адреса».
+      </div>
+      <div v-if="jira.state.error" class="menu-note small menu-error">{{ jira.state.error }}</div>
+      <div v-if="jira.state.source?.error" class="menu-note small menu-warn">Источник задач: {{ jira.state.source.error }}</div>
     </PopupMenu>
 
     <PopupMenu v-if="menu?.type === 'filters'" :anchor="menu.anchor" :min-width="660" @close="menu = null">
@@ -261,8 +279,14 @@ function toggleColumn(column) {
 <style scoped>
 .jira-btn { gap: 4px; }
 .jira-btn.has-diff { color: #0052cc; }
+.jira-btn { position: relative; }
+.new-dot { position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: #f59e0b; box-shadow: 0 0 0 2px var(--color-surface); }
+.menu-item-accent { color: #0052cc; font-weight: 600; }
+.menu-hint-accent { background: #fff4d6; color: #8a5a00; border-radius: 999px; padding: 0 7px; font-weight: 700; }
+.menu-warn { color: #a15c07; max-width: 320px; white-space: normal; line-height: 1.4; }
+.menu-error { color: var(--color-danger); }
 .jira-mark { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 4px; background: #0052cc; color: #fff; font-size: 11px; font-weight: 800; font-style: italic; line-height: 1; }
-.menu-note { padding: 6px 10px; color: var(--color-danger); max-width: 320px; line-height: 1.4; }
+.menu-note { padding: 6px 10px; color: var(--color-text-muted); max-width: 320px; line-height: 1.4; }
 .toolbar-wrap { flex-shrink: 0; background: var(--color-surface); border-bottom: 1px solid var(--color-border); container-type: inline-size; }
 .toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 8px 12px; }
 .group { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }

@@ -33,6 +33,13 @@ BASE_FIELDS = ("summary", "status", "assignee", "issuetype", "priority", "duedat
                "updated", "timeoriginalestimate", "timespent", "timeestimate", "progress")
 # Поле «Epic Link» Jira Software (Server/DC); в Cloud эпик — родитель задачи (поле parent)
 EPIC_LINK_SCHEMA = "com.pyxis.greenhopper.jira:gh-epic-link"
+# Поле «Sprint» Jira Software: в Server/DC — строки «…Sprint@…[id=5,name=…]», в Cloud — объекты
+SPRINT_SCHEMA = "com.pyxis.greenhopper.jira:gh-sprint"
+# Ключ проекта Jira: латиница, цифры и «_», начинается с буквы
+PROJECT_KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,49}$")
+VERSION_ID_RE = re.compile(r"^\d{1,18}$")
+# Связи «блокирует» — по названию типа или его направлениям (в русской Jira — «Блокирует», «блокирует»)
+BLOCKS_RE = re.compile(r"block|блок", re.IGNORECASE)
 EPIC_TYPE_NAMES = {"epic", "эпик"}
 SEARCH_BATCH = 100
 SEARCH_LIMIT = 1000
@@ -76,6 +83,22 @@ def check_base_url(base_url):
     host = parts.hostname.lower()
     if allowed and not any(host == h or (h.startswith(".") and (host.endswith(h) or host == h[1:])) for h in allowed):
         raise JiraError(f"Подключение к {host} запрещено настройками сервера (JIRA_ALLOWED_HOSTS)")
+    return url
+
+
+def check_link_url(url):
+    """Другой адрес этой же Jira (только для распознавания ссылок строк, запросы туда не идут):
+    http(s)://хост[:порт][/путь] без логина, параметров и якоря; JIRA_ALLOWED_HOSTS не применяется."""
+    url = (url or "").strip().rstrip("/")
+    if not re.match(r"^https?://", url, re.IGNORECASE):
+        raise JiraError(f"Адрес «{url[:80]}» должен начинаться с http:// или https://")
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018
+    except ValueError:
+        raise JiraError(f"Некорректный адрес «{url[:80]}»") from None
+    if not parts.hostname or "@" in parts.netloc or parts.query or parts.fragment or re.search(r"[\s\\%?#]", url):
+        raise JiraError(f"Адрес «{url[:80]}» — только https://хост[:порт][/путь]")
     return url
 
 
@@ -220,15 +243,169 @@ def normalize_issue(key, fields, base_url, field_map):
         "progress": issue_progress(fields),
         "epic": epic_key(fields, field_map),
         "isEpic": is_epic(fields),
+        "project": _project_key(key, fields),
+        "sprints": parse_sprints(fields.get(field_map.get("sprintField"))) if field_map.get("sprintField") else [],
+        "fixVersions": _versions(fields.get("fixVersions")),
+        "links": issue_links(fields.get("issuelinks")),
     }
 
 
-def request_fields(field_map, epics=False):
-    """Поля для запроса; epics — ещё родитель и «Epic Link», чтобы разложить задачи по эпикам."""
+def _project_key(key, fields):
+    project = fields.get("project")
+    if isinstance(project, dict) and isinstance(project.get("key"), str):
+        return project["key"].upper()
+    return key.rsplit("-", 1)[0]
+
+
+def _versions(value):
+    """fixVersions задачи → [{id, name, releaseDate}]."""
+    out = []
+    for v in value if isinstance(value, list) else []:
+        if isinstance(v, dict) and v.get("id") is not None:
+            out.append({"id": str(v["id"])[:20], "name": str(v.get("name") or "")[:255],
+                        "releaseDate": _date(v.get("releaseDate"))})
+    return out
+
+
+_SPRINT_KEYS = ("id", "rapidViewId", "state", "name", "goal", "startDate", "endDate", "completeDate", "activatedDate",
+                "sequence", "synced", "autoStartStop", "incompleteIssuesDestinationId")
+# Значение — до следующего известного «,ключ=» или до «]» в конце: в названии спринта бывают запятые
+_SPRINT_ATTR_RE = re.compile(r"(\w+)=(.*?)(?=,(?:" + "|".join(_SPRINT_KEYS) + r")=|\]$)")
+
+
+def parse_sprints(value):
+    """Спринты задачи: объекты Cloud ({id, name, state, startDate, endDate}) или строки Server/DC
+    «com.atlassian.greenhopper.service.sprint.Sprint@1f[id=5,…,state=ACTIVE,name=Спринт 5,startDate=…]» →
+    [{id, name, state, start, end}] по порядку (последний — текущий)."""
+    out = []
+    for raw in value if isinstance(value, list) else []:
+        if isinstance(raw, dict):
+            data = raw
+        elif isinstance(raw, str) and "[" in raw:
+            data = dict(_SPRINT_ATTR_RE.findall(raw[raw.index("[") + 1:]))
+        else:
+            continue
+        try:
+            sprint_id = int(data.get("id"))
+        except (TypeError, ValueError):
+            continue
+        start = data.get("startDate")
+        end = data.get("endDate")
+        out.append({"id": sprint_id, "name": str(data.get("name") or f"Спринт {sprint_id}")[:255],
+                    "state": str(data.get("state") or "").lower()[:20],
+                    "start": _date(start) if start != "<null>" else None,
+                    "end": _date(end) if end != "<null>" else None})
+    return out
+
+
+def issue_links(value):
+    """Связи «блокирует»: {blockedBy: [ключи задач, которые блокируют эту], blocks: [ключи, которые блокирует эта]}."""
+    blocked_by, blocks = [], []
+    for link in value if isinstance(value, list) else []:
+        if not isinstance(link, dict):
+            continue
+        link_type = link.get("type") if isinstance(link.get("type"), dict) else {}
+        names = " ".join(str(link_type.get(k) or "") for k in ("name", "inward", "outward"))
+        if not BLOCKS_RE.search(names):
+            continue
+        inward, outward = link.get("inwardIssue"), link.get("outwardIssue")
+        # inwardIssue — «эта задача is blocked by inwardIssue»; outwardIssue — «эта задача blocks outwardIssue»
+        if isinstance(inward, dict) and isinstance(inward.get("key"), str):
+            key = inward["key"].upper()
+            if ISSUE_KEY_RE.match(key) and key not in blocked_by:
+                blocked_by.append(key)
+        if isinstance(outward, dict) and isinstance(outward.get("key"), str):
+            key = outward["key"].upper()
+            if ISSUE_KEY_RE.match(key) and key not in blocks:
+                blocks.append(key)
+    return {"blockedBy": blocked_by[:20], "blocks": blocks[:20]}
+
+
+# ---------- построение JQL из фильтров «Задач из Jira» ----------
+
+# Категории статусов — по постоянным идентификаторам Jira (2 — «К выполнению», 4 — «В работе», 3 — «Готово»):
+# названия категорий в JQL зависят от языка Jira, идентификаторы одинаковы везде
+CATEGORY_JQL = {"new": "2", "indeterminate": "4", "done": "3"}
+ORDER_JQL = {"rank": "ORDER BY Rank ASC", "due": "ORDER BY duedate ASC, key ASC", "updated": "ORDER BY updated DESC",
+             "key": "ORDER BY key ASC", "created": "ORDER BY created DESC"}
+
+
+def jql_string(value):
+    """Строка в кавычках для JQL: обратная косая черта и кавычки экранируются, управляющие символы убираются."""
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", str(value))
+    return '"' + text.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def build_jql(filters, cloud=False, epic_field=None):
+    """Фильтры «Задач из Jira» → JQL. Все значения проверяются или берутся в кавычки: запрос сотрудника не может
+    дописать к JQL своё условие. filters: project (ключ или список), text, types (названия), categories
+    (new/indeterminate/done), version (id), sprint (id или "open"), epic (ключ), unassigned, onlyOpen, order."""
+    clauses = []
+    projects = filters.get("project")
+    projects = [projects] if isinstance(projects, str) else list(projects or [])
+    projects = [p.strip().upper() for p in projects if isinstance(p, str) and p.strip()]
+    for project in projects:
+        if not PROJECT_KEY_RE.match(project):
+            raise JiraError(f"Некорректный ключ проекта Jira: {project[:50]}")
+    if len(projects) == 1:
+        clauses.append(f"project = {projects[0]}")
+    elif projects:
+        clauses.append(f"project in ({', '.join(projects)})")
+    text = str(filters.get("text") or "").strip()[:200]
+    if text:
+        key = text.upper()
+        if ISSUE_KEY_RE.match(key):
+            clauses.append(f"key in ({key})")
+        else:
+            clauses.append(f"text ~ {jql_string(text)}")
+    types = [str(t).strip()[:100] for t in filters.get("types") or [] if str(t).strip()]
+    if types:
+        clauses.append("issuetype in (" + ", ".join(jql_string(t) for t in types[:20]) + ")")
+    categories = [CATEGORY_JQL[c] for c in filters.get("categories") or [] if c in CATEGORY_JQL]
+    if categories and len(categories) < len(CATEGORY_JQL):
+        clauses.append(f"statusCategory in ({', '.join(categories)})")
+    elif filters.get("onlyOpen"):
+        clauses.append("statusCategory != 3")
+    version = str(filters.get("version") or "").strip()
+    if version:
+        if not VERSION_ID_RE.match(version):
+            raise JiraError("Некорректная версия Jira")
+        clauses.append(f"fixVersion = {version}")
+    sprint = str(filters.get("sprint") or "").strip()
+    if sprint == "open":
+        clauses.append("sprint in openSprints()")
+    elif sprint:
+        if not sprint.isdigit() or len(sprint) > 18:
+            raise JiraError("Некорректный спринт Jira")
+        clauses.append(f"sprint = {sprint}")
+    epic = str(filters.get("epic") or "").strip().upper()
+    if epic:
+        if not ISSUE_KEY_RE.match(epic):
+            raise JiraError("Некорректный ключ эпика")
+        if cloud:
+            clauses.append(f"parent = {epic}")
+        elif epic_field:
+            number = epic_field.removeprefix("customfield_")
+            clauses.append(f"cf[{number}] = {epic}" if number.isdigit() else f'"Epic Link" = {epic}')
+        else:
+            clauses.append(f'"Epic Link" = {epic}')
+    if filters.get("unassigned"):
+        clauses.append("assignee is EMPTY")
+    if not clauses:
+        raise JiraError("Выберите проект Jira или задайте условие поиска")
+    order = ORDER_JQL.get(filters.get("order") or "rank", ORDER_JQL["rank"])
+    return " AND ".join(clauses) + " " + order
+
+
+def request_fields(field_map, epics=False, extended=False):
+    """Поля для запроса; epics — ещё родитель и «Epic Link», чтобы разложить задачи по эпикам; extended — проект,
+    спринт, версии и связи (для «Задач из Jira»: группы по спринтам, вехи версий, зависимости)."""
     fields = list(BASE_FIELDS)
     names = [field_map.get("startField"), field_map.get("endField")]
     if epics:
         names += ["parent", field_map.get("epicField")]
+    if extended:
+        names += ["project", "fixVersions", "issuelinks", field_map.get("sprintField")]
     for name in names:
         if name and name not in fields:
             fields.append(name)
@@ -356,21 +533,62 @@ class JiraClient:
         return data.get("displayName") or data.get("name") or data.get("emailAddress") or ""
 
     def server_info(self):
-        """Версия и вид Jira (Server, DataCenter, Cloud) — для проверки подключения."""
+        """Версия, вид Jira (Server, DataCenter, Cloud) и адрес, который Jira считает своим (ссылки на задачи
+        строятся от него) — для проверки подключения."""
         data = self.json("GET", self.api("serverInfo"))
+        base = data.get("baseUrl") if isinstance(data.get("baseUrl"), str) else ""
         return {"version": str(data.get("version") or "")[:50],
-                "deploymentType": str(data.get("deploymentType") or "")[:50]}
+                "deploymentType": str(data.get("deploymentType") or "")[:50],
+                "baseUrl": base.strip().rstrip("/")[:500] if re.match(r"^https?://", base.strip(), re.I) else ""}
 
-    def search(self, jql, fields, limit=SEARCH_LIMIT, strict=True):
+    # Способ поиска, который принимает эта Jira: POST (обычно) или GET — некоторые прокси и WAF перед Jira Server
+    # запрещают POST к /search (403, 405), старые версии отвечают 415 или 404. Запоминается на процесс.
+    _search_get = {}
+
+    def _search_page(self, body):
+        url = self.api("search/jql" if self.cloud else "search")
+        cache_key = (self.base_url, self.instance_type)
+        if not self._search_get.get(cache_key):
+            resp = self.request("POST", url, json=body)
+            if resp.status_code not in (403, 404, 405, 415) or "CAPTCHA" in (
+                    resp.headers.get("X-Authentication-Denied-Reason") or "").upper():
+                return self._page_json(resp, url)
+            if resp.status_code == 403 and _error_text(resp) and "xsrf" not in _error_text(resp).lower():
+                return self._page_json(resp, url)  # 403 с объяснением Jira — это права, а не запрет POST
+        params = {"jql": body["jql"], "maxResults": body["maxResults"], "fields": ",".join(body["fields"])}
+        for name in ("startAt", "nextPageToken"):
+            if name in body:
+                params[name] = body[name]
+        if body.get("validateQuery") is False:
+            params["validateQuery"] = "false"
+        resp = self.request("GET", url, params=params)
+        if resp.status_code == 200:
+            self._search_get[cache_key] = True
+        return self._page_json(resp, url)
+
+    def _page_json(self, resp, url):
+        self.check(resp, url)
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
+        if not isinstance(data, dict):
+            self.fail(f"Jira вернула неожиданный ответ ({url}) — проверьте адрес Jira; возможно, отвечает страница входа "
+                      "или прокси",
+                      f"Jira вернула неожиданный ответ ({self.where(url)}): возможно, отвечает страница входа или прокси")
+        return data
+
+    def search(self, jql, fields, limit=SEARCH_LIMIT, strict=True, with_total=False):
         """Задачи по JQL постранично (startAt в Server/DC, nextPageToken в Cloud) → [(ключ, поля)].
 
         strict=False — для «key in (…)»: в Server/DC запрос не проверяется (validateQuery: false), и
         несуществующий или недоступный ключ не ошибка — такой задачи просто нет в ответе. validateQuery в Server/DC
         — логическое значение: строки «warn» и «none» понимает только Cloud, Server отвечает на них 400.
-        strict=True — для запроса сотрудника: Jira проверяет JQL и объясняет ошибку."""
-        out, start_at, token = [], 0, None
+        strict=True — для запроса сотрудника: Jira проверяет JQL и объясняет ошибку.
+        with_total=True — (задачи, всего по запросу или None): Cloud общее число не сообщает."""
+        out, start_at, token, total = [], 0, None, None
         while True:
-            body = {"jql": jql, "fields": list(fields), "maxResults": min(SEARCH_BATCH, limit - len(out))}
+            body = {"jql": jql, "fields": list(fields), "maxResults": max(1, min(SEARCH_BATCH, limit - len(out)))}
             if self.cloud:
                 if token:
                     body["nextPageToken"] = token
@@ -378,14 +596,16 @@ class JiraClient:
                 body["startAt"] = start_at
                 if not strict:
                     body["validateQuery"] = False
-            data = self.json("POST", self.api("search/jql" if self.cloud else "search"), json=body)
+            data = self._search_page(body)
             issues = [i for i in data.get("issues") or [] if isinstance(i, dict) and i.get("key")]
             out.extend((i["key"], i.get("fields") or {}) for i in issues)
             start_at += len(issues)
             token = data.get("nextPageToken")
-            more = bool(token) if self.cloud else start_at < (data.get("total") or 0)
+            if isinstance(data.get("total"), int):
+                total = data["total"]
+            more = bool(token) if self.cloud else start_at < (total or 0)
             if not issues or not more or len(out) >= limit:
-                return out
+                return (out, total) if with_total else out
 
     def issue(self, key, fields):
         """Поля задачи по ключу; None — задачи нет или нет прав на просмотр."""
@@ -435,19 +655,130 @@ class JiraClient:
             checked.update(batch)
         return out, checked
 
+    def fields(self):
+        return [f for f in self.json("GET", self.api("field"), kind=list) if isinstance(f, dict)]
+
+    def special_fields(self, fields=None):
+        """{epicField, sprintField}: «Epic Link» (только Server/DC; в Cloud эпик — parent) и «Sprint» Jira Software."""
+        out = {"epicField": None, "sprintField": None}
+        for f in fields if fields is not None else self.fields():
+            custom = (f.get("schema") or {}).get("custom")
+            fid = f.get("id") or ""
+            if not FIELD_ID_RE.match(fid):
+                continue
+            if custom == EPIC_LINK_SCHEMA and not self.cloud and not out["epicField"]:
+                out["epicField"] = fid
+            if custom == SPRINT_SCHEMA and not out["sprintField"]:
+                out["sprintField"] = fid
+        return out
+
     def epic_link_field(self):
         """Идентификатор поля «Epic Link» (Jira Software в Server/DC) или None — в Cloud эпик задаёт parent."""
-        if self.cloud:
-            return None
-        for f in self.json("GET", self.api("field"), kind=list):
-            if isinstance(f, dict) and (f.get("schema") or {}).get("custom") == EPIC_LINK_SCHEMA \
-                    and FIELD_ID_RE.match(f.get("id") or ""):
-                return f["id"]
-        return None
+        return None if self.cloud else self.special_fields()["epicField"]
 
-    def date_fields(self):
+    def browse_permission(self):
+        """Есть ли у учётной записи право «Просмотр проектов» хотя бы в одном проекте; None — Jira не ответила."""
+        try:
+            data = self.json("GET", self.api("mypermissions"), params={"permissions": "BROWSE_PROJECTS"})
+        except JiraError as exc:
+            if exc.status in (400, 404):
+                return None
+            raise
+        perm = (data.get("permissions") or {}).get("BROWSE_PROJECTS") or {}
+        return bool(perm.get("havePermission")) if "havePermission" in perm else None
+
+    def projects(self, limit=500):
+        """Проекты, которые видит учётная запись: [{key, name}] по названию (Cloud — постранично /project/search)."""
+        out = []
+        if self.cloud:
+            start = 0
+            while len(out) < limit:
+                data = self.json("GET", self.api("project/search"), params={"startAt": start, "maxResults": 50,
+                                                                             "orderBy": "name"})
+                values = [v for v in data.get("values") or [] if isinstance(v, dict)]
+                out.extend(values)
+                start += len(values)
+                if not values or data.get("isLast", True):
+                    break
+        else:
+            out = [p for p in self.json("GET", self.api("project"), kind=list) if isinstance(p, dict)]
+        result = []
+        for p in out[:limit]:
+            key = str(p.get("key") or "").upper()
+            if PROJECT_KEY_RE.match(key):
+                result.append({"key": key, "name": str(p.get("name") or key)[:255]})
+        result.sort(key=lambda p: p["name"].lower())
+        return result
+
+    def versions(self, project_key):
+        """Версии (релизы) проекта: [{id, name, released, archived, start, release, description}]."""
+        data = self.json("GET", self.api(f"project/{project_key}/versions"), kind=list)
+        out = []
+        for v in data:
+            if not isinstance(v, dict) or not VERSION_ID_RE.match(str(v.get("id") or "")):
+                continue
+            out.append({"id": str(v["id"]), "name": str(v.get("name") or "")[:255], "released": bool(v.get("released")),
+                        "archived": bool(v.get("archived")), "start": _date(v.get("startDate")),
+                        "release": _date(v.get("releaseDate")),
+                        "description": str(v.get("description") or "")[:500],
+                        "url": f"{self.base_url}/projects/{project_key}/versions/{v['id']}"})
+        return out
+
+    def issue_types(self, project_key):
+        """Типы задач проекта и статусы: ({названия типов}, [{name, category}])."""
+        data = self.json("GET", self.api(f"project/{project_key}/statuses"), kind=list)
+        types, statuses = [], {}
+        for t in data:
+            if not isinstance(t, dict) or t.get("subtask"):
+                continue
+            name = str(t.get("name") or "")[:100]
+            if name and name not in types:
+                types.append(name)
+            for st in t.get("statuses") or []:
+                if isinstance(st, dict) and st.get("name"):
+                    category = (st.get("statusCategory") or {}).get("key") or "new"
+                    statuses.setdefault(str(st["name"])[:100], category if category in CATEGORY_JQL else "new")
+        return types, [{"name": n, "category": c} for n, c in statuses.items()]
+
+    def agile(self, path, **params):
+        return self.json("GET", f"{self.base_url}/rest/agile/1.0/{path.lstrip('/')}", params=params or None)
+
+    def sprints(self, project_key, limit=50):
+        """Открытые и будущие спринты досок проекта (Jira Software): [{id, name, state, start, end, board}].
+        Без Jira Software (404) — пустой список."""
+        try:
+            boards = self.agile("board", projectKeyOrId=project_key, maxResults=20).get("values") or []
+        except JiraError as exc:
+            if exc.status in (400, 403, 404):
+                return []
+            raise
+        out, seen = [], set()
+        for board in boards[:10]:
+            if not isinstance(board, dict) or board.get("type") not in (None, "scrum") or \
+                    not isinstance(board.get("id"), int):
+                continue
+            try:
+                values = self.agile(f"board/{board['id']}/sprint", state="active,future,closed", maxResults=50)\
+                    .get("values") or []
+            except JiraError as exc:
+                if exc.status in (400, 403, 404):
+                    continue
+                raise
+            for sp in values:
+                if isinstance(sp, dict) and isinstance(sp.get("id"), int) and sp["id"] not in seen:
+                    seen.add(sp["id"])
+                    out.append({"id": sp["id"], "name": str(sp.get("name") or "")[:255],
+                                "state": str(sp.get("state") or "").lower()[:20], "start": _date(sp.get("startDate")),
+                                "end": _date(sp.get("endDate")), "board": str(board.get("name") or "")[:255]})
+        order = {"active": 0, "future": 1, "closed": 2}
+        out.sort(key=lambda sp: (order.get(sp["state"], 3), sp["start"] or "9999", sp["id"]))
+        # Закрытые — только последние: старые спринты для плана не нужны
+        closed = [sp for sp in out if sp["state"] == "closed"][:5]
+        return ([sp for sp in out if sp["state"] != "closed"] + closed)[:limit]
+
+    def date_fields(self, fields=None):
         """Поля Jira с датой — для выбора полей «начало» и «срок» задачи."""
-        data = self.json("GET", self.api("field"), kind=list)
+        data = fields if fields is not None else self.fields()
         out = []
         for f in data:
             if isinstance(f, dict) and (f.get("schema") or {}).get("type") in ("date", "datetime"):

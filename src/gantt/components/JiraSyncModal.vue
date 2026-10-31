@@ -1,5 +1,6 @@
 <script setup>
-import { computed, inject, reactive, ref } from 'vue'
+import { computed, inject, onMounted, reactive, ref } from 'vue'
+import { api } from '../../api/client'
 import BaseModal from '../../components/common/BaseModal.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
@@ -30,6 +31,20 @@ function toggleAuto(key) {
 }
 const excluded = ref(new Set())
 const refreshing = ref(false)
+
+// Источник задач плана: проект Jira и уточняющий JQL — план сообщает о новых задачах источника
+const source = reactive({ ...jira.sourceSetting() })
+const sourceSaved = computed(() => {
+  const saved = jira.sourceSetting()
+  return saved.project === source.project && saved.jql === source.jql.trim()
+})
+const projects = ref(null)
+onMounted(async () => {
+  if (!editor.canEdit) return
+  try { projects.value = (await api.get('/jira/projects', { planId: editor.state.plan.id })).projects } catch { projects.value = [] }
+})
+function saveSource() { jira.setSource(source) }
+function clearSource() { Object.assign(source, { project: '', jql: '' }); jira.setSource(source) }
 
 const rows = computed(() => jira.linkedItems().map((item) => {
   const issue = jira.issueFor(item)
@@ -73,7 +88,7 @@ function open(key) {
 </script>
 
 <template>
-  <BaseModal title="Сверка с Jira" size="wide" @close="emit('close')">
+  <BaseModal title="Сверка и настройки Jira" size="wide" @close="emit('close')">
     <template #header-actions><HelpLink topic="jira-sync" /></template>
     <div class="top">
       <p class="muted small">Строки плана, привязанные к задачам Jira: {{ rows.length }}. Отметьте, что перенести из Jira в план, —
@@ -93,6 +108,26 @@ function open(key) {
           <input type="checkbox" :checked="auto.has(f.key)" :disabled="!editor.canEdit" :data-testid="`jira-auto-${f.key}`" @change="toggleAuto(f.key)" />
           {{ f.label }}
         </label>
+      </div>
+    </section>
+    <section v-if="editor.canEdit" class="auto source" :class="{ on: jira.sourceSetting().project || jira.sourceSetting().jql }" data-testid="jira-source">
+      <div class="auto-text">
+        <strong>Источник задач плана <HelpLink topic="jira-source" /></strong>
+        <span class="muted small">Проект Jira (и, по желанию, условие JQL), задачи которого ведутся в этом плане. «Задачи из Jira»
+          откроются сразу на нём, а кнопка J подскажет о новых задачах, которых в плане ещё нет.</span>
+        <span v-if="jira.state.source?.configured && !jira.state.source.error" class="small source-state">
+          В источнике задач: {{ jira.state.source.total }}{{ jira.state.source.truncated ? '+' : '' }} · новых: <strong>{{ jira.state.source.newCount }}</strong>
+        </span>
+      </div>
+      <div class="source-form">
+        <select v-model="source.project" class="select select-sm" aria-label="Проект Jira" data-testid="jira-source-project">
+          <option value="">Без проекта</option>
+          <option v-for="p in projects || []" :key="p.key" :value="p.key">{{ p.name }} · {{ p.key }}</option>
+          <option v-if="source.project && projects && !projects.some((p) => p.key === source.project)" :value="source.project">{{ source.project }}</option>
+        </select>
+        <input v-model="source.jql" class="input input-sm mono" maxlength="1000" placeholder="Условие JQL, например fixVersion = &quot;Релиз 2&quot;" aria-label="Условие JQL" data-testid="jira-source-jql" />
+        <button class="btn btn-sm btn-primary" type="button" :disabled="sourceSaved" data-testid="jira-source-save" @click="saveSource">Сохранить</button>
+        <button v-if="jira.sourceSetting().project || jira.sourceSetting().jql" class="btn btn-sm btn-ghost" type="button" @click="clearSource">Убрать</button>
       </div>
     </section>
     <p v-if="jira.state.error" class="error small"><AppIcon name="warning" :size="13" /> {{ jira.state.error }}</p>
@@ -146,6 +181,10 @@ function open(key) {
 .auto.on { border-color: #b3c7f5; background: #f3f6ff; }
 .auto-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; line-height: 1.45; }
 .auto-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.source-form { display: grid; grid-template-columns: minmax(160px, 220px) minmax(200px, 1fr) auto auto; gap: 6px; flex: 1 1 100%; align-items: center; }
+.source-state { color: #0052cc; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+@media (max-width: 768px) { .source-form { grid-template-columns: 1fr; } }
 .chip-check.checked { border-color: #0052cc; color: #0052cc; background: #fff; }
 .chip-check { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 20px; font-size: 12.5px; cursor: pointer; }
 .table { max-height: 52vh; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); }

@@ -77,11 +77,11 @@ const pathText = computed(() => (status.value?.config?.pathSource === 'ou'
         <div class="grow">
           <h3>Подключение к каталогу</h3>
           <template v-if="status.configured">
-            <p class="hint">Каталог <b class="mono">{{ status.config.url }}</b>, база поиска <code class="mono">{{ status.config.baseDn }}</code> — из раздела «Настройки → Вход через домен».
+            <p class="hint">Каталог <b class="mono">{{ status.config.url }}</b>, база поиска <code class="mono">{{ status.config.baseDn }}</code> — из раздела «Интеграции → Вход через домен».
               Вход по учётной записи домена {{ status.login.enabled ? `включён (${MODES[status.login.mode] || status.login.mode})` : 'выключен — синхронизация работает и без него' }}.</p>
             <p class="hint">Подразделения — {{ pathText }}; руководитель — атрибут manager; сотрудники сопоставляются по objectGUID, затем по email и логину. Новые сотрудники из каталога входят с паролем домена.</p>
           </template>
-          <div v-else class="status info" data-testid="ad-not-configured"><AppIcon name="warning" :size="14" /><span>Каталог не настроен: укажите адрес сервера, Base DN и сервисную учётную запись в разделе <router-link to="/admin/settings">«Настройки → Вход через домен»</router-link>.</span></div>
+          <div v-else class="status info" data-testid="ad-not-configured"><AppIcon name="warning" :size="14" /><span>Каталог не настроен: укажите адрес сервера, Base DN и сервисную учётную запись в разделе <router-link to="/admin/integrations/ldap">«Интеграции → Вход через домен»</router-link>.</span></div>
           <div v-if="!status.ldap3Available" class="status error"><AppIcon name="warning" :size="14" /><span>На сервере не установлен пакет ldap3 — синхронизация недоступна.</span></div>
         </div>
       </div>

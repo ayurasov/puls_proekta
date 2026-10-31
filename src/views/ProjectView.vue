@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, provide, ref, watch } from 'vue'
 import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router'
 import { api } from '../api/client'
 import { ACCESS_LABELS, useProjectsStore } from '../stores/projects'
@@ -9,7 +9,9 @@ import AppIcon from '../components/common/AppIcon.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PlanTabs from '../gantt/components/PlanTabs.vue'
 import GanttWorkspace from '../gantt/components/GanttWorkspace.vue'
+import PodeluTasksModal from '../components/integrations/PodeluTasksModal.vue'
 import { hasUnsavedEdits } from '../gantt/editor'
+import { createPodeluTasks } from '../integrations/podeluTasks'
 
 const route = useRoute()
 const router = useRouter()
@@ -48,6 +50,24 @@ async function loadProject() {
 }
 
 onMounted(loadProject)
+
+// Задачи «По Делу», которые ссылаются на проект и строки его планов (ADR-0010): кнопка в заголовке и карточка строки
+const podeluTasks = createPodeluTasks(projectId.value)
+provide('podeluTasks', podeluTasks)
+onMounted(() => podeluTasks.load())
+const podeluOpen = ref(false)
+const planItems = computed(() => workspace.value?.editor?.state.items || {})
+function revealPodeluItem({ planId, itemKey }) {
+  if (!itemKey) return
+  const target = planId || activePlanId.value
+  if (target === activePlanId.value && workspace.value?.editor?.state.items[itemKey]) {
+    workspace.value.editor.revealItem(itemKey)
+    workspace.value.editor.select(itemKey, { openPanel: true })
+  } else {
+    router.push({ name: 'project', params: { projectId: projectId.value, planId: target }, query: { item: itemKey } })
+  }
+}
+
 watch(activePlanId, (id) => { if (id) localStorageSet(`puls.lastPlan.${projectId.value}`, String(id)) })
 
 function openPlan(id) {
@@ -114,6 +134,16 @@ onBeforeRouteUpdate(leaveGuard)
             <span v-if="project.subtitle" class="meta-part subtitle">{{ project.subtitle }}</span>
           </div>
         </div>
+        <button
+          v-if="podeluTasks.state.enabled" class="btn btn-sm podelu-btn" :class="{ 'has-open': podeluTasks.openCount }" type="button"
+          :title="podeluTasks.state.error || `Задачи в «По Делу», связанные с проектом: ${podeluTasks.state.tasks.length}`" data-testid="podelu-tasks-open"
+          @click="podeluOpen = true"
+        >
+          <span class="podelu-mark" aria-hidden="true"><AppIcon name="checklist" :size="12" :stroke-width="2.4" /></span>
+          <span class="podelu-label">По Делу</span>
+          <span v-if="podeluTasks.state.tasks.length" class="podelu-count">{{ podeluTasks.openCount }}<span v-if="podeluTasks.openCount !== podeluTasks.state.tasks.length" class="of">/{{ podeluTasks.state.tasks.length }}</span></span>
+          <AppIcon v-if="podeluTasks.state.error" name="warning" :size="13" class="podelu-warn" />
+        </button>
         <div id="project-header-slot" class="header-slot" />
       </header>
       <PlanTabs
@@ -129,6 +159,10 @@ onBeforeRouteUpdate(leaveGuard)
     </template>
     <div v-else class="loading muted">Загрузка проекта…</div>
 
+    <PodeluTasksModal
+      v-if="podeluOpen && project" :tasks="podeluTasks" :items="planItems" :plan-id="activePlanId" :project-title="project.title"
+      @close="podeluOpen = false" @reveal="revealPodeluItem"
+    />
     <BaseModal v-if="renaming" title="Проект" @close="renaming = null">
       <form class="form-stack" @submit.prevent="saveProject">
         <label class="field"><span class="field-label">Название</span><input v-model="renaming.title" class="input" maxlength="500" /></label>
@@ -155,6 +189,14 @@ onBeforeRouteUpdate(leaveGuard)
 .meta-part.subtitle { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .dot { opacity: 0.6; flex-shrink: 0; }
 .access-view { color: #a8670f; }
+.podelu-btn { gap: 6px; border-radius: 999px; padding: 3px 10px 3px 4px; flex-shrink: 0; }
+.podelu-mark { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; background: linear-gradient(140deg, #34c38f, #15803d); color: #fff; }
+.podelu-label { font-weight: 600; }
+.podelu-count { min-width: 20px; padding: 0 7px; border-radius: 999px; background: #eef1f7; color: var(--color-text-secondary); font-size: 11.5px; font-weight: 700; text-align: center; }
+.podelu-btn.has-open .podelu-count { background: #dcfff1; color: #216e4e; }
+.of { opacity: 0.6; font-weight: 600; }
+.podelu-warn { color: #b45309; }
+@media (max-width: 768px) { .podelu-label { display: none; } }
 .header-slot { display: flex; align-items: center; gap: 10px; flex-shrink: 0; min-width: 0; }
 @media (max-width: 768px) {
   .project-header { padding: 8px 10px 6px 60px; min-height: 60px; }

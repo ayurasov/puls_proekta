@@ -133,7 +133,7 @@ export function gridLines(header) {
  * длину текста; если на уровне уже есть пересекающаяся подпись — уровнем ниже.
  * Возвращает [{ ...label, level }] и число уровней.
  */
-export function layoutMilestoneLabels(labels, _minGap = 80, charWidth = 5.6) {
+export function layoutMilestoneLabels(labels, _minGap = 80, charWidth = 6.2) {
   const sorted = [...labels].sort((a, b) => a.x - b.x)
   const levelEnds = []
   const out = sorted.map((label) => {

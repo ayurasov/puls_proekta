@@ -293,7 +293,7 @@ provide('ganttActions', actions)
   <CompletionDialog v-if="completion" :item="completion.item" :today="state.today" @cancel="completion = null" @confirm="applyCompletion" />
   <NoteEditor v-if="noteEditor" v-bind="noteEditor" @close="noteEditor = null" />
   <JiraSyncModal v-if="modal?.name === 'jira-sync'" @close="modal = null" />
-  <JiraImportModal v-if="modal?.name === 'jira-import'" @close="modal = null" />
+  <JiraImportModal v-if="modal?.name === 'jira-import' || modal?.name === 'jira-versions'" :initial-mode="modal.name === 'jira-versions' ? 'versions' : ''" @close="modal = null" />
 </template>
 
 <style scoped>

@@ -209,6 +209,29 @@ describe('0.4.0: несколько строк одной правкой', () =>
   })
 })
 
+describe('0.5.0: строки из Jira со связями «блокирует»', () => {
+  it('предшественник по метке из того же списка и автосдвиг — одной правкой', async () => {
+    const editor = await openEditor([task('t', 'Старая')])
+    const before = editor.state.items.t.end
+    const keys = editor.createItems([
+      { type: 'task', ref: 'A-1', data: { name: 'Первая', start: '2026-05-01', end: '2026-05-10' } },
+      { type: 'task', ref: 'A-2', data: { name: 'Вторая', start: '2026-05-03', end: '2026-05-06', dependencyRef: 'A-1', dependencyType: 'FS' } },
+      { type: 'task', data: { name: 'К старой', start: '2026-04-01', end: '2026-04-03', dependencyKey: 't' } },
+      { type: 'task', data: { name: 'К несуществующей', dependencyKey: 'нет-такой' } },
+    ], { label: 'Задачи из Jira (4)' })
+    const [first, second, third, fourth] = keys.map((k) => editor.state.items[k])
+    expect(second.dependencyKey).toBe(first.key)
+    expect(second.dependencyRef).toBeUndefined()
+    // Автосдвиг: вторая начинается после первой
+    expect(second.start > first.end).toBe(true)
+    expect(third.dependencyKey).toBe('t')
+    expect(third.start > before).toBe(true)
+    expect(fourth.dependencyKey).toBeUndefined()
+    editor.undo()
+    expect(keys.every((k) => !editor.state.items[k])).toBe(true)
+  })
+})
+
 describe('0.4.0: перенос из Jira в цепочке связей', () => {
   beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
   afterEach(() => vi.useRealTimers())
