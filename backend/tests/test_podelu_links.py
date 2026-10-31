@@ -22,8 +22,8 @@ def _issue(admin):
     return res.get_json()["key"]
 
 
-def _get(client, path, key, **params):
-    return client.get(f"/api/integration/v1{path}", headers={"Authorization": f"Bearer {key}"}, query_string=params)
+def _get(client, path, token, **params):
+    return client.get(f"/api/integration/v1{path}", headers={"Authorization": f"Bearer {token}"}, query_string=params)
 
 
 # ---------- ключ «Пульса» и API для «По Делу» ----------
@@ -97,6 +97,7 @@ def test_projects_follow_employee_access(app, admin):
                                                                           ("m1", "milestone", "")]
     assert items["items"][1]["path"] == f"/projects/{portal_id}/{portal_plan}?item=t1"
     assert [i["key"] for i in _get(anon, f"/projects/{portal_id}/items", key, q="монт").get_json()["items"]] == ["t1"]
+    assert [i["key"] for i in _get(anon, f"/projects/{portal_id}/items", key, key="m1").get_json()["items"]] == ["m1"]
     assert _get(anon, f"/projects/{portal_id}/items", key, plan="x").status_code == 400
     assert _get(anon, f"/projects/{portal_id}/items", key, plan="99999").status_code == 404
 

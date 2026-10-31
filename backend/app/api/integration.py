@@ -8,7 +8,7 @@
 * GET /api/integration/v1/ping
 * GET /api/integration/v1/projects?q=&ids=&limit=&userId=&login=&email=
 * GET /api/integration/v1/projects/<id>
-* GET /api/integration/v1/projects/<id>/items?plan=&q=&limit=
+* GET /api/integration/v1/projects/<id>/items?plan=&q=&key=&limit=
 """
 
 import re
@@ -194,6 +194,10 @@ def items(project_id):
     query = " ".join((request.args.get("q") or "").split())[:200].lower()
     if query:
         ordered = [r for r in ordered if query in (r.name or "").lower() or query in group_path(r).lower()]
+    # key — ровно одна строка (проверка ссылки в «По Делу» не зависит от размера плана)
+    key = (request.args.get("key") or "").strip()[:64]
+    if key:
+        ordered = [r for r in ordered if r.key == key]
     limit = _limit("limit", ITEMS_LIMIT, ITEMS_MAX)
     out = [{
         "key": r.key, "name": r.name, "type": r.type,
