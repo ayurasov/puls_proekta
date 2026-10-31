@@ -66,7 +66,7 @@ def _context_user():
     active = select(User).where(User.is_active.is_(True))
     user = None
     if user_id and UUID_RE.match(user_id):
-        user = db.session.execute(active.where(User.podelu_id == user_id.lower())).scalars().first()
+        user = db.session.execute(active.where(func.lower(User.podelu_id) == user_id.lower())).scalars().first()
     if user is None and login:
         user = db.session.execute(active.where(func.lower(User.login) == login.lower())).scalars().first()
     if user is None and email and "@" in email:

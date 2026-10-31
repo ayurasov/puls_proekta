@@ -58,6 +58,11 @@ function commitText(field) {
   if (field === 'jiraUrl') {
     // Ключ задачи (ABC-123) превращается в ссылку на подключённую Jira
     const link = jiraLinkFromInput(value, jira.state.baseUrl)
+    // Слова из названия (поиск по подсказкам) без выбора задачи — поле возвращается к прежней ссылке без ошибки
+    if (link.error && jira.state.connected && !/^https?:/i.test(value) && !ISSUE_KEY_RE.test(value.toUpperCase())) {
+      drafts.jiraUrl = item.value.jiraUrl || ''
+      return
+    }
     if (link.error) { ui.error(link.error); return }
     drafts.jiraUrl = link.url || ''
     if ((item.value.jiraUrl || '') !== (link.url || '')) {
