@@ -679,10 +679,12 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     return key
   }
 
-  /** Несколько строк в конец родителя одной правкой (отменяется целиком); возвращает их ключи. */
   /**
-   * Несколько строк одной правкой: [{ type, data, children?, parentKey? }]. children — вложенные строки новой
-   * группы; parentKey у строки — положить её в другую (уже существующую) группу. Новые строки — в конец уровня.
+   * Несколько строк одной правкой (отменяется целиком); возвращает их ключи: [{ type, data, children?, parentKey?,
+   * ref? }]. children — вложенные строки новой группы; parentKey у строки — положить её в другую (уже существующую)
+   * группу. Новые строки — в конец уровня. ref — метка строки внутри списка: data.dependencyRef другой строки
+   * делает её предшественником (связи «блокирует» из Jira); data.dependencyKey — предшественник среди строк плана.
+   * Сроки последующих строк сдвигает автосдвиг — в той же правке.
    */
   function createItems(list, { parentKey = null, label = 'Новые строки' } = {}) {
     const last = new Map()
@@ -696,17 +698,31 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     }
     const keys = []
     const ops = []
+    const refs = new Map()
     const add = (entries, parent) => {
       for (const entry of entries) {
         const target = entry.parentKey !== undefined ? entry.parentKey : parent
         const key = randomKey('i')
         keys.push(key)
-        ops.push({ op: 'item.create', item: newItem(entry.type, entry.data || {}, key, target, nextPositionIn(target)) })
+        if (entry.ref) refs.set(entry.ref, key)
+        const { dependencyRef, ...data } = entry.data || {}
+        const op = { op: 'item.create', item: newItem(entry.type, data, key, target, nextPositionIn(target)), dependencyRef }
+        ops.push(op)
         if (entry.children?.length) add(entry.children, key)
       }
     }
     add(list, parentKey)
-    return commit(ops, label) ? keys : []
+    const changes = new Map()
+    for (const op of ops) {
+      if (op.dependencyRef && refs.has(op.dependencyRef) && op.item.type === 'task') op.item.dependencyKey = refs.get(op.dependencyRef)
+      delete op.dependencyRef
+      if (op.item.type === 'task' && op.item.dependencyKey && !state.items[op.item.dependencyKey] && !keys.includes(op.item.dependencyKey)) {
+        delete op.item.dependencyKey
+      }
+      changes.set(op.item.key, op.item)
+    }
+    const linked = ops.some((op) => op.item.dependencyKey)
+    return commit([...ops, ...(linked ? cascadeOps(changes) : [])], label) ? keys : []
   }
 
   function duplicateItem(key, { shiftDays = 0 } = {}) {

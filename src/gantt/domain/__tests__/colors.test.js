@@ -12,8 +12,18 @@ describe('контраст подписей', () => {
   })
   it('на светлых полосах — тёмный текст, на тёмных — белый', () => {
     expect(readableText('#84cc16')).not.toBe('#ffffff')
-    expect(readableText('#14b8a6')).not.toBe('#ffffff')
+    expect(readableText('#f59e0b')).not.toBe('#ffffff')
     expect(readableText('#1e293b')).toBe('#ffffff')
+  })
+  it('0.5.0: на средних тонах при почти равном контрасте — белый (бирюзовый, голубой, оранжевый), и не хуже Lc 50', () => {
+    for (const key of ['teal', 'cyan', 'orange']) {
+      const { color } = PALETTE.find((c) => c.key === key)
+      expect(readableText(color), key).toBe('#ffffff')
+      expect(apcaContrast('#ffffff', color), key).toBeGreaterThanOrEqual(50)
+    }
+    // Зелёный и жёлтый: чёрный заметно контрастнее — остаётся чёрный
+    expect(readableText('#22c55e')).toBe('#000000')
+    expect(readableText('#fde047')).toBe('#000000')
   })
   it('0.3.1: на синем, красном, фиолетовом, индиго, сером и тёмных цветах — белый текст, и на бледных полосах', () => {
     for (const key of ['blue', 'red', 'purple', 'indigo', 'slate', 'pink']) {

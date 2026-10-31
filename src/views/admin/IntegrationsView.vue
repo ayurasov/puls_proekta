@@ -1,193 +1,117 @@
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '../../api/client'
-import { useUiStore } from '../../stores/ui'
-import { useDialogs } from '../../composables/useDialogs'
-import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
-import PodeluSettings from '../../components/integrations/PodeluSettings.vue'
+import HelpLink from '../../components/common/HelpLink.vue'
+import IntegrationLogo from '../../components/integrations/IntegrationLogo.vue'
+import { formatDateTime } from '../../utils/format'
 
-const ui = useUiStore()
-const { confirm } = useDialogs()
-
-// Как в burndown_tool: подписи полей зависят от способа входа
-const TYPES = {
-  server_basic: {
-    label: 'Jira Server/DC — логин и пароль (Basic)', login: 'Логин', token: 'Пароль',
-    loginPh: 'svc-puls', tokenPh: 'Пароль от Jira', hint: 'Basic передаёт пароль в каждом запросе — используйте только адрес https://.',
-  },
-  server: {
-    label: 'Jira Server/DC — Personal Access Token (8.14 и новее)', login: 'Логин (необязательно)', token: 'Personal Access Token',
-    loginPh: '', tokenPh: 'Вставьте токен', hint: 'Токен создаётся в профиле Jira: «Профиль → Personal Access Tokens».',
-  },
-  cloud: {
-    label: 'Jira Cloud — email и API-токен', login: 'Email', token: 'API-токен',
-    loginPh: 'svc-puls@company.ru', tokenPh: 'Вставьте API-токен', hint: 'API-токен создаётся на id.atlassian.com → Security → API tokens.',
-  },
-}
-
-const saved = ref(null)
-const loaded = ref(false)
-const form = reactive({ baseUrl: '', instanceType: 'server_basic', login: '', token: '', acceptInvalidCerts: false, startField: '', endField: 'duedate' })
-const dirty = ref(false)
-const status = ref(null) // { kind: 'ok' | 'error' | 'info', text }
-const busy = ref('')
-const fields = ref(null)
-const type = computed(() => TYPES[form.instanceType])
-const tokenPlaceholder = computed(() => (saved.value?.hasToken && sameUrl.value ? 'Сохранён — оставьте пустым, чтобы не менять' : type.value.tokenPh))
-const sameUrl = computed(() => saved.value && normalizeUrl(form.baseUrl) === saved.value.baseUrl)
-
-function normalizeUrl(url) { return (url || '').trim().replace(/\/+$/, '') }
-
-function fill(conn) {
-  saved.value = conn
-  Object.assign(form, conn
-    ? { baseUrl: conn.baseUrl, instanceType: conn.instanceType, login: conn.login, token: '', acceptInvalidCerts: conn.acceptInvalidCerts, startField: conn.startField, endField: conn.endField }
-    : { baseUrl: '', instanceType: 'server_basic', login: '', token: '', acceptInvalidCerts: false, startField: '', endField: 'duedate' })
-  dirty.value = false
-  status.value = conn ? { kind: 'ok', text: conn.hasToken ? 'Подключение сохранено' : 'Подключение сохранено без пароля или токена' } : null
-}
+/**
+ * «Интеграции» — отдельный блок администрирования: Jira, «По Делу», вход через домен (LDAP / Active Directory).
+ * Каждая карточка показывает состояние подключения и ведёт к его настройке.
+ */
+const jira = ref(undefined)
+const podelu = ref(undefined)
+const links = ref(undefined)
+const ldap = ref(undefined)
 
 onMounted(async () => {
-  try { fill(await api.get('/settings/jira')) } catch (err) { ui.error(err) } finally { loaded.value = true }
+  const [j, p, l, d] = await Promise.allSettled([
+    api.get('/settings/jira'), api.get('/settings/podelu'), api.get('/settings/podelu/links'), api.get('/settings/ldap'),
+  ])
+  jira.value = j.status === 'fulfilled' ? j.value : null
+  podelu.value = p.status === 'fulfilled' ? p.value : null
+  links.value = l.status === 'fulfilled' ? l.value : null
+  ldap.value = d.status === 'fulfilled' ? d.value : null
 })
 
-function change() { dirty.value = true; if (status.value?.kind !== 'error') status.value = null }
-function onUrl() {
-  change()
-  // Адрес *.atlassian.net — это Jira Cloud
-  if (/atlassian\.net/i.test(form.baseUrl)) form.instanceType = 'cloud'
+function host(url) {
+  try { return new URL(url).host } catch { return url || '' }
 }
-function payload() { return { ...form, baseUrl: normalizeUrl(form.baseUrl), login: form.login.trim() } }
 
-async function test() {
-  busy.value = 'test'
-  status.value = { kind: 'info', text: 'Проверка подключения…' }
-  try {
-    const res = await api.post('/settings/jira/test', payload())
-    const jira = [res.deploymentType && `Jira ${res.deploymentType}`, res.version].filter(Boolean).join(' ')
-    status.value = {
-      kind: 'ok',
-      text: `Соединение установлено${res.user ? `: ${res.user}` : ''}${jira ? ` · ${jira}` : ''} · поиск задач работает`,
-    }
-  } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
-}
-async function loadFields() {
-  busy.value = 'fields'
-  try { fields.value = await api.post('/settings/jira/fields', payload()) } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
-}
-async function save() {
-  busy.value = 'save'
-  try {
-    fill(await api.put('/settings/jira', payload()))
-    ui.success('Подключение к Jira сохранено')
-  } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
-}
-async function disconnect() {
-  const ok = await confirm({
-    title: 'Отключить Jira?',
-    message: 'Подключение и сохранённый пароль или токен будут удалены. Ссылки строк на задачи Jira сохранятся, но статусы и сроки из Jira показываться не будут до нового подключения.',
-    confirmText: 'Отключить', danger: true,
-  })
-  if (!ok) return
-  try { await api.delete('/settings/jira'); fill(null); fields.value = null; ui.success('Jira отключена') } catch (err) { ui.error(err) }
-}
-const fieldOptions = computed(() => fields.value || [])
-function fieldLabel(id) { return fieldOptions.value.find((f) => f.id === id)?.name || id }
+const cards = computed(() => [
+  {
+    id: 'jira', to: '/admin/integrations/jira', logo: 'jira', title: 'Jira',
+    text: 'Статусы, сроки и прогресс задач Jira в планах; задачи, релизы и спринты — строками плана; автоперенос и сверка.',
+    state: jira.value === undefined ? null : jira.value
+      ? { kind: jira.value.hasToken ? 'ok' : 'warn', text: jira.value.hasToken ? 'Подключена' : 'Нет пароля или токена' }
+      : { kind: 'muted', text: 'Не подключена' },
+    facts: jira.value ? [host(jira.value.baseUrl), { cloud: 'Jira Cloud', server: 'Server/DC · PAT', server_basic: 'Server/DC · логин и пароль' }[jira.value.instanceType]] : [],
+  },
+  {
+    id: 'podelu', to: '/admin/integrations/podelu', logo: 'podelu', title: '«По Делу»',
+    text: 'Задачи «По Делу» ссылаются на проекты и строки планов «Пульса»; структура компании и сотрудники — из «По Делу».',
+    state: links.value === undefined ? null
+      : links.value?.enabled ? { kind: 'ok', text: 'Связь в обе стороны' }
+        : (links.value?.inbound || links.value?.hasKey || podelu.value) ? { kind: 'warn', text: 'Настроена частично' }
+          : { kind: 'muted', text: 'Не подключена' },
+    facts: [
+      links.value?.baseUrl || podelu.value?.baseUrl ? host(links.value?.baseUrl || podelu.value?.baseUrl) : null,
+      links.value?.inbound ? `ключ «Пульса» ${links.value.inbound.prefix}…` : null,
+      links.value?.checkedAt ? `проверено ${formatDateTime(links.value.checkedAt)}` : null,
+      podelu.value ? `структура: ${podelu.value.login}` : null,
+    ].filter(Boolean),
+  },
+  {
+    id: 'ldap', to: '/admin/integrations/ldap', logo: 'ldap', title: 'Вход через домен',
+    text: 'LDAP / Active Directory: сотрудники входят с паролем домена; тот же каталог — для синхронизации структуры.',
+    state: ldap.value === undefined ? null : ldap.value?.enabled
+      ? { kind: 'ok', text: 'Включён' } : { kind: 'muted', text: 'Выключен' },
+    facts: ldap.value?.enabled ? [ldap.value.serverUrl ? host(ldap.value.serverUrl.replace(/^ldaps?:/, 'https:')) : null,
+      { local: 'только пароли системы', ldap: 'только домен', hybrid: 'сначала домен, затем пароль' }[ldap.value.authMode]].filter(Boolean) : [],
+  },
+])
 </script>
 
 <template>
-  <div class="page narrow">
+  <div class="page">
     <div class="page-header">
-      <h1 class="page-title">Интеграции <HelpLink topic="admin-integrations" /></h1>
-    </div>
-
-    <div v-if="loaded" class="card block" data-testid="jira-settings">
-      <div class="head">
-        <span class="logo" aria-hidden="true"><AppIcon name="link" :size="18" /></span>
-        <div>
-          <h2 class="section-title">Подключение к Jira <HelpLink topic="admin-jira" /></h2>
-          <p class="muted small">Одно подключение для всей системы. Учётная запись, от имени которой «Пульс» читает задачи, — лучше
-            сервисная и только с правом просмотра нужных проектов: задачи, которые она видит, увидят все сотрудники с доступом к
-            плану. Пароль или токен хранится на сервере зашифрованным и в интерфейс не возвращается.</p>
-        </div>
+      <div>
+        <h1 class="page-title">Интеграции <HelpLink topic="admin-integrations" /></h1>
+        <p class="muted small sub">Связь «Пульса» с другими системами компании. Каждое подключение одно на систему, его настраивает администратор;
+          пароли и ключи хранятся на сервере зашифрованными.</p>
       </div>
-
-      <form class="form" autocomplete="off" @submit.prevent="save">
-        <div class="form-grid">
-          <label class="field"><span class="field-label">Адрес Jira</span><input v-model="form.baseUrl" class="input" type="url" placeholder="https://jira.company.ru" data-testid="jira-url" @input="onUrl" /></label>
-          <label class="field">
-            <span class="field-label">Способ входа</span>
-            <select v-model="form.instanceType" class="select" @change="change"><option v-for="(t, key) in TYPES" :key="key" :value="key">{{ t.label }}</option></select>
-          </label>
-          <label class="field"><span class="field-label">{{ type.login }}</span><input v-model="form.login" class="input" :placeholder="type.loginPh" data-testid="jira-login" @input="change" /></label>
-          <label class="field"><span class="field-label">{{ type.token }}</span><input v-model="form.token" class="input" type="password" autocomplete="new-password" :placeholder="tokenPlaceholder" data-testid="jira-token" @input="change" /></label>
-        </div>
-        <p class="muted small hint">{{ type.hint }}</p>
-        <label class="check"><input v-model="form.acceptInvalidCerts" type="checkbox" @change="change" /> Не проверять TLS-сертификат (для самоподписанных и корпоративных сертификатов)</label>
-
-        <div class="dates">
-          <div class="dates-head">
-            <span class="field-label">Поля дат задачи</span>
-            <button class="btn btn-sm btn-ghost" type="button" :disabled="!!busy || !form.baseUrl" @click="loadFields"><AppIcon name="refresh" :size="13" /> Загрузить поля из Jira</button>
-          </div>
-          <div class="form-grid">
-            <label class="field">
-              <span class="field-label">Начало</span>
-              <select v-if="fields" v-model="form.startField" class="select" @change="change">
-                <option value="">— не используется —</option>
-                <option v-for="f in fieldOptions" :key="f.id" :value="f.id">{{ f.name }} · {{ f.id }}</option>
-              </select>
-              <input v-else v-model="form.startField" class="input mono" placeholder="customfield_10015" @input="change" />
-              <span class="field-hint">Например, «Start date» из Advanced Roadmaps. Без поля начало задачи из Jira не переносится.</span>
-            </label>
-            <label class="field">
-              <span class="field-label">Срок</span>
-              <select v-if="fields" v-model="form.endField" class="select" @change="change">
-                <option v-for="f in fieldOptions" :key="f.id" :value="f.id">{{ f.name }} · {{ f.id }}</option>
-                <option v-if="!fieldOptions.some((f) => f.id === form.endField)" :value="form.endField">{{ fieldLabel(form.endField) }}</option>
-              </select>
-              <input v-else v-model="form.endField" class="input mono" placeholder="duedate" @input="change" />
-              <span class="field-hint">Обычно стандартное поле «Срок» (duedate).</span>
-            </label>
-          </div>
-        </div>
-
-        <div v-if="status" class="status" :class="status.kind" role="status" data-testid="jira-status">
-          <AppIcon :name="status.kind === 'ok' ? 'check' : status.kind === 'error' ? 'warning' : 'clock'" :size="14" />
-          <span>{{ status.text }}</span>
-        </div>
-
-        <div class="footer">
-          <button v-if="saved" class="btn btn-ghost danger" type="button" @click="disconnect">Отключить</button>
-          <span class="spacer" />
-          <button class="btn" type="button" :disabled="!!busy || !form.baseUrl" data-testid="jira-test" @click="test"><AppIcon name="link" :size="14" /> Проверить подключение</button>
-          <button class="btn btn-primary" type="submit" :disabled="!!busy || !form.baseUrl || (!dirty && !!saved)" data-testid="jira-save">Сохранить</button>
-        </div>
-      </form>
     </div>
-
-    <PodeluSettings />
+    <div class="grid">
+      <router-link v-for="card in cards" :key="card.id" :to="card.to" class="card integration" :data-testid="`integration-${card.id}`">
+        <div class="top">
+          <IntegrationLogo :kind="card.logo" :size="44" />
+          <span v-if="card.state" class="state" :class="`state-${card.state.kind}`"><span class="dot" />{{ card.state.text }}</span>
+          <span v-else class="state state-muted">…</span>
+        </div>
+        <h2 class="title">{{ card.title }}</h2>
+        <p class="text">{{ card.text }}</p>
+        <div v-if="card.facts.length" class="facts">
+          <span v-for="fact in card.facts" :key="fact" class="fact">{{ fact }}</span>
+        </div>
+        <span class="go">Настроить <AppIcon name="arrowRight" :size="14" /></span>
+      </router-link>
+    </div>
+    <div class="card note">
+      <AppIcon name="upload" :size="16" class="muted" />
+      <span>Загрузка структуры и сотрудников из файлов, из «По Делу» и синхронизация с Active Directory — в разделе
+        <router-link to="/admin/org-transfer">«Импорт и экспорт»</router-link>.</span>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.narrow { max-width: 900px; }
-.block { padding: 16px 18px; }
-.head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 14px; }
-.head p { margin: 4px 0 0; line-height: 1.5; }
-.logo { width: 34px; height: 34px; border-radius: 9px; background: #e9f0ff; color: #0052cc; display: grid; place-items: center; flex-shrink: 0; }
-.form { display: flex; flex-direction: column; gap: 12px; }
-.hint { margin: -4px 0 0; }
-.check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
-.dates { border-top: 1px solid var(--color-border); padding-top: 12px; display: flex; flex-direction: column; gap: 10px; }
-.dates-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
-.status { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); font-size: 13px; line-height: 1.45; }
-.status.ok { background: var(--color-success-soft); color: #1d7a4c; }
-.status.error { background: var(--color-danger-soft); color: #b42318; }
-.status.info { background: var(--color-hover); color: var(--color-text-secondary); }
-.status :deep(svg) { flex-shrink: 0; margin-top: 2px; }
-.footer { display: flex; align-items: center; gap: 10px; border-top: 1px solid var(--color-border); padding-top: 12px; }
-.danger { color: var(--color-danger); }
+.sub { margin: 4px 0 0; max-width: 760px; line-height: 1.5; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 16px; }
+.integration { display: flex; flex-direction: column; gap: 10px; padding: 18px; text-decoration: none; color: inherit; transition: box-shadow 0.15s, transform 0.15s, border-color 0.15s; }
+.integration:hover { border-color: #c9d6ff; box-shadow: 0 10px 28px rgba(15, 23, 42, 0.1); transform: translateY(-1px); }
+.integration:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.title { margin: 4px 0 0; font-size: 16px; font-weight: 700; }
+.text { margin: 0; font-size: 13px; line-height: 1.5; color: var(--color-text-secondary); flex: 1; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+.fact { font-size: 11.5px; padding: 2px 8px; border-radius: 6px; background: #f1f3f8; color: var(--color-text-secondary); max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.go { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; color: var(--color-primary); margin-top: 4px; }
+.state { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.state-ok { background: var(--color-success-soft); color: #1d7a4c; }
+.state-warn { background: var(--color-warning-soft); color: #8a5a00; }
+.state-error { background: var(--color-danger-soft); color: #b42318; }
+.state-muted { background: #eef1f7; color: var(--color-text-secondary); }
+.note { display: flex; align-items: center; gap: 10px; padding: 12px 16px; margin-top: 16px; font-size: 13px; }
 </style>

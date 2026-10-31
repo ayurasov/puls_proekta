@@ -82,8 +82,8 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
   for (const cell of ctx.header.bottom) {
     const fill = cell.today ? '#e6ecff' : cell.holiday && display.showHolidays ? '#fde8e8' : cell.weekend && display.showWeekends && !cell.workingWeekend ? '#eef0f4' : '#fafbfd'
     out.push(`<rect x="${cell.x}" y="22" width="${cell.w}" height="${ctx.bottomRow}" fill="${fill}" stroke="#eceef4" stroke-width="0.5"/>`)
-    if (cell.label) out.push(`<text x="${cell.x + cell.w / 2}" y="${22 + (cell.sub ? 13 : 16)}" font-size="10.5" font-weight="650" fill="#4b5568" text-anchor="middle">${esc(cell.label)}</text>`)
-    if (cell.sub) out.push(`<text x="${cell.x + cell.w / 2}" y="${22 + 26}" font-size="9" fill="#6b7280" text-anchor="middle">${esc(cell.sub)}</text>`)
+    if (cell.label) out.push(`<text x="${cell.x + cell.w / 2}" y="${22 + (cell.sub ? 13 : 16)}" font-size="11.5" font-weight="650" fill="#4b5568" text-anchor="middle">${esc(cell.label)}</text>`)
+    if (cell.sub) out.push(`<text x="${cell.x + cell.w / 2}" y="${22 + 26}" font-size="10" fill="#6b7280" text-anchor="middle">${esc(cell.sub)}</text>`)
   }
   if (ctx.laneHeight) {
     const ly = 22 + ctx.bottomRow
@@ -119,7 +119,7 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
     const maxChars = Math.floor((gridW - x - 24) / 6.4)
     const name = item.name.length > maxChars ? item.name.slice(0, maxChars - 1) + '…' : item.name
     out.push(`<text x="${x + 14}" y="${nameY}" font-size="12" font-weight="${item.type === 'group' ? 700 : 500}" fill="#1c2331">${esc(name)}</text>`)
-    if (meta && rowHeight >= 36) out.push(`<text x="${x + 14}" y="${nameY + 14}" font-size="10" fill="#6b7280">${esc(meta.length > maxChars + 6 ? meta.slice(0, maxChars + 5) + '…' : meta)}</text>`)
+    if (meta && rowHeight >= 36) out.push(`<text x="${x + 14}" y="${nameY + 14}" font-size="11" fill="#6b7280">${esc(meta.length > maxChars + 6 ? meta.slice(0, maxChars + 5) + '…' : meta)}</text>`)
   })
   out.push(`<line x1="${gridW}" x2="${gridW}" y1="${titleH}" y2="${by + bodyH}" stroke="#e3e6ee"/>`)
 
@@ -143,23 +143,24 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
       if (b.tail?.kind === 'early') out.push(`<rect x="${b.tail.x}" y="${b.y}" width="${b.tail.w}" height="${b.h}" rx="6" fill="#22c55e" opacity="0.7"/>`)
       if (b.status === 'done') out.push(`<rect x="${b.x + 1}" y="${b.y + 1}" width="${b.w - 2}" height="${b.h - 2}" rx="5" fill="none" stroke="#22c55e" stroke-width="2.5"/>`)
       if (b.status === 'blocked') out.push(`<rect x="${b.x + 1}" y="${b.y + 1}" width="${b.w - 2}" height="${b.h - 2}" rx="5" fill="none" stroke="#e5484d" stroke-width="2" stroke-dasharray="4 3"/>`)
-      if (b.label) out.push(`<text x="${b.x + b.w / 2}" y="${b.y + b.h / 2 + 3.5}" font-size="10" font-weight="700" fill="${b.text}" text-anchor="middle">${esc(b.label)}</text>`)
-      if (b.tailLabel && b.tail?.kind === 'late') out.push(`<text x="${b.tail.x + b.tail.w + 5}" y="${b.y + b.h / 2 + 3.5}" font-size="9.5" font-weight="700" fill="#c53030">${esc(b.tailLabel)}</text>`)
+      const halo = b.text === '#ffffff' ? 'rgba(15,23,42,0.32)' : 'rgba(255,255,255,0.55)'
+      if (b.label) out.push(`<text x="${b.x + b.w / 2}" y="${b.y + b.h / 2 + 4}" font-size="11.5" font-weight="700" fill="${b.text}" text-anchor="middle" paint-order="stroke" stroke="${halo}" stroke-width="2.4" stroke-linejoin="round">${esc(b.label)}</text>`)
+      if (b.tailLabel && b.tail?.kind === 'late') out.push(`<text x="${b.tail.x + b.tail.w + 5}" y="${b.y + b.h / 2 + 4}" font-size="10.5" font-weight="700" fill="#c53030" paint-order="stroke" stroke="#fff" stroke-width="3">${esc(b.tailLabel)}</text>`)
     }
     if (m.group) {
       const g = m.group
       out.push(`<path d="M${g.x} ${g.y} h${g.w} v${g.h + 5} l-5 -5 h-${Math.max(0, g.w - 10)} l-5 5 Z" fill="${g.fill}" opacity="0.6"/>`)
-      if (g.w > 70) out.push(`<text x="${g.x + g.w / 2}" y="${g.y - 4}" font-size="9.5" font-weight="700" fill="#6b7280" text-anchor="middle">${esc(g.label)}</text>`)
+      if (g.w > 70) out.push(`<text x="${g.x + g.w / 2}" y="${g.y - 4}" font-size="10.5" font-weight="700" fill="#4b5568" text-anchor="middle" paint-order="stroke" stroke="#fff" stroke-width="3">${esc(g.label)}</text>`)
       if (g.tail?.kind === 'late') out.push(`<rect x="${g.x + g.w}" y="${g.y + 2}" width="${g.tail.w}" height="${g.h - 4}" rx="2" fill="#ef4444" opacity="0.6"/>`)
     }
     if (m.milestone) {
       const ms = m.milestone
       out.push(`<path d="M${ms.x} ${ms.y - 9} l9 9 l-9 9 l-9 -9 Z" fill="${ms.fill}" stroke="#fff" stroke-width="1.5"/>`)
-      out.push(`<text x="${ms.x + 13}" y="${ms.y + 4}" font-size="10.5" font-weight="600" fill="#4b5568">${esc(ms.label)}</text>`)
+      out.push(`<text x="${ms.x + 13}" y="${ms.y + 4}" font-size="11.5" font-weight="600" fill="#1c2331" paint-order="stroke" stroke="#fff" stroke-width="3">${esc(ms.label)}</text>`)
     }
     for (const n of m.notes) {
       out.push(`<path d="M${n.x - 5} ${n.y + 5} a5 5 0 1 1 10 0 c0 3 -5 9 -5 9 c0 0 -5 -6 -5 -9 Z" fill="${n.color}"/>`)
-      out.push(`<text x="${n.x + 8}" y="${n.y + 9}" font-size="9.5" font-weight="650" fill="${n.textColor || n.color}" paint-order="stroke" stroke="#fff" stroke-width="3">${esc((n.showDate ? `${formatDayNoYear(n.date)} · ` : '') + n.text.slice(0, 60))}</text>`)
+      out.push(`<text x="${n.x + 8}" y="${n.y + 9}" font-size="10.5" font-weight="650" fill="${n.textColor || n.color}" paint-order="stroke" stroke="#fff" stroke-width="3">${esc((n.showDate ? `${formatDayNoYear(n.date)} · ` : '') + n.text.slice(0, 60))}</text>`)
     }
   }
   for (const line of ctx.milestoneLines) out.push(`<line x1="${line.x}" x2="${line.x}" y1="${-ctx.laneHeight}" y2="${bodyH}" stroke="${line.color}" stroke-width="2"${dash(line.style)}/>`)

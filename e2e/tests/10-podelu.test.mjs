@@ -156,7 +156,7 @@ after(async () => {
 })
 
 test('администратор подключает «По Делу» в «Интеграциях» и проверяет подключение', async () => {
-  await page.goto(`${BASE}/admin/integrations`)
+  await page.goto(`${BASE}/admin/integrations/podelu`)
   await page.fill('[data-testid=podelu-url]', PODELU)
   await page.fill('[data-testid=podelu-login]', 'svc-puls')
   await page.fill('[data-testid=podelu-password]', 'не тот пароль')

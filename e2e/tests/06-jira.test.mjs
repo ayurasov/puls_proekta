@@ -31,6 +31,8 @@ function startJira() {
         ])
       }
       if (path === 'serverInfo') return send(200, { version: '8.20.10', deploymentType: 'Server' })
+      // Проекты учётная запись этой заглушки не перечисляет — «Задачи из Jira» сразу ищут по ключам и JQL
+      if (path === 'project') return send(200, [])
       if (path === 'search') {
         const { jql, validateQuery } = JSON.parse(body || '{}')
         // Как Jira Server: validateQuery — только true или false
@@ -76,7 +78,7 @@ async function planItems() {
 }
 
 test('администратор подключает Jira в «Интеграциях»', async () => {
-  await page.goto(`${BASE}/admin/integrations`)
+  await page.goto(`${BASE}/admin/integrations/jira`)
   await page.fill('[data-testid=jira-url]', JIRA)
   await page.fill('[data-testid=jira-login]', 'svc-puls')
   await page.fill('[data-testid=jira-token]', 'пароль-сервиса')
@@ -120,6 +122,7 @@ test('ключ задачи в карточке строки: данные из 
 test('«Задачи из Jira» добавляет строки одной правкой', async () => {
   await page.click('[data-testid=jira-menu]')
   await page.click('[data-testid=jira-import-open]')
+  await page.click('[data-testid=jira-import-mode] button:has-text("По ключам")')
   await page.fill('[data-testid=jira-import-keys]', 'PULS-1, PULS-2 PULS-3 PULS-404')
   await page.click('[data-testid=jira-import-search]')
   const list = page.locator('[data-testid=jira-import-list]')
@@ -221,12 +224,14 @@ test('0.4.0: автоперенос из Jira — включается в «Св
 test('0.4.0: «Задачи из Jira» группами по эпикам', async () => {
   await page.click('[data-testid=jira-menu]')
   await page.click('[data-testid=jira-import-open]')
-  await page.check('[data-testid=jira-import-epics]')
+  await page.click('[data-testid=jira-import-mode] button:has-text("По ключам")')
   await page.fill('[data-testid=jira-import-keys]', 'PULS-11 PULS-12')
   await page.click('[data-testid=jira-import-search]')
   const list = page.locator('[data-testid=jira-import-list]')
   await list.locator('text=Вход по СМС').waitFor()
-  assert.equal(await list.locator('.epic-tag', { hasText: 'Личный кабинет' }).count(), 2)
+  await page.click('[data-testid=jira-import-grouping] button:has-text("По эпикам")')
+  await list.locator('.tag-epic', { hasText: 'Личный кабинет' }).first().waitFor()
+  assert.equal(await list.locator('.tag-epic', { hasText: 'Личный кабинет' }).count(), 2)
   await page.click('[data-testid=jira-import-add]')
   await page.locator('.grid-row .name', { hasText: 'Личный кабинет' }).waitFor()
   await waitSaved(page)

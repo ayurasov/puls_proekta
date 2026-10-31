@@ -13,7 +13,7 @@ from app.podelu_client import PodeluClient, PodeluError, check_base_url, decrypt
 
 SETTING_KEY = "podelu"
 DEFAULT_CONNECTION = {"baseUrl": "", "login": "", "passwordEncrypted": "", "acceptInvalidCerts": False}
-NOT_CONFIGURED = "Подключение к «По Делу» не настроено — укажите его в разделе «Администрирование → Интеграции»"
+NOT_CONFIGURED = "Подключение к «По Делу» не настроено — укажите его в разделе «Интеграции → «По Делу»»"
 
 
 def get_connection():

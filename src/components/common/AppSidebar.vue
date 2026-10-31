@@ -45,8 +45,13 @@ const adminLinks = [
   { to: '/admin/access', icon: 'shield', label: 'Доступы' },
   { to: '/admin/audit', icon: 'history', label: 'Реестр изменений' },
   { to: '/admin/trash', icon: 'trash', label: 'Корзина' },
-  { to: '/admin/integrations', icon: 'link', label: 'Интеграции' },
-  { to: '/admin/settings', icon: 'settings', label: 'Настройки' },
+  { to: '/admin/settings', icon: 'calendar', label: 'Календарь' },
+]
+// Интеграции — отдельный блок: подключения к другим системам и вход через домен
+const integrationLinks = [
+  { to: '/admin/integrations/jira', icon: 'jira', label: 'Jira' },
+  { to: '/admin/integrations/podelu', icon: 'podelu', label: '«По Делу»' },
+  { to: '/admin/integrations/ldap', icon: 'shield', label: 'Вход через домен' },
 ]
 
 onMounted(() => { if (!projects.loaded) projects.load().catch(() => {}) })
@@ -112,6 +117,21 @@ async function logout() {
       </router-link>
     </div>
 
+    <div v-if="auth.isAdmin" class="sidebar-section" data-testid="sidebar-integrations">
+      <router-link v-if="!ui.sidebarCollapsed" to="/admin/integrations" class="section-caption caption-link" exact-active-class="is-current" title="Все интеграции">
+        Интеграции
+      </router-link>
+      <router-link
+        v-for="link in integrationLinks" :key="link.to" :to="link.to" class="nav-item" :title="link.label"
+        :data-testid="`nav-integration-${link.to.split('/').pop()}`"
+      >
+        <span v-if="link.icon === 'jira'" class="int-mark int-jira" aria-hidden="true">J</span>
+        <span v-else-if="link.icon === 'podelu'" class="int-mark int-podelu" aria-hidden="true"><AppIcon name="checklist" :size="11" :stroke-width="2.6" /></span>
+        <AppIcon v-else :name="link.icon" />
+        <span v-if="!ui.sidebarCollapsed" class="nav-label">{{ link.label }}</span>
+      </router-link>
+    </div>
+
     <div class="sidebar-bottom">
       <router-link
         to="/guide" class="nav-item" :class="{ 'router-link-active': route.path.startsWith('/guide') }"
@@ -154,6 +174,11 @@ async function logout() {
 .sidebar-nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar-section { margin-top: 14px; display: flex; flex-direction: column; gap: 2px; }
 .section-caption { font-size: 11px; color: var(--color-text-muted); padding: 4px 10px; text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap; }
+.caption-link { text-decoration: none; display: block; border-radius: var(--radius-sm); }
+.caption-link:hover, .caption-link.is-current { color: var(--color-primary-dark); background: #eef1f7; }
+.int-mark { width: 16px; height: 16px; border-radius: 4px; display: inline-grid; place-items: center; color: #fff; flex-shrink: 0; font-size: 10.5px; font-weight: 800; font-style: italic; }
+.int-jira { background: #0052cc; }
+.int-podelu { background: #15803d; }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; color: var(--color-text); text-decoration: none; border: 0; background: none; text-align: left; width: 100%; white-space: nowrap; min-height: 32px; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 8px; }
 .nav-item:hover { background: #eef1f7; }

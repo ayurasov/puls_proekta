@@ -16,8 +16,16 @@ const routes = [
   { path: '/admin/directions', name: 'admin-directions', component: () => import('../views/admin/DirectionsView.vue'), meta: { admin: true, title: 'Направления' } },
   { path: '/admin/access', name: 'admin-access', component: () => import('../views/admin/AccessView.vue'), meta: { admin: true, title: 'Доступы' } },
   { path: '/admin/audit', name: 'admin-audit', component: () => import('../views/admin/AuditView.vue'), meta: { admin: true, title: 'Реестр изменений' } },
-  { path: '/admin/settings', name: 'admin-settings', component: () => import('../views/admin/SettingsView.vue'), meta: { admin: true, title: 'Настройки' } },
+  // До 0.5.0 «Настройки» содержали и вход через домен: старые ссылки ?tab=ldap ведут в «Интеграции»
+  {
+    path: '/admin/settings', name: 'admin-settings', component: () => import('../views/admin/SettingsView.vue'),
+    meta: { admin: true, title: 'Производственный календарь' },
+    beforeEnter: (to) => (to.query.tab === 'ldap' ? { path: '/admin/integrations/ldap', replace: true } : true),
+  },
   { path: '/admin/integrations', name: 'admin-integrations', component: () => import('../views/admin/IntegrationsView.vue'), meta: { admin: true, title: 'Интеграции' } },
+  { path: '/admin/integrations/jira', name: 'admin-integrations-jira', component: () => import('../views/admin/integrations/JiraIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Jira' } },
+  { path: '/admin/integrations/podelu', name: 'admin-integrations-podelu', component: () => import('../views/admin/integrations/PodeluIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · «По Делу»' } },
+  { path: '/admin/integrations/ldap', name: 'admin-integrations-ldap', component: () => import('../views/admin/integrations/LdapIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Вход через домен' } },
   { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { trash: true, title: 'Корзина' } },
   { path: '/about', name: 'about', component: () => import('../views/AboutView.vue'), meta: { title: 'О программе' } },
   // Руководства внутри приложения (docs/guides.js); раздел — в #…: /guide#экран-плана

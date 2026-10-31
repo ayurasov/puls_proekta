@@ -30,6 +30,11 @@ function helpLinkTopics() {
       if (bound) for (const [, topic] of bound[1].matchAll(/(?:^|[?:])\s*'([^']+)'/g)) used.push({ file, topic })
       if (!fixed && !bound) used.push({ file, topic: '(нет topic)' })
     }
+    // Заголовок страницы интеграции передаёт тему справки своему HelpLink (help="…")
+    for (const [, tag] of source.matchAll(/<IntegrationHeader\b([^>]*)>/g)) {
+      const help = tag.match(/(?:^|\s)help="([^"]+)"/)
+      if (help) used.push({ file, topic: help[1] })
+    }
   }
   return used
 }

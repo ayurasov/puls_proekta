@@ -6,6 +6,7 @@ import { useAuthStore } from '../stores/auth'
 import { localStorageGet, localStorageSet, useUiStore } from '../stores/ui'
 import { useDialogs } from '../composables/useDialogs'
 import { api } from '../api/client'
+import { loadPodeluLinks } from '../integrations/podeluTasks'
 import AppIcon from '../components/common/AppIcon.vue'
 import HelpLink from '../components/common/HelpLink.vue'
 import BaseModal from '../components/common/BaseModal.vue'
@@ -33,6 +34,17 @@ const drag = ref(null)
 const dropTarget = ref(null)
 
 onMounted(() => projects.load().catch((err) => ui.error(err)))
+
+// Задачи «По Делу», связанные с проектами (ADR-0010): число открытых — на карточке, если показ включён
+const podeluCounts = ref({})
+async function loadPodeluCounts() {
+  const status = await loadPodeluLinks()
+  if (!status.enabled || !projects.projects.length) return
+  try {
+    podeluCounts.value = (await api.get('/podelu/links/summary', { projects: projects.projects.map((p) => p.id).join(',') })).counts || {}
+  } catch { podeluCounts.value = {} }
+}
+watch(() => projects.projects.map((p) => p.id).join(','), (ids) => { if (ids) loadPodeluCounts() }, { immediate: true })
 
 // ---------- фильтры и сортировка (запоминаются в браузере у каждого сотрудника) ----------
 const filtersKey = `puls.dashboard.${auth.user?.id || 0}`
@@ -349,6 +361,10 @@ function onDragEnd() {
           <footer class="card-footer">
             <span class="badge" :class="project.access === 'view' ? '' : 'badge-primary'">{{ ACCESS_LABELS[project.access] }}</span>
             <span v-if="project.plans.length > 1" class="muted small">{{ countLabel(project.plans.length, 'план', 'плана', 'планов') }}</span>
+            <span
+              v-if="podeluCounts[project.id]?.total" class="podelu-chip" data-testid="card-podelu"
+              :title="`Задачи «По Делу», связанные с проектом: открытых ${podeluCounts[project.id].open} из ${podeluCounts[project.id].total}`"
+            ><AppIcon name="checklist" :size="11" :stroke-width="2.4" /> {{ podeluCounts[project.id].open }}</span>
             <span class="spacer" />
             <span class="muted small" :title="'Изменён ' + formatDateTime(project.updatedAt)">Изменён {{ formatDate(project.updatedAt) }}</span>
           </footer>
@@ -436,6 +452,7 @@ function onDragEnd() {
 .stat-blocked { color: #c62933; }
 .milestone { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #0f766e; }
 .card-footer { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+.podelu-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: #dcfff1; color: #216e4e; font-size: 11px; font-weight: 700; }
 .empty-drop { border: 1px dashed var(--color-border-strong); border-radius: var(--radius-md); padding: 22px; text-align: center; }
 .skeleton-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
 .skeleton { height: 150px; background: linear-gradient(90deg, #fff 0%, #f3f5fa 50%, #fff 100%); background-size: 200% 100%; animation: shimmer 1.2s infinite; }

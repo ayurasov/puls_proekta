@@ -38,8 +38,13 @@ export function apcaContrast(txt, bg) {
  * белый на синем, красном, фиолетовом, сером и тёмных цветах, тёмный — на жёлтом, лаймовом, зелёном, голубом. */
 export function readableText(hex, opacity = 1) {
   const fill = opacity < 1 ? blendWithWhite(hex, opacity) : hex
-  return apcaContrast('#ffffff', fill) >= apcaContrast(DARK_TEXT, fill) ? '#ffffff' : DARK_TEXT
+  const white = apcaContrast('#ffffff', fill)
+  const dark = apcaContrast(DARK_TEXT, fill)
+  // На средних тонах (бирюзовый, голубой) белый читается не хуже чёрного, если контраст почти равный: белая подпись
+  // с тёмной обводкой (класс .on-dark) на насыщенной полосе смотрится чище. Порог — Lc 50 у белого и отставание не больше 5.
+  return white >= dark || (white >= 50 && dark - white <= WHITE_BIAS) ? '#ffffff' : DARK_TEXT
 }
+const WHITE_BIAS = 5
 
 /** Тот же оттенок, затемнённый до контраста ≥ 4,5 с белым фоном — для цветных подписей (пометки, вехи над шкалой). */
 export function textColorOnWhite(hex) {

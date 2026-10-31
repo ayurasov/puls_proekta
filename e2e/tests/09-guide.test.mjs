@@ -179,9 +179,11 @@ test('администратор: руководство администрат�
   await waitHeadingAtTop(help, 'сотрудники')
   await shot(help, '06-guide-admin-help')
 
-  // Справка следует за вкладкой раздела
+  // Справка у каждого раздела своя: календарь и вход через домен (теперь — в «Интеграциях»)
   await page.goto(BASE + '/admin/settings')
-  await page.click('.segmented button:has-text("Производственный календарь")')
   assert.equal(await page.getAttribute('.page-header [data-testid=help-link]', 'data-help-topic'), 'admin-calendar')
+  await page.goto(BASE + '/admin/settings?tab=ldap')
+  await page.waitForURL(/\/admin\/integrations\/ldap$/)
+  assert.equal(await page.getAttribute('.integration-header [data-testid=help-link]', 'data-help-topic'), 'admin-ldap')
   assert.deepEqual(page.errors, [])
 })
