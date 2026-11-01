@@ -25,6 +25,7 @@ const routes = [
   { path: '/admin/integrations', name: 'admin-integrations', component: () => import('../views/admin/IntegrationsView.vue'), meta: { admin: true, title: 'Интеграции' } },
   { path: '/admin/integrations/jira', name: 'admin-integrations-jira', component: () => import('../views/admin/integrations/JiraIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Jira' } },
   { path: '/admin/integrations/podelu', name: 'admin-integrations-podelu', component: () => import('../views/admin/integrations/PodeluIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · «По Делу»' } },
+  { path: '/admin/integrations/keys', name: 'admin-integrations-keys', component: () => import('../views/admin/integrations/KeysIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Ключи доступа' } },
   { path: '/admin/integrations/ldap', name: 'admin-integrations-ldap', component: () => import('../views/admin/integrations/LdapIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Вход через домен' } },
   { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { trash: true, title: 'Корзина' } },
   { path: '/about', name: 'about', component: () => import('../views/AboutView.vue'), meta: { title: 'О программе' } },

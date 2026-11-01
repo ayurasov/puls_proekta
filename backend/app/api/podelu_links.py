@@ -114,8 +114,10 @@ def put_links():
 @admin_required
 def delete_links():
     settings = links.get_settings()
-    if settings["baseUrl"] or settings["keyEncrypted"] or settings["inbound"]:
+    inbound = links.inbound_key()
+    if settings["baseUrl"] or settings["keyEncrypted"] or inbound:
         links.delete_settings()
+        links.revoke_inbound_key(current_user())  # ключ «Пульса» для «По Делу» — в реестре как отзыв ключа
         audit.record("Настройки", "delete", "По Делу: ссылки из задач", "", settings["baseUrl"] or "", "")
         db.session.commit()
     return jsonify({"ok": True})
@@ -152,7 +154,7 @@ def test_links():
     if not info["linksEnabled"]:
         warnings.append("В «По Делу» ссылки на проекты в задачах пока выключены — включите их там: Настройки → "
                         "Интеграции → «Пульс проекта»")
-    if not settings.get("inbound"):
+    if not links.inbound_key():
         warnings.append("Ключ «Пульса» для «По Делу» ещё не выпущен — без него «По Делу» не сможет искать проекты")
     return jsonify({"ok": True, **info, "url": client.request_url, "remembered": remembered, "warnings": warnings,
                     "settings": links.admin_json(suggested_url=_suggested_url())})
@@ -162,9 +164,7 @@ def test_links():
 @admin_required
 @limiter.limit("10 per minute", key_func=_user_key)
 def issue_key():
-    had = bool(links.get_settings().get("inbound"))
-    key, meta = links.issue_inbound_key()
-    audit.record("Настройки", "update" if had else "create", "По Делу: ключ «Пульса»", "key", "", meta["prefix"] + "…")
+    key, meta = links.issue_inbound_key(current_user())  # выпуск или перевыпуск — в реестре (раздел «Интеграции»)
     db.session.commit()
     return jsonify({"key": key, "prefix": meta["prefix"], "createdAt": meta["createdAt"]})
 
@@ -172,10 +172,8 @@ def issue_key():
 @bp.delete("/settings/podelu/links/key")
 @admin_required
 def revoke_key():
-    settings = links.get_settings()
-    if settings.get("inbound"):
-        links.revoke_inbound_key()
-        audit.record("Настройки", "delete", "По Делу: ключ «Пульса»", "key", settings["inbound"]["prefix"] + "…", "")
+    if links.inbound_key():
+        links.revoke_inbound_key(current_user())
         db.session.commit()
     return jsonify({"ok": True})
 

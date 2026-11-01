@@ -1,6 +1,6 @@
 ---
 title: "Пульс Проекта — руководство по развёртыванию"
-subtitle: "Версия 0.5.1"
+subtitle: "Версия 0.6.0"
 date: "Октябрь 2026"
 lang: ru
 ---
@@ -54,7 +54,7 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Шаг 1. Получение дистрибутива
 
 ```bash
-sudo git clone --branch v0.5.1 <адрес репозитория puls_proekta> /opt/puls
+sudo git clone --branch v0.6.0 <адрес репозитория puls_proekta> /opt/puls
 cd /opt/puls
 ```
 
@@ -86,7 +86,7 @@ sudo docker compose ps
 
 ```bash
 curl -fsS http://127.0.0.1:39663/api/health/ready; echo
-# {"status":"ok","schema":"0005_podelu_links","version":"0.5.1"}
+# {"status":"ok","schema":"0006_integration_keys","version":"0.6.0"}
 curl -sI http://127.0.0.1:39663/ | grep -i content-security-policy
 ```
 
@@ -212,6 +212,12 @@ server {
 виден. Если «По Делу» работает на той же машине, укажите в обеих системах **Адрес для запросов сервера** — раздел
 «Рядом с другими системами на одной машине», пункт «Связь «Пульса» и «По Делу»».
 
+С 0.6.0 к `/api/integration/v1/…` обращаются и другие системы — например, «Дашборды компании» для сводного
+отчёта по проектам: каждая со своим ключом из «Интеграции → Ключи доступа» и своими правами. Ограничение частоты —
+120 запросов в минуту на ключ, запросы без действующего ключа ограничиваются по адресу клиента. Миграция
+`0006_integration_keys` при обновлении переносит ключ «По Делу» в таблицу ключей — вводить его в «По Делу» заново
+не нужно.
+
 ## Резервное копирование
 
 | Переменная | По умолчанию | Назначение |
@@ -295,7 +301,7 @@ sudo docker compose start backend frontend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.5.1
+sudo sh deploy/update.sh v0.6.0
 ```
 
 Скрипт: копия `pre-update` → получение версии из git (ветка — только перемоткой вперёд) → сборка и перезапуск
@@ -447,13 +453,13 @@ sudo docker compose logs backup              # резервные копии
 cd puls_proekta
 docker compose build
 docker pull postgres:16-alpine
-docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.5.1-images.tar.gz
+docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.6.0-images.tar.gz
 ```
 
 На сервере:
 
 ```bash
-gunzip -c puls-0.5.1-images.tar.gz | sudo docker load
+gunzip -c puls-0.6.0-images.tar.gz | sudo docker load
 cd /opt/puls
 sudo docker compose up -d          # без --build: используются загруженные образы
 ```

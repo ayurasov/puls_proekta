@@ -149,7 +149,8 @@ const canEnable = computed(() => checked.value && !dirty.value)
         <div class="step-body">
           <div class="step-title">Ключ «Пульса» для «По Делу»</div>
           <p class="muted small">«По Делу» ищет с ним проекты и строки планов — только те, что доступны сотруднику в «Пульсе». Вставьте ключ в «По Делу»:
-            Настройки → Интеграции → «Пульс проекта».</p>
+            Настройки → Интеграции → «Пульс проекта». Ключи всех систем — в разделе
+            <router-link to="/admin/integrations/keys">«Ключи доступа»</router-link>.</p>
           <div v-if="issued" class="issued" data-testid="podelu-links-issued">
             <code class="key mono">{{ issued.key }}</code>
             <button class="btn btn-sm" type="button" data-testid="podelu-links-copy" @click="copyKey"><AppIcon :name="copied ? 'check' : 'copy'" :size="13" /> {{ copied ? 'Скопирован' : 'Скопировать' }}</button>

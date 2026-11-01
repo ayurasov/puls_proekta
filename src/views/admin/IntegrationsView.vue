@@ -14,15 +14,18 @@ const jira = ref(undefined)
 const podelu = ref(undefined)
 const links = ref(undefined)
 const ldap = ref(undefined)
+const keys = ref(undefined)
 
 onMounted(async () => {
-  const [j, p, l, d] = await Promise.allSettled([
+  const [j, p, l, d, k] = await Promise.allSettled([
     api.get('/settings/jira'), api.get('/settings/podelu'), api.get('/settings/podelu/links'), api.get('/settings/ldap'),
+    api.get('/settings/integration-keys'),
   ])
   jira.value = j.status === 'fulfilled' ? j.value : null
   podelu.value = p.status === 'fulfilled' ? p.value : null
   links.value = l.status === 'fulfilled' ? l.value : null
   ldap.value = d.status === 'fulfilled' ? d.value : null
+  keys.value = k.status === 'fulfilled' ? k.value.keys.filter((key) => key.active) : null
 })
 
 function host(url) {
@@ -59,6 +62,13 @@ const cards = computed(() => [
       ? { kind: 'ok', text: 'Включён' } : { kind: 'muted', text: 'Выключен' },
     facts: ldap.value?.enabled ? [ldap.value.serverUrl ? host(ldap.value.serverUrl.replace(/^ldaps?:/, 'https:')) : null,
       { local: 'только пароли системы', ldap: 'только домен', hybrid: 'сначала домен, затем пароль' }[ldap.value.authMode]].filter(Boolean) : [],
+  },
+  {
+    id: 'keys', to: '/admin/integrations/keys', logo: 'keys', title: 'Ключи доступа',
+    text: 'Другие системы — «По Делу», «Дашборды компании» — читают проекты «Пульса» по своим ключам и с выданными им правами.',
+    state: keys.value === undefined ? null : keys.value?.length
+      ? { kind: 'ok', text: `Действующих: ${keys.value.length}` } : { kind: 'muted', text: 'Ключей нет' },
+    facts: (keys.value || []).slice(0, 4).map((key) => `${key.name} · ${key.prefix}…`),
   },
 ])
 </script>

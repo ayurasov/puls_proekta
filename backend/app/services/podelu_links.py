@@ -3,8 +3,8 @@
 Обмен ключами, как у вебхуков: каждая система выпускает свой ключ, администратор вводит его в другую систему.
 
 * Ключ «Пульса» (``puls_…``) выпускается здесь; «По Делу» читает с ним проекты и строки планов
-  (``/api/integration/v1``). Хранится только SHA-256 ключа, первые символы для показа, даты выпуска и
-  последнего использования; сам ключ показывается один раз.
+  (``/api/integration/v1``). С 0.6.0 это обычный ключ интеграции (ADR-0011, таблица integration_keys) системы
+  «podelu» с правом projects.read; страница «По Делу» управляет им так же, как раньше.
 * Ключ «По Делу» (``podelu_…``) выпускается в «По Делу»; «Пульс» читает с ним задачи, связанные с проектом
   (``/api/integrations/puls``). Хранится зашифрованным (Fernet, ключ из SECRET_KEY со своей солью), в интерфейс не
   возвращается и уходит только на адрес, для которого введён.
@@ -15,10 +15,7 @@
 
 import base64
 import hashlib
-import hmac
 import re
-import secrets
-import time
 from datetime import datetime, timezone
 
 import requests
@@ -28,6 +25,7 @@ from flask import current_app
 from app.extensions import db
 from app.models import AppSetting
 from app.podelu_client import PodeluError, check_base_url, check_server_url, connection_error
+from app.services import integration_keys
 
 SETTING_KEY = "podelu_links"
 DEFAULTS = {
@@ -35,14 +33,11 @@ DEFAULTS = {
     # сервиса в Docker на одной машине); пусто — запросы идут на baseUrl. Ссылки на задачи — всегда от baseUrl
     "baseUrl": "", "serverUrl": "", "keyEncrypted": "", "acceptInvalidCerts": False, "enabled": False,
     "checkedAt": None, "checkedVersion": "", "checkedFingerprint": "",
-    "inbound": None,  # {"hash", "prefix", "createdAt", "lastUsedAt"}
 }
-INBOUND_PREFIX = "puls_"
 OUTBOUND_PREFIX = "podelu_"
 KEY_RE = re.compile(r"^[A-Za-z0-9_\-]{20,200}$")
 TIMEOUT = (5, 15)
 MAX_RESPONSE_BYTES = 5 * 1024 * 1024
-LAST_USED_EVERY = 60  # секунд: отметка «последнее использование» — не чаще раза в минуту
 NOT_CONFIGURED = "Связь с «По Делу» для ссылок из задач не настроена"
 
 
@@ -71,51 +66,32 @@ def delete_settings():
         db.session.delete(row)
 
 
-# ---------- ключ «Пульса» для «По Делу» ----------
+# ---------- ключ «Пульса» для «По Делу» (ключ интеграции системы podelu, ADR-0011) ----------
 
-def _hash(key):
-    return hashlib.sha256(key.encode("utf-8")).hexdigest()
-
-
-def issue_inbound_key():
-    """Новый ключ «Пульса»: (ключ — показать один раз, сведения для хранения). Прежний ключ перестаёт действовать."""
-    key = INBOUND_PREFIX + secrets.token_urlsafe(32)
-    meta = {"hash": _hash(key), "prefix": key[:12], "createdAt": now_iso(), "lastUsedAt": None}
-    settings = get_settings()
-    settings["inbound"] = meta
-    save_settings(settings)
-    return key, meta
+def inbound_key():
+    """Действующий ключ «Пульса» для «По Делу» (последний выпущенный) или None."""
+    keys = integration_keys.active("podelu")
+    return keys[0] if keys else None
 
 
-def revoke_inbound_key():
-    settings = get_settings()
-    settings["inbound"] = None
-    save_settings(settings)
+def issue_inbound_key(user=None):
+    """Ключ «Пульса» для «По Делу»: перевыпуск действующего или новый с правом projects.read.
+    (ключ — показать один раз, сведения для показа). Прежний ключ перестаёт действовать сразу."""
+    row = inbound_key()
+    if row is None:
+        key, row = integration_keys.issue("По Делу", "podelu", ["projects.read"], user)
+    else:
+        key = integration_keys.reissue(row, user)
+    return key, {"prefix": row.prefix, "createdAt": _iso(row.issued_at)}
 
 
-_last_touch = {}
+def revoke_inbound_key(user=None):
+    for row in integration_keys.active("podelu"):
+        integration_keys.revoke(row, user)
 
 
-def verify_inbound(header):
-    """Проверка заголовка Authorization: Bearer <ключ «Пульса»>. Возвращает хэш ключа или None."""
-    if not isinstance(header, str) or not header.startswith("Bearer "):
-        return None
-    key = header[7:].strip()
-    if not key.startswith(INBOUND_PREFIX) or not KEY_RE.match(key):
-        return None
-    inbound = get_settings().get("inbound") or {}
-    stored = inbound.get("hash") or ""
-    digest = _hash(key)
-    if not stored or not hmac.compare_digest(stored, digest):
-        return None
-    if time.monotonic() - _last_touch.get(digest, 0) > LAST_USED_EVERY:
-        _last_touch[digest] = time.monotonic()
-        settings = get_settings()
-        if settings.get("inbound"):
-            settings["inbound"] = {**settings["inbound"], "lastUsedAt": now_iso()}
-            save_settings(settings)
-            db.session.commit()
-    return digest
+def _iso(value):
+    return value.replace(microsecond=0).isoformat() + "Z" if value else None
 
 
 # ---------- ключ «По Делу» для «Пульса» ----------
@@ -160,13 +136,15 @@ def ready(settings=None):
 
 def admin_json(settings=None, suggested_url=""):
     settings = settings or get_settings()
-    inbound = settings.get("inbound") or None
+    key = inbound_key()
+    inbound = {"prefix": key.prefix, "createdAt": _iso(key.issued_at), "lastUsedAt": _iso(key.last_used_at)} \
+        if key else None
     return {
         "baseUrl": settings["baseUrl"], "serverUrl": settings.get("serverUrl") or "",
         "acceptInvalidCerts": bool(settings["acceptInvalidCerts"]),
         "hasKey": bool(settings["keyEncrypted"]), "enabled": bool(settings["enabled"]),
         "checkedAt": settings["checkedAt"], "checkedVersion": settings["checkedVersion"] or "",
-        "inbound": {k: inbound.get(k) for k in ("prefix", "createdAt", "lastUsedAt")} if inbound else None,
+        "inbound": inbound,
         "suggestedBaseUrl": suggested_url,
     }
 

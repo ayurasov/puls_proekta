@@ -10,7 +10,8 @@
   несколько, закрытая вкладка становится архивным планом, а не исчезает;
 * строки плана (задачи, вехи, группы), пометки, исполнители плана, комментарии;
 * журнал изменений плана (кто, когда, что было и что стало) и снимки плана для отката;
-* правила доступа, реестр изменений (аудит), настройки, производственный календарь.
+* правила доступа, реестр изменений (аудит), настройки, производственный календарь;
+* ключи интеграций — доступ других систем к `/api/integration/v1` (ADR-0011).
 
 Все отметки времени — наивный UTC (`utcnow()`), API отдаёт их в ISO 8601 с `Z`.
 Строки, пометки и исполнители удаляются «мягко» (`deleted_at`): удаление можно отменить,
@@ -417,6 +418,28 @@ class AppSetting(db.Model):
     key = db.Column(db.String(100), primary_key=True)
     value = db.Column(db.JSON, nullable=True)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
+
+
+class IntegrationKey(db.Model):
+    """Ключ другой системы для API интеграций (ADR-0011): «По Делу», «Дашборды компании» и др.
+
+    Хранится только SHA-256 ключа (уникальный — по нему ключ находится за один запрос) и первые 12 символов для
+    показа. Права — список scopes. Отозванный ключ остаётся в списке для истории (revoked_at)."""
+
+    __tablename__ = "integration_keys"
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    app = db.Column(db.String(30), nullable=False, default="other")
+    scopes = db.Column(db.JSON, nullable=False, default=list)
+    key_hash = db.Column(db.String(64), nullable=False, unique=True)
+    prefix = db.Column(db.String(12), nullable=False)
+    issued_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    issued_by_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    last_used_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True, index=True)
+    revoked_by_id = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
 
 
 class JiraIssue(db.Model):
