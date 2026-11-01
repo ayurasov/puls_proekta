@@ -52,6 +52,7 @@ const integrationLinks = [
   { to: '/admin/integrations/jira', icon: 'jira', label: 'Jira' },
   { to: '/admin/integrations/podelu', icon: 'podelu', label: '«По Делу»' },
   { to: '/admin/integrations/ldap', icon: 'shield', label: 'Вход через домен' },
+  { to: '/admin/integrations/keys', icon: 'key', label: 'Ключи доступа' },
 ]
 
 onMounted(() => { if (!projects.loaded) projects.load().catch(() => {}) })

@@ -9,7 +9,9 @@ import requests
 from tests.conftest import make_user, new_client
 from tests.helpers import create_project, ok_ops, task
 from app.extensions import db
-from app.models import AccessRule, AppSetting, User
+from sqlalchemy import select
+
+from app.models import AccessRule, AppSetting, IntegrationKey, User
 from app.services import podelu_links
 
 PODELU = "https://podelu.example.ru"
@@ -32,8 +34,11 @@ def test_inbound_key_is_shown_once_stored_as_hash_and_revocable(app, admin, clie
     assert _get(client, "/ping", "puls_nothing_issued_yet_123456").status_code == 401
     key = _issue(admin)
     assert key.startswith("puls_") and len(key) > 40
+    # 0.6.0: ключ «По Делу» — запись таблицы ключей интеграций (ADR-0011): только SHA-256 и первые 12 символов
     with app.app_context():
-        stored = json.dumps(db.session.get(AppSetting, "podelu_links").value)
+        row = db.session.execute(select(IntegrationKey)).scalar_one()
+        stored = json.dumps({"hash": row.key_hash, "prefix": row.prefix, "scopes": row.scopes}, ensure_ascii=False)
+        assert (row.app, row.scopes, row.revoked_at) == ("podelu", ["projects.read"], None)
     assert key not in stored and key[:12] in stored
     info = admin.get("/api/settings/podelu/links").get_json()["inbound"]
     assert info["prefix"] == key[:12] and info["lastUsedAt"] is None and "hash" not in info

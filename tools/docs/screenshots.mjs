@@ -396,6 +396,16 @@ async function adminGuide() {
   await page.locator('[data-testid=jira-settings]').screenshot({ path: join(root, 'docs/manuals/images/admin/16-jira.png') })
   await page.locator('[data-testid=jira-diagnostics]').screenshot({ path: join(root, 'docs/manuals/images/admin/17-jira-diagnostics.png') })
 
+  // Ключи доступа: ключ «По Делу» (выпущен выше) и ключ «Дашбордов компании»
+  await page.goto(BASE + '/admin/integrations/keys')
+  await page.waitForSelector('[data-testid=key-row]')
+  await page.click('[data-testid=key-issue-open]')
+  await page.click('[data-testid=key-save]')
+  await page.waitForSelector('[data-testid=key-issued]')
+  await page.locator('.modal-footer .btn-primary', { hasText: 'Готово' }).click()
+  await page.waitForTimeout(400)
+  await shot(page, '18-integration-keys')
+
   await page.goto(BASE + '/admin/access')
   await page.click('.segmented button:has-text("Правила")')
   await page.waitForSelector('[data-testid=dep-rule]')

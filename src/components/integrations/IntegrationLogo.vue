@@ -10,6 +10,7 @@ defineProps({ kind: { type: String, required: true }, size: { type: Number, defa
     <span v-if="kind === 'jira'" class="letter">J</span>
     <AppIcon v-else-if="kind === 'podelu'" name="checklist" :size="Math.round(size * 0.48)" :stroke-width="2.2" />
     <AppIcon v-else-if="kind === 'ldap'" name="shield" :size="Math.round(size * 0.48)" :stroke-width="2.2" />
+    <AppIcon v-else-if="kind === 'keys'" name="key" :size="Math.round(size * 0.48)" :stroke-width="2.2" />
     <AppIcon v-else name="link" :size="Math.round(size * 0.48)" />
   </span>
 </template>
@@ -19,5 +20,6 @@ defineProps({ kind: { type: String, required: true }, size: { type: Number, defa
 .logo-jira { background: linear-gradient(140deg, #2684ff, #0052cc); }
 .logo-podelu { background: linear-gradient(140deg, #34c38f, #15803d); }
 .logo-ldap { background: linear-gradient(140deg, #8b5cf6, #5b21b6); }
+.logo-keys { background: linear-gradient(140deg, #f59e0b, #b45309); }
 .letter { font-weight: 800; font-style: italic; font-size: 18px; letter-spacing: -0.02em; }
 </style>

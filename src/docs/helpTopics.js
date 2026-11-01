@@ -30,6 +30,7 @@ export const HELP_TOPICS = {
   'admin-jira': { guide: 'admin', id: 'jira', title: 'Jira' },
   'admin-podelu': { guide: 'admin', id: 'по-делу', title: '«По Делу»' },
   'admin-podelu-links': { guide: 'admin', id: 'ссылки-из-задач-по-делу', title: 'Ссылки из задач «По Делу»' },
+  'admin-integration-keys': { guide: 'admin', id: 'ключи-доступа', title: 'Ключи доступа' },
   'admin-directions': { guide: 'admin', id: 'направления', title: 'Направления' },
   'admin-access-grant': { guide: 'admin', id: 'выдать-доступ', title: 'Выдать доступ' },
   'admin-access-rules': { guide: 'admin', id: 'правила', title: 'Правила' },

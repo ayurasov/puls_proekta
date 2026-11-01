@@ -20,7 +20,7 @@ FIELD_LABELS = {
     "direction": "Направление", "color": "Цвет", "position": "Порядок", "level": "Уровень доступа",
     "kind": "Тип дня", "avatar": "Фото", "password": "Пароль", "role": "Роль", "is_active": "Активен",
     "active": "Активен", "login": "Логин", "username": "Логин", "email": "Email", "auth_source": "Способ входа",
-    "data": "Данные плана",
+    "data": "Данные плана", "key": "Ключ", "scopes": "Права",
 }
 USER_FIELD_LABELS = {"name": "ФИО", "position": "Должность"}
 

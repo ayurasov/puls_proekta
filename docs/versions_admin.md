@@ -3,6 +3,31 @@
 Документ содержит технические и эксплуатационные изменения. Пользовательский рассказ — в
 [versions.md](versions.md).
 
+## Версия 0.6.0 (Ноябрь 2026 г.)
+
+Ключи интеграций для нескольких систем ([ADR-0011](architecture/adr-0011-integration-keys.md)). Подробно —
+[release notes](release-notes/v0.6.0.md).
+
+### Обновление
+
+- `sh deploy/update.sh v0.6.0`. Миграция `0006_integration_keys`: таблица `integration_keys`; ключ «По Делу» из
+  `app_settings['podelu_links'].inbound` переносится в неё (тот же ключ, право `projects.read`) и убирается из
+  настройки. Откат миграции возвращает его в настройку. `GET /api/health/ready` →
+  `{"schema":"0006_integration_keys","version":"0.6.0"}`.
+- Новых переменных окружения нет.
+
+### Ключи и права
+
+- «Интеграции → Ключи доступа»: выпуск, права, перевыпуск, отзыв; `GET|POST /api/settings/integration-keys`,
+  `POST /api/settings/integration-keys/<id>/reissue`, `PATCH|DELETE /api/settings/integration-keys/<id>`. Каждое
+  действие — в реестре изменений, раздел «Интеграции».
+- Права: `projects.read` — эндпоинты и поля 0.5.x без изменений; `projects.stats` — ещё `inwork`, `blocked`,
+  `directionInfo {id, name}`, `updatedAt`, `planWindow {start, end}` в `projects` и `projects/<id>`. Нет права —
+  `403 insufficient_scope`. `direction` остаётся строкой.
+- `GET /api/integration/v1/directions?userId=&login=&email=` — направления с числом видимых проектов.
+- Ограничение частоты: 120 запросов в минуту на ключ (`integration-key:<id>`), без действующего ключа — на адрес.
+  Если раньше за одним адресом работали несколько систем, теперь у каждой свой счётчик.
+
 ## Версия 0.5.1 (Ноябрь 2026 г.)
 
 Связь с «По Делу» на одной машине ([ADR-0010](architecture/adr-0010-podelu-task-links.md), «Адрес для запросов
