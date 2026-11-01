@@ -173,7 +173,11 @@ test('администратор подключает «По Делу» в «И�
   await shot(page, '10-podelu-settings')
 
   const saved = await api(page, 'GET', '/settings/podelu')
-  assert.deepEqual(saved.body, { baseUrl: PODELU, login: 'svc-puls', acceptInvalidCerts: false, hasPassword: true })
+  assert.deepEqual(saved.body, { baseUrl: PODELU, serverUrl: '', login: 'svc-puls', acceptInvalidCerts: false, hasPassword: true })
+  // 0.5.1: адрес для запросов сервера — необязательный, раскрывается кнопкой
+  assert.equal(await page.locator('[data-testid=podelu-server-url]').count(), 0)
+  await page.click('[data-testid=podelu-server-url-open]')
+  await page.locator('[data-testid=podelu-server-url]').waitFor()
   assert.ok(!JSON.stringify(saved.body).includes(PASSWORD))
   // Вход — с CSRF-токеном своей сессии и Referer «По Делу»; после проверки — выход
   const logins = stub.log.filter((r) => r.path === '/api/auth/login')

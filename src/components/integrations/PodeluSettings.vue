@@ -6,31 +6,34 @@ import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { resetPodelu } from '../../integrations/podelu'
 import AppIcon from '../common/AppIcon.vue'
+import { SERVER_URL_PLACEHOLDER, effectiveServerUrl, normalizeUrl, sameAddresses, suggestsServerUrl } from '../../integrations/serverAddress'
 
 /**
  * Подключение к «По Делу» (ADR-0009): адрес, сервисная учётная запись и пароль (хранится на сервере
  * зашифрованным и в интерфейс не возвращается). «По Делу» не выдаёт API-токенов — «Пульс» входит так же,
- * как браузер. Отсюда — переход к загрузке структуры и сотрудников.
+ * как браузер. Отсюда — переход к загрузке структуры и сотрудников. Адрес для запросов сервера (0.5.1) — если серверу
+ * «Пульса» «По Делу» видна по другому адресу (оба сервиса в Docker на одной машине); сотрудники видят «Адрес «По Делу»».
  */
 const ui = useUiStore()
 const { confirm } = useDialogs()
 
 const saved = ref(null)
 const loaded = ref(false)
-const form = reactive({ baseUrl: '', login: '', password: '', acceptInvalidCerts: false })
+const form = reactive({ baseUrl: '', serverUrl: '', login: '', password: '', acceptInvalidCerts: false })
 const dirty = ref(false)
 const status = ref(null) // { kind: 'ok' | 'error' | 'info', text }
 const busy = ref('')
+const serverOpen = ref(false) // поле «Адрес для запросов сервера» раскрыто
 
-function normalizeUrl(url) { return (url || '').trim().replace(/\/+$/, '') }
-const sameAccount = computed(() => saved.value && normalizeUrl(form.baseUrl) === saved.value.baseUrl && form.login.trim() === saved.value.login)
+const sameAccount = computed(() => sameAddresses(form, saved.value) && form.login.trim() === saved.value.login)
+const showServerUrl = computed(() => serverOpen.value || !!saved.value?.serverUrl || !!form.serverUrl)
 const passwordPlaceholder = computed(() => (saved.value?.hasPassword && sameAccount.value ? 'Сохранён — оставьте пустым, чтобы не менять' : 'Пароль учётной записи в «По Делу»'))
 
 function fill(conn) {
   saved.value = conn
   Object.assign(form, conn
-    ? { baseUrl: conn.baseUrl, login: conn.login, password: '', acceptInvalidCerts: conn.acceptInvalidCerts }
-    : { baseUrl: '', login: '', password: '', acceptInvalidCerts: false })
+    ? { baseUrl: conn.baseUrl, serverUrl: conn.serverUrl || '', login: conn.login, password: '', acceptInvalidCerts: conn.acceptInvalidCerts }
+    : { baseUrl: '', serverUrl: '', login: '', password: '', acceptInvalidCerts: false })
   dirty.value = false
   status.value = conn ? { kind: 'ok', text: 'Подключение сохранено' } : null
 }
@@ -40,7 +43,13 @@ onMounted(async () => {
 })
 
 function change() { dirty.value = true; if (status.value?.kind !== 'error') status.value = null }
-function payload() { return { ...form, baseUrl: normalizeUrl(form.baseUrl), login: form.login.trim() } }
+function payload() {
+  return { ...form, baseUrl: normalizeUrl(form.baseUrl), serverUrl: effectiveServerUrl(form.baseUrl, form.serverUrl), login: form.login.trim() }
+}
+function fail(message) {
+  status.value = { kind: 'error', text: message }
+  if (suggestsServerUrl(message)) serverOpen.value = true
+}
 
 async function test() {
   busy.value = 'test'
@@ -50,8 +59,8 @@ async function test() {
     const who = [res.user?.name, res.user?.login && `(${res.user.login})`].filter(Boolean).join(' ')
     status.value = res.problem
       ? { kind: 'error', text: res.problem }
-      : { kind: 'ok', text: `Соединение установлено${who ? `: ${who}` : ''} · права на выгрузку структуры и сотрудников есть` }
-  } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
+      : { kind: 'ok', text: `Соединение установлено${who ? `: ${who}` : ''} · права на выгрузку структуры и сотрудников есть`, url: payload().serverUrl ? res.url : '' }
+  } catch (err) { fail(err.message) } finally { busy.value = '' }
 }
 async function save() {
   busy.value = 'save'
@@ -59,7 +68,7 @@ async function save() {
     fill(await api.put('/settings/podelu', payload()))
     resetPodelu()
     ui.success('Подключение к «По Делу» сохранено')
-  } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
+  } catch (err) { fail(err.message) } finally { busy.value = '' }
 }
 async function disconnect() {
   const ok = await confirm({
@@ -68,7 +77,7 @@ async function disconnect() {
     confirmText: 'Отключить', danger: true,
   })
   if (!ok) return
-  try { await api.delete('/settings/podelu'); fill(null); resetPodelu(); ui.success('«По Делу» отключена') } catch (err) { ui.error(err) }
+  try { await api.delete('/settings/podelu'); serverOpen.value = false; fill(null); resetPodelu(); ui.success('«По Делу» отключена') } catch (err) { ui.error(err) }
 }
 </script>
 
@@ -91,11 +100,20 @@ async function disconnect() {
       </div>
       <p class="muted small hint">Адрес — тот, по которому сотрудники открывают «По Делу». Учётной записи нужна роль «Администратор» или полномочия
         «Ведёт структуру компании» и «Ведёт учётные записи». Выгрузки «По Делу» отдаёт только после входа по логину и паролю, как в браузере, поэтому используйте адрес https://.</p>
+      <label v-if="showServerUrl" class="field server-field">
+        <span class="field-label">Адрес для запросов сервера <span class="muted optional">— необязательно</span></span>
+        <input v-model="form.serverUrl" class="input" type="url" :placeholder="SERVER_URL_PLACEHOLDER" data-testid="podelu-server-url" @input="change" />
+        <span class="muted small">Если «Пульс» и «По Делу» в Docker на одной машине: localhost внутри контейнера «Пульса» — сам контейнер, поэтому серверу
+          нужен IP машины или http://host.docker.internal:&lt;порт «По Делу»&gt;. Ссылки для сотрудников по-прежнему ведут на «Адрес «По Делу»». Пусто — запросы идут туда же.</span>
+      </label>
+      <button v-else class="btn btn-ghost btn-sm more" type="button" data-testid="podelu-server-url-open" @click="serverOpen = true">
+        <AppIcon name="plus" :size="13" /> Серверу «Пульса» «По Делу» видна по другому адресу
+      </button>
       <label class="check"><input v-model="form.acceptInvalidCerts" type="checkbox" data-testid="podelu-insecure" @change="change" /> Не проверять TLS-сертификат (для самоподписанных и корпоративных сертификатов)</label>
 
       <div v-if="status" class="status" :class="status.kind" role="status" data-testid="podelu-status">
         <AppIcon :name="status.kind === 'ok' ? 'check' : status.kind === 'error' ? 'warning' : 'clock'" :size="14" />
-        <span>{{ status.text }}</span>
+        <span>{{ status.text }}<template v-if="status.url"><br /><span class="muted">Запрос сервера: {{ status.url }}</span></template></span>
       </div>
 
       <div class="footer">
@@ -117,6 +135,10 @@ async function disconnect() {
 .wide { grid-column: 1 / -1; }
 .hint { margin: -4px 0 0; line-height: 1.5; }
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.server-field { display: flex; flex-direction: column; gap: 4px; }
+.server-field .small { line-height: 1.45; }
+.optional { font-weight: 400; }
+.more { align-self: flex-start; padding-left: 0; }
 .status { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-radius: var(--radius-sm); font-size: 13px; line-height: 1.45; }
 .status.ok { background: var(--color-success-soft); color: #1d7a4c; }
 .status.error { background: var(--color-danger-soft); color: #b42318; }

@@ -94,7 +94,7 @@ const podelu = createServer((req, res) => {
     if (path === '/api/auth/me') return send(200, podeluAccount)
     // Ответная интеграция (ключ «По Делу» для «Пульса»): проверка связи и задачи, связанные с проектами
     if (req.headers.authorization === `Bearer ${PODELU_KEY}`) {
-      if (path === '/api/integrations/puls/ping') return send(200, { ok: true, app: 'podelu', name: 'По Делу', version: '1.5.0', linksEnabled: true })
+      if (path === '/api/integrations/puls/ping') return send(200, { ok: true, app: 'podelu', name: 'По Делу', version: '1.4.2', linksEnabled: true })
       if (/^\/api\/integrations\/puls\/projects\/\d+\/tasks$/.test(path)) return send(200, { tasks: podeluTasksFor(path), truncated: false })
       if (path === '/api/integrations/puls/summary') return send(200, { counts: podeluCounts() })
     }

@@ -8,39 +8,51 @@ import AppIcon from '../common/AppIcon.vue'
 import HelpLink from '../common/HelpLink.vue'
 import ToggleSwitch from '../common/ToggleSwitch.vue'
 import { resetPodeluLinks } from '../../integrations/podeluTasks'
+import { SERVER_URL_PLACEHOLDER, effectiveServerUrl, normalizeUrl, sameAddresses, suggestsServerUrl } from '../../integrations/serverAddress'
 
 /**
  * Ответная интеграция с «По Делу» (ADR-0010): обмен ключами, проверка связи и показ задач «По Делу» в проектах.
  * 1) ключ «Пульса» — выпускается здесь, вводится в «По Делу»; 2) адрес и ключ «По Делу» — выпускается там, вводится
  * здесь; 3) после успешной проверки — показ задач «По Делу», которые ссылаются на проекты и строки планов.
+ * Адрес для запросов сервера (0.5.1) — если серверу «Пульса» «По Делу» видна по другому адресу, чем сотрудникам
+ * (оба сервиса в Docker на одной машине); ссылки на задачи — по-прежнему от «Адреса «По Делу»».
  */
 const emit = defineEmits(['changed'])
 const ui = useUiStore()
 const { confirm } = useDialogs()
 
 const saved = ref(null)
-const form = reactive({ baseUrl: '', key: '', acceptInvalidCerts: false })
+const form = reactive({ baseUrl: '', serverUrl: '', key: '', acceptInvalidCerts: false })
 const dirty = ref(false)
 const busy = ref('')
 const status = ref(null) // { kind, text, details? }
 const issued = ref(null) // { key, prefix, createdAt } — ключ показывается один раз
 const copied = ref(false)
+const serverOpen = ref(false) // поле «Адрес для запросов сервера» раскрыто
+const checkedUrl = ref('') // куда сервер «Пульса» обращался при последней проверке
 
-function normalizeUrl(url) { return (url || '').trim().replace(/\/+$/, '') }
-const keyPlaceholder = computed(() => (saved.value?.hasKey && normalizeUrl(form.baseUrl) === saved.value.baseUrl
+const keyPlaceholder = computed(() => (saved.value?.hasKey && sameAddresses(form, saved.value)
   ? 'Сохранён — оставьте пустым, чтобы не менять' : 'podelu_…'))
+const showServerUrl = computed(() => serverOpen.value || !!saved.value?.serverUrl || !!form.serverUrl)
 
 function fill(data) {
   saved.value = data
-  Object.assign(form, { baseUrl: data.baseUrl || data.suggestedBaseUrl || '', key: '', acceptInvalidCerts: data.acceptInvalidCerts })
+  Object.assign(form, { baseUrl: data.baseUrl || data.suggestedBaseUrl || '', serverUrl: data.serverUrl || '', key: '', acceptInvalidCerts: data.acceptInvalidCerts })
   dirty.value = !data.baseUrl && !!data.suggestedBaseUrl
+}
+function fail(message) {
+  status.value = { kind: 'error', text: message }
+  if (suggestsServerUrl(message)) serverOpen.value = true
 }
 onMounted(async () => {
   try { fill(await api.get('/settings/podelu/links')) } catch (err) { ui.error(err) }
 })
 function change() { dirty.value = true; if (status.value?.kind !== 'error') status.value = null }
 function payload(extra = {}) {
-  return { baseUrl: normalizeUrl(form.baseUrl), key: form.key.trim(), acceptInvalidCerts: form.acceptInvalidCerts, enabled: saved.value?.enabled || false, ...extra }
+  return {
+    baseUrl: normalizeUrl(form.baseUrl), serverUrl: effectiveServerUrl(form.baseUrl, form.serverUrl), key: form.key.trim(),
+    acceptInvalidCerts: form.acceptInvalidCerts, enabled: saved.value?.enabled || false, ...extra,
+  }
 }
 
 async function issueKey() {
@@ -82,7 +94,7 @@ async function save(extra = {}) {
     emit('changed')
     return true
   } catch (err) {
-    status.value = { kind: 'error', text: err.message }
+    fail(err.message)
     return false
   } finally { busy.value = '' }
 }
@@ -90,15 +102,17 @@ async function saveAndCheck() {
   if (dirty.value && !await save()) return
   busy.value = 'test'
   status.value = { kind: 'info', text: 'Проверяем связь с «По Делу»…' }
+  checkedUrl.value = ''
   try {
     const res = await api.post('/settings/podelu/links/test', {})
     fill(res.settings)
+    checkedUrl.value = res.settings.serverUrl ? res.url || '' : ''
     status.value = {
       kind: res.warnings.length ? 'warn' : 'ok',
       text: `Связь установлена: ${res.name}${res.version ? ` ${res.version}` : ''} принимает ключ`,
       details: res.warnings,
     }
-  } catch (err) { status.value = { kind: 'error', text: err.message } } finally { busy.value = '' }
+  } catch (err) { fail(err.message) } finally { busy.value = '' }
 }
 async function toggleEnabled(value) {
   if (await save({ enabled: value })) ui.success(value ? 'Задачи «По Делу» показываются в проектах' : 'Показ задач «По Делу» выключен')
@@ -109,6 +123,7 @@ async function removeAll() {
     await api.delete('/settings/podelu/links')
     issued.value = null
     status.value = null
+    serverOpen.value = false
     fill(await api.get('/settings/podelu/links'))
     resetPodeluLinks()
     emit('changed')
@@ -165,6 +180,16 @@ const canEnable = computed(() => checked.value && !dirty.value)
             <label class="field"><span class="field-label">Адрес «По Делу»</span><input v-model="form.baseUrl" class="input" type="url" placeholder="https://podelu.company.ru" data-testid="podelu-links-url" @input="change" /></label>
             <label class="field"><span class="field-label">Ключ «По Делу»</span><input v-model="form.key" class="input mono" type="password" autocomplete="new-password" :placeholder="keyPlaceholder" data-testid="podelu-links-key" @input="change" /></label>
           </div>
+          <label v-if="showServerUrl" class="field server-field">
+            <span class="field-label">Адрес для запросов сервера <span class="muted optional">— необязательно</span></span>
+            <input v-model="form.serverUrl" class="input" type="url" :placeholder="SERVER_URL_PLACEHOLDER" data-testid="podelu-links-server-url" @input="change" />
+            <span class="muted small">Если «Пульс» и «По Делу» в Docker на одной машине: localhost внутри контейнера «Пульса» — сам контейнер, поэтому
+              серверу нужен IP машины или http://host.docker.internal:&lt;порт «По Делу»&gt;. Ссылки на задачи по-прежнему ведут на «Адрес «По Делу»».
+              Пусто — запросы идут туда же.</span>
+          </label>
+          <button v-else class="btn btn-ghost btn-sm more" type="button" data-testid="podelu-links-server-url-open" @click="serverOpen = true">
+            <AppIcon name="plus" :size="13" /> Серверу «Пульса» «По Делу» видна по другому адресу
+          </button>
           <label class="check small"><input v-model="form.acceptInvalidCerts" type="checkbox" @change="change" /> Не проверять TLS-сертификат</label>
           <div class="row-actions">
             <button class="btn btn-sm btn-primary" type="button" :disabled="!!busy || !form.baseUrl" data-testid="podelu-links-check" @click="saveAndCheck">
@@ -174,7 +199,8 @@ const canEnable = computed(() => checked.value && !dirty.value)
           </div>
           <div v-if="status" class="status" :class="status.kind" role="status" data-testid="podelu-links-status">
             <AppIcon :name="status.kind === 'ok' ? 'check' : status.kind === 'info' ? 'clock' : 'warning'" :size="14" />
-            <span>{{ status.text }}<template v-for="d in status.details || []" :key="d"><br />{{ d }}</template></span>
+            <span>{{ status.text }}<template v-for="d in status.details || []" :key="d"><br />{{ d }}</template>
+              <template v-if="status.kind !== 'error' && checkedUrl"><br /><span class="muted">Запрос сервера: {{ checkedUrl }}</span></template></span>
           </div>
         </div>
       </li>
@@ -216,6 +242,10 @@ const canEnable = computed(() => checked.value && !dirty.value)
 .ok-text { color: #1d7a4c; display: inline-flex; align-items: center; gap: 4px; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .check { display: flex; align-items: center; gap: 8px; }
+.server-field { display: flex; flex-direction: column; gap: 4px; }
+.server-field .small { line-height: 1.45; }
+.optional { font-weight: 400; }
+.more { align-self: flex-start; padding-left: 0; }
 .status { display: flex; align-items: flex-start; gap: 8px; padding: 9px 12px; border-radius: var(--radius-sm); font-size: 13px; line-height: 1.5; }
 .status.ok { background: var(--color-success-soft); color: #1d7a4c; }
 .status.warn { background: var(--color-warning-soft); color: #8a5a00; }

@@ -132,7 +132,7 @@ class FakePodelu:
         elif self.status != 200:
             body, r.status_code = {"error": "integration_disabled", "message": "Ссылки выключены"}, self.status
         elif url.endswith("/api/integrations/puls/ping"):
-            body, r.status_code = {"ok": True, "app": "podelu", "name": "По Делу", "version": "1.5.0",
+            body, r.status_code = {"ok": True, "app": "podelu", "name": "По Делу", "version": "1.4.2",
                                    "linksEnabled": self.links_enabled}, 200
         elif "/api/integrations/puls/projects/" in url:
             item = (kwargs.get("params") or {}).get("item")
@@ -172,7 +172,7 @@ def test_outbound_key_check_then_enable(app, admin, podelu):
     # Проверка: «По Делу» отвечает, ссылки у неё выключены — предупреждение
     podelu.links_enabled = False
     check = admin.post("/api/settings/podelu/links/test", json={}).get_json()
-    assert check["ok"] and check["version"] == "1.5.0" and check["remembered"]
+    assert check["ok"] and check["version"] == "1.4.2" and check["remembered"]
     assert any("выключены" in w for w in check["warnings"]) and any("Ключ «Пульса»" in w for w in check["warnings"])
     assert podelu.calls[-1][3] == f"Bearer {PODELU_KEY}"
     res = admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "enabled": True})
@@ -238,3 +238,71 @@ def test_delete_links_removes_keys(app, admin, podelu):
     assert not data["hasKey"] and not data["enabled"] and data["inbound"] is None
     with app.app_context():
         assert podelu_links.ready() is False
+
+
+# ---------- 0.5.1: адрес для запросов сервера и понятные ошибки подключения ----------
+
+SERVER = "http://host.docker.internal:39665"
+
+
+def test_server_url_carries_requests_while_task_links_keep_the_public_address(app, admin, podelu):
+    """Оба сервиса на одной машине: «Пульс» ходит в «По Делу» по внутреннему адресу, ссылки — на публичный."""
+    saved = admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "serverUrl": SERVER, "key": PODELU_KEY})
+    assert saved.status_code == 200 and saved.get_json()["serverUrl"] == SERVER
+    check = admin.post("/api/settings/podelu/links/test", json={}).get_json()
+    assert check["ok"] and check["remembered"] and check["url"] == SERVER
+    assert podelu.calls[-1][1] == f"{SERVER}/api/integrations/puls/ping"
+    assert admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "serverUrl": SERVER,
+                                                          "enabled": True}).get_json()["enabled"]
+    project_id, _plan = create_project(admin, "Портал")
+    tasks = admin.get(f"/api/projects/{project_id}/podelu-tasks").get_json()["tasks"]
+    assert podelu.calls[-1][1].startswith(f"{SERVER}/api/integrations/puls/projects/")
+    assert tasks[0]["url"] == f"{PODELU}/my-tasks?task=t-1"
+    assert admin.get("/api/podelu/links").get_json() == {"enabled": True, "baseUrl": PODELU}
+
+
+def test_server_url_change_needs_the_key_again(app, admin, podelu):
+    admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "key": PODELU_KEY})
+    assert admin.post("/api/settings/podelu/links/test", json={}).status_code == 200
+    changed = admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "serverUrl": SERVER})
+    assert changed.status_code == 400 and "Адрес для запросов сервера изменён" in changed.get_json()["message"]
+    # С ключом — сохраняется, прежняя проверка больше не действует
+    saved = admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "serverUrl": SERVER, "key": PODELU_KEY})
+    assert saved.get_json()["checkedAt"] is None
+    # Тот же адрес, что и «Адрес «По Делу»», отдельно не хранится; неверный — понятная ошибка
+    same = admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "serverUrl": PODELU + "/", "key": PODELU_KEY})
+    assert same.get_json()["serverUrl"] == ""
+    bad = admin.put("/api/settings/podelu/links", json={"baseUrl": PODELU, "serverUrl": "host:39665", "key": PODELU_KEY})
+    assert bad.status_code == 400 and bad.get_json()["message"].startswith("Адрес для запросов сервера")
+    lonely = admin.put("/api/settings/podelu/links", json={"serverUrl": SERVER, "key": PODELU_KEY})
+    assert lonely.status_code == 400
+
+
+def _closed_port():
+    import socket
+
+    sock = socket.socket()
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def test_unreachable_podelu_on_the_same_machine_is_explained(app):
+    """localhost внутри контейнера — сам контейнер; имя из /etc/hosts машины не видно; порт закрыт."""
+    from app.podelu_client import PodeluError, connection_error, is_loopback
+
+    with pytest.raises(PodeluError) as error:
+        podelu_links.PodeluLinksClient(f"http://localhost:{_closed_port()}", PODELU_KEY).ping()
+    assert "это он сам" in str(error.value) and "host.docker.internal" in str(error.value)
+    with pytest.raises(PodeluError) as error:
+        podelu_links.PodeluLinksClient(PODELU, PODELU_KEY, server_url="http://podelu.vector.invalid").ping()
+    assert "не находит имя podelu.vector.invalid" in str(error.value) and "/etc/hosts" in str(error.value)
+    refused = requests.exceptions.ConnectionError(ConnectionRefusedError(111, "Connection refused"))
+    message = str(connection_error(refused, "http://10.0.0.5:39665", via_server=True))
+    assert "отклонил подключение" in message and "127.0.0.1" in message
+    loopback = str(connection_error(refused, "http://127.0.0.1:39665", via_server=True))
+    assert loopback.startswith("«Адрес для запросов сервера» — 127.0.0.1")
+    for host in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+        assert is_loopback(host), host
+    assert not is_loopback("host.docker.internal") and not is_loopback("10.0.0.5")

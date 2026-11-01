@@ -180,7 +180,7 @@ def _counts(app):
 # ---------------------------------------------------------------- подключение
 def test_connection_check_logs_in_with_csrf_and_referer_and_logs_out(app, admin, podelu, caplog):
     saved = _connect(admin)
-    assert saved == {"baseUrl": BASE, "login": "svc-puls", "acceptInvalidCerts": False, "hasPassword": True}
+    assert saved == {"baseUrl": BASE, "serverUrl": "", "login": "svc-puls", "acceptInvalidCerts": False, "hasPassword": True}
     res = admin.post("/api/settings/podelu/test", json={})
     assert res.status_code == 200, res.get_json()
     body = res.get_json()
@@ -1008,3 +1008,22 @@ def test_review_one_audit_entry_per_run_and_none_without_changes(app, admin, pod
     assert entries("Командная строка: sync-podelu") == 1 and entries("Загрузка из «По Делу»") == 1
     assert run(app, ["sync-podelu", "--actor", "admin", "--no-photos", "--apply"], out=io.StringIO()) == 0
     assert entries("Командная строка: sync-podelu") == 1
+
+
+# ---------------------------------------------------------------- 0.5.1: адрес для запросов сервера
+def test_structure_sync_goes_to_the_server_url_with_its_own_referer(app, admin, monkeypatch):
+    """Вход и выгрузки — по адресу для запросов сервера; пароль уходит только туда, для чего он введён."""
+    server = "http://host.docker.internal:39665"
+    fake = FakePodelu(base=server)
+    monkeypatch.setattr(requests.Session, "request", lambda self, method, url, **kw: fake(self, method, url, **kw))
+    saved = _connect(admin, serverUrl=server)
+    assert saved["baseUrl"] == BASE and saved["serverUrl"] == server
+    res = admin.post("/api/settings/podelu/test", json={})
+    assert res.status_code == 200, res.get_json()
+    login = next(r for r in fake.requests if r["url"].endswith("/auth/login"))
+    assert login["url"] == f"{server}/api/auth/login" and login["headers"]["Origin"] == server
+    # Смена адреса для запросов сервера без пароля — отказ
+    changed = admin.put("/api/settings/podelu", json={"baseUrl": BASE, "serverUrl": "", "login": "svc-puls"})
+    assert changed.status_code == 400 and "Адрес для запросов сервера изменён" in changed.get_json()["message"]
+    # Для сотрудников — по-прежнему адрес «По Делу»
+    assert admin.get("/api/podelu").get_json()["baseUrl"] == BASE

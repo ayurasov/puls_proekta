@@ -9,10 +9,11 @@ from flask import current_app
 
 from app.extensions import db
 from app.models import AppSetting
-from app.podelu_client import PodeluClient, PodeluError, check_base_url, decrypt_password
+from app.podelu_client import PodeluClient, PodeluError, check_base_url, check_server_url, decrypt_password
 
 SETTING_KEY = "podelu"
-DEFAULT_CONNECTION = {"baseUrl": "", "login": "", "passwordEncrypted": "", "acceptInvalidCerts": False}
+# serverUrl (0.5.1) — адрес для запросов сервера «Пульса», если «По Делу» видна ему по другому адресу; пусто — baseUrl
+DEFAULT_CONNECTION = {"baseUrl": "", "serverUrl": "", "login": "", "passwordEncrypted": "", "acceptInvalidCerts": False}
 NOT_CONFIGURED = "Подключение к «По Делу» не настроено — укажите его в разделе «Интеграции → «По Делу»»"
 
 
@@ -43,8 +44,8 @@ def admin_json(conn):
     """Подключение для формы администратора — без пароля."""
     if not conn:
         return None
-    return {"baseUrl": conn["baseUrl"], "login": conn["login"] or "", "acceptInvalidCerts": bool(conn["acceptInvalidCerts"]),
-            "hasPassword": bool(conn["passwordEncrypted"])}
+    return {"baseUrl": conn["baseUrl"], "serverUrl": conn.get("serverUrl") or "", "login": conn["login"] or "",
+            "acceptInvalidCerts": bool(conn["acceptInvalidCerts"]), "hasPassword": bool(conn["passwordEncrypted"])}
 
 
 def public_json(conn):
@@ -69,7 +70,9 @@ def make_client(override=None, total_timeout=None):
         conf = override
         password = override.get("password") or ""
         if not password:
-            same = saved and saved["passwordEncrypted"] and check_base_url(override.get("baseUrl")) == saved["baseUrl"] \
+            base = check_base_url(override.get("baseUrl"))
+            same = saved and saved["passwordEncrypted"] and base == saved["baseUrl"] \
+                and check_server_url(override.get("serverUrl"), base) == (saved.get("serverUrl") or "") \
                 and (override.get("login") or "") == saved["login"]
             if not same:
                 raise PodeluError("Укажите пароль учётной записи «По Делу»")
@@ -81,4 +84,5 @@ def make_client(override=None, total_timeout=None):
     if not password:
         raise PodeluError("Укажите пароль учётной записи «По Делу»")
     return PodeluClient(conf["baseUrl"], conf["login"], password, accept_invalid_certs=bool(conf.get("acceptInvalidCerts")),
-                        total_timeout=total_timeout or current_app.config.get("PODELU_TOTAL_TIMEOUT") or None)
+                        total_timeout=total_timeout or current_app.config.get("PODELU_TOTAL_TIMEOUT") or None,
+                        server_url=check_server_url(conf.get("serverUrl"), check_base_url(conf["baseUrl"])))
