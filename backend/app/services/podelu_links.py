@@ -27,11 +27,13 @@ from flask import current_app
 
 from app.extensions import db
 from app.models import AppSetting
-from app.podelu_client import PodeluError, check_base_url
+from app.podelu_client import PodeluError, check_base_url, check_server_url, connection_error
 
 SETTING_KEY = "podelu_links"
 DEFAULTS = {
-    "baseUrl": "", "keyEncrypted": "", "acceptInvalidCerts": False, "enabled": False,
+    # serverUrl (0.5.1) — адрес для запросов сервера «Пульса», если «По Делу» видна ему по другому адресу (оба
+    # сервиса в Docker на одной машине); пусто — запросы идут на baseUrl. Ссылки на задачи — всегда от baseUrl
+    "baseUrl": "", "serverUrl": "", "keyEncrypted": "", "acceptInvalidCerts": False, "enabled": False,
     "checkedAt": None, "checkedVersion": "", "checkedFingerprint": "",
     "inbound": None,  # {"hash", "prefix", "createdAt", "lastUsedAt"}
 }
@@ -136,9 +138,10 @@ def decrypt_key(encrypted):
                           "введите ключ заново") from None
 
 
-def fingerprint(base_url, key):
-    """Отпечаток пары «адрес + ключ»: проверка связи действительна, только пока они не менялись."""
-    return hashlib.sha256(f"{base_url}\n{key}".encode()).hexdigest()[:32]
+def fingerprint(base_url, key, server_url=""):
+    """Отпечаток «адрес + ключ» (и адреса для запросов сервера): проверка связи действительна, пока они не менялись."""
+    material = f"{base_url}\n{key}" + (f"\n{server_url}" if server_url else "")
+    return hashlib.sha256(material.encode()).hexdigest()[:32]
 
 
 def check_key(key):
@@ -159,7 +162,8 @@ def admin_json(settings=None, suggested_url=""):
     settings = settings or get_settings()
     inbound = settings.get("inbound") or None
     return {
-        "baseUrl": settings["baseUrl"], "acceptInvalidCerts": bool(settings["acceptInvalidCerts"]),
+        "baseUrl": settings["baseUrl"], "serverUrl": settings.get("serverUrl") or "",
+        "acceptInvalidCerts": bool(settings["acceptInvalidCerts"]),
         "hasKey": bool(settings["keyEncrypted"]), "enabled": bool(settings["enabled"]),
         "checkedAt": settings["checkedAt"], "checkedVersion": settings["checkedVersion"] or "",
         "inbound": {k: inbound.get(k) for k in ("prefix", "createdAt", "lastUsedAt")} if inbound else None,
@@ -172,8 +176,11 @@ def admin_json(settings=None, suggested_url=""):
 class PodeluLinksClient:
     """Чтение задач «По Делу», связанных с проектами «Пульса»: GET с ключом, без cookie и перенаправлений."""
 
-    def __init__(self, base_url, key, accept_invalid_certs=False, timeout=TIMEOUT):
+    def __init__(self, base_url, key, accept_invalid_certs=False, timeout=TIMEOUT, server_url=""):
+        # base_url — адрес для сотрудников (от него ссылки на задачи); запросы — на адрес для запросов сервера
         self.base_url = check_base_url(base_url)
+        self.server_url = check_server_url(server_url, self.base_url)
+        self.request_url = self.server_url or self.base_url
         self.key = check_key(key)
         self.timeout = timeout
         self.session = requests.Session()
@@ -185,7 +192,7 @@ class PodeluLinksClient:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def get(self, path, params=None):
-        url = f"{self.base_url}/api/integrations/puls/{path.lstrip('/')}"
+        url = f"{self.request_url}/api/integrations/puls/{path.lstrip('/')}"
         try:
             resp = self.session.get(url, params=params, timeout=self.timeout, allow_redirects=False, stream=True,
                                     verify=self.session.verify)
@@ -193,9 +200,10 @@ class PodeluLinksClient:
             raise PodeluError("Ошибка TLS-сертификата «По Делу» — для самоподписанного сертификата включите «Не "
                               "проверять TLS-сертификат»") from None
         except requests.exceptions.Timeout:
-            raise PodeluError("«По Делу» не ответила вовремя") from None
-        except requests.exceptions.ConnectionError:
-            raise PodeluError(f"Не удалось подключиться к {self.base_url} — проверьте адрес и доступность сети") from None
+            raise PodeluError(f"«По Делу» ({self.request_url}) не ответила вовремя — проверьте межсетевой экран и прокси "
+                              "сервера «Пульса» (NO_PROXY для внутренних адресов)") from None
+        except requests.exceptions.ConnectionError as exc:
+            raise connection_error(exc, self.request_url, bool(self.server_url)) from None
         except (requests.RequestException, ValueError):
             raise PodeluError("Не удалось выполнить запрос к «По Делу»") from None
         try:
@@ -221,8 +229,8 @@ class PodeluLinksClient:
             raise PodeluError(f"«По Делу» не разрешает запрос (403){': ' + message if message else ''} — включите ссылки "
                               "на проекты в «По Делу»: Настройки → Интеграции → «Пульс проекта»", 403)
         if resp.status_code == 404:
-            raise PodeluError("По этому адресу нет «По Делу» 1.5 или новее (404) — проверьте адрес; ответная "
-                              "интеграция появилась в «По Делу» 1.5.0", 404)
+            raise PodeluError("По этому адресу нет «По Делу» 1.4.1 или новее (404) — проверьте адрес; ответная "
+                              "интеграция появилась в «По Делу» 1.4.1", 404)
         if resp.status_code != 200 or not isinstance(data, dict):
             message = data.get("message") if isinstance(data, dict) else ""
             raise PodeluError(f"«По Делу» вернула ошибку {resp.status_code}{': ' + message if message else ''}",
@@ -299,13 +307,16 @@ def make_client(override=None):
         if not settings["baseUrl"] or not settings["keyEncrypted"]:
             raise PodeluError(NOT_CONFIGURED)
         return PodeluLinksClient(settings["baseUrl"], decrypt_key(settings["keyEncrypted"]),
-                                 settings["acceptInvalidCerts"]), settings["baseUrl"]
+                                 settings["acceptInvalidCerts"], server_url=settings.get("serverUrl") or ""), \
+            settings["baseUrl"]
     base = check_base_url(override.get("baseUrl"))
+    server = check_server_url(override.get("serverUrl"), base)
     key = (override.get("key") or "").strip()
     if not key:
-        if not settings["keyEncrypted"] or settings["baseUrl"] != base:
+        # сохранённый ключ уходит только на те адреса, для которых он был введён
+        if not settings["keyEncrypted"] or settings["baseUrl"] != base or (settings.get("serverUrl") or "") != server:
             raise PodeluError("Введите ключ «По Делу»")
         if override.get("acceptInvalidCerts") and not settings["acceptInvalidCerts"]:
             raise PodeluError("Без проверки сертификата введите ключ заново")
         key = decrypt_key(settings["keyEncrypted"])
-    return PodeluLinksClient(base, key, bool(override.get("acceptInvalidCerts"))), base
+    return PodeluLinksClient(base, key, bool(override.get("acceptInvalidCerts")), server_url=server), base

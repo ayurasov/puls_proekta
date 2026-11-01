@@ -1,6 +1,7 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
+import { createServer as createTcpServer } from 'node:net'
 import { api, BASE, closeBrowser, login, newPage, PASSWORD, shot, waitSaved } from '../helpers.mjs'
 import { startJiraStub } from '../jiraStub.mjs'
 
@@ -27,7 +28,7 @@ function startPodelu() {
     podeluRequests.push({ path: url.pathname, query: Object.fromEntries(url.searchParams), auth: req.headers.authorization })
     const send = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)) }
     if (req.headers.authorization !== `Bearer ${PODELU_KEY}`) return send(401, { error: 'unauthorized', message: 'Неверный ключ' })
-    if (url.pathname === '/api/integrations/puls/ping') return send(200, { ok: true, app: 'podelu', name: 'По Делу', version: '1.5.0', linksEnabled: true })
+    if (url.pathname === '/api/integrations/puls/ping') return send(200, { ok: true, app: 'podelu', name: 'По Делу', version: '1.4.2', linksEnabled: true })
     const m = /^\/api\/integrations\/puls\/projects\/(\d+)\/tasks$/.exec(url.pathname)
     if (m) {
       const item = url.searchParams.get('item')
@@ -243,10 +244,23 @@ test('«По Делу»: обмен ключами, проверка связи 
 
   // Шаг 2: адрес и ключ «По Делу», проверка, затем включение
   assert.equal(await page.locator('[data-testid=podelu-links-enabled] input').isDisabled(), true)
+  // 0.5.1: адрес localhost, по которому серверу «По Делу» не видна, — понятная причина и поле адреса для запросов сервера
+  const closed = createTcpServer()
+  await new Promise((resolve) => closed.listen(0, '127.0.0.1', resolve))
+  const closedPort = closed.address().port
+  await new Promise((resolve) => closed.close(resolve))
+  assert.equal(await page.locator('[data-testid=podelu-links-server-url]').count(), 0)
+  await page.fill('[data-testid=podelu-links-url]', `http://localhost:${closedPort}`)
+  await page.fill('[data-testid=podelu-links-key]', PODELU_KEY)
+  await page.click('[data-testid=podelu-links-check]')
+  await page.locator('[data-testid=podelu-links-status]', { hasText: 'для сервера «Пульса» это он сам' }).waitFor()
+  await page.locator('[data-testid=podelu-links-server-url]').waitFor()
+  assert.ok(page.errors.every((e) => /status of (400|502)/.test(e)), page.errors.join('\n'))
+  page.errors.length = 0
   await page.fill('[data-testid=podelu-links-url]', PODELU)
   await page.fill('[data-testid=podelu-links-key]', PODELU_KEY)
   await page.click('[data-testid=podelu-links-check]')
-  await page.locator('[data-testid=podelu-links-status]', { hasText: 'Связь установлена: По Делу 1.5.0' }).waitFor()
+  await page.locator('[data-testid=podelu-links-status]', { hasText: 'Связь установлена: По Делу 1.4.2' }).waitFor()
   assert.equal(podeluRequests.at(-1).auth, `Bearer ${PODELU_KEY}`)
   await page.locator('[data-testid=podelu-links-enabled]').click()
   await page.locator('.toast', { hasText: 'Задачи «По Делу» показываются в проектах' }).waitFor()

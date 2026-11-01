@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from app import audit
 from app.extensions import db, limiter
-from app.podelu_client import PodeluError, check_base_url, encrypt_password, rights
+from app.podelu_client import PodeluError, check_base_url, check_server_url, encrypt_password, rights
 from app.security import ApiError, admin_required, current_user, login_required
 from app.services import employee_transfer, org, org_transfer
 from app.services import podelu as podelu_service
@@ -34,6 +34,7 @@ def _failed(exc):
 
 class ConnectionIn(BaseModel):
     baseUrl: str = Field(max_length=500)
+    serverUrl: str = Field(default="", max_length=500)
     login: str = Field(default="", max_length=300)
     password: str = Field(default="", max_length=1000)
     acceptInvalidCerts: bool = False
@@ -48,6 +49,7 @@ def _form(payload):
         raise ApiError(400, "validation_error", "Логин или пароль содержит недопустимые символы")
     try:
         data["baseUrl"] = check_base_url(data["baseUrl"])
+        data["serverUrl"] = check_server_url(data["serverUrl"], data["baseUrl"])
     except PodeluError as exc:
         raise ApiError(400, "validation_error", str(exc)) from None
     if not data["login"]:
@@ -75,6 +77,8 @@ def put_connection():
         # сохранённый пароль уходит только на тот адрес и для той учётной записи, для которых он был введён
         if existing["baseUrl"] != data["baseUrl"]:
             raise ApiError(400, "validation_error", "Адрес «По Делу» изменён — введите пароль заново")
+        if (existing.get("serverUrl") or "") != data["serverUrl"]:
+            raise ApiError(400, "validation_error", "Адрес для запросов сервера изменён — введите пароль заново")
         if existing["login"] != data["login"]:
             raise ApiError(400, "validation_error", "Логин изменён — введите пароль заново")
         if data["acceptInvalidCerts"] and not existing["acceptInvalidCerts"]:
@@ -84,7 +88,7 @@ def put_connection():
         else existing["passwordEncrypted"]
     podelu_service.save_connection(data)
     old = existing or podelu_service.DEFAULT_CONNECTION
-    changed = [k for k in ("baseUrl", "login", "acceptInvalidCerts") if old.get(k) != data.get(k)]
+    changed = [k for k in ("baseUrl", "serverUrl", "login", "acceptInvalidCerts") if (old.get(k) or "") != (data.get(k) or "")]
     if password:
         changed.append("password")
     if changed:
@@ -132,7 +136,7 @@ def test_connection():
     return jsonify({"ok": True, "user": {"name": str(user.get("name") or "")[:255], "login": str(user.get("login") or "")[:150],
                                          "role": str(user.get("globalRole") or "")[:20]},
                     "rights": {"structure": allowed["structure"], "employees": allowed["employees"]},
-                    "problem": problem})
+                    "url": client.base_url, "problem": problem})
 
 
 # ---------- сотрудники: адрес для ссылок ----------

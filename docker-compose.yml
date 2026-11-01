@@ -50,6 +50,10 @@ services:
       HTTP_PROXY: ${HTTP_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}
       TZ: ${TZ:-Europe/Moscow}
+    # «По Делу» на той же машине: адрес для запросов сервера http://host.docker.internal:<порт «По Делу»>
+    # (localhost внутри контейнера — сам контейнер). Порт «По Делу» должен быть опубликован не только на 127.0.0.1
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       db:
         condition: service_healthy

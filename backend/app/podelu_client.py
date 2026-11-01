@@ -20,9 +20,11 @@ API-токенов в «По Делу» нет: вход — как у брау�
 import base64
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
+import socket
 import time
 import zipfile
 from urllib.parse import urlsplit
@@ -60,6 +62,85 @@ class PodeluError(Exception):
     def __init__(self, message, status=None):
         super().__init__(message)
         self.status = status
+
+
+# ---------- адрес для запросов сервера и понятные ошибки подключения (0.5.1) ----------
+#
+# Сотрудники открывают «По Делу» по одному адресу, а сервер «Пульса» в контейнере может доставать до неё только по
+# другому: оба сервиса в Docker на одной машине. Внутри контейнера localhost — сам контейнер, имена из /etc/hosts
+# машины не видны, порт может быть опубликован только на 127.0.0.1. «Адрес для запросов сервера» (необязательный)
+# получает запросы; ссылки для сотрудников по-прежнему строятся от «Адреса «По Делу»».
+
+LOOPBACK_NAMES = {"localhost", "localhost.localdomain", "ip6-localhost", "ip6-loopback"}
+SAME_MACHINE_HINT = ("IP машины или http://host.docker.internal:<порт «По Делу»> — ссылки для сотрудников "
+                     "по-прежнему ведут на «Адрес «По Делу»»")
+
+
+def is_loopback(host):
+    """localhost, 127.0.0.0/8, ::1, 0.0.0.0 — для сервера в контейнере это он сам, а не машина."""
+    name = (host or "").strip("[]").lower()
+    if name in LOOPBACK_NAMES or name.endswith(".localhost"):
+        return True
+    try:
+        address = ipaddress.ip_address(name)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_unspecified
+
+
+def check_server_url(value, base_url):
+    """Адрес для запросов сервера: пусто или тот же, что «Адрес «По Делу»», — не нужен (пустая строка)."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    try:
+        url = check_base_url(raw)
+    except PodeluError as exc:
+        raise PodeluError(f"Адрес для запросов сервера: {exc}") from None
+    return "" if url == (base_url or "").rstrip("/") else url
+
+
+def _causes(exc):
+    """Цепочка причин исключения requests/urllib3: reason, __cause__, __context__, исключения в args."""
+    seen, stack = set(), [exc]
+    while stack:
+        item = stack.pop()
+        if item is None or id(item) in seen:
+            continue
+        seen.add(id(item))
+        yield item
+        stack.extend([getattr(item, "reason", None), item.__cause__, item.__context__])
+        stack.extend(arg for arg in getattr(item, "args", ()) if isinstance(arg, BaseException))
+
+
+def connection_problem(exc):
+    """dns — имя не находится; refused — порт закрыт; unreachable — прочее."""
+    for item in _causes(exc):
+        if isinstance(item, socket.gaierror) or type(item).__name__ == "NameResolutionError":
+            return "dns"
+        if isinstance(item, ConnectionRefusedError):
+            return "refused"
+    return "unreachable"
+
+
+def connection_error(exc, url, via_server=False):
+    """PodeluError для requests.ConnectionError с причиной и подсказкой на случай одной машины."""
+    host = urlsplit(url).hostname or url
+    where = "«Адрес для запросов сервера»" if via_server else "«Адрес «По Делу»»"
+    problem = connection_problem(exc)
+    if problem != "dns" and is_loopback(host):
+        return PodeluError(f"{where} — {host}: для сервера «Пульса» это он сам (в Docker — его контейнер), а не "
+                           f"машина, поэтому «По Делу» по нему не видна. Укажите в «Адресе для запросов сервера» "
+                           f"{SAME_MACHINE_HINT}")
+    if problem == "dns":
+        return PodeluError(f"Сервер «Пульса» не находит имя {host}. Имена, прописанные только в /etc/hosts машины, "
+                           f"контейнеры Docker не видят: добавьте имя в DNS или в extra_hosts контейнера backend либо "
+                           f"укажите в «Адресе для запросов сервера» {SAME_MACHINE_HINT}")
+    if problem == "refused":
+        return PodeluError(f"{host} отклонил подключение: порт закрыт или «По Делу» опубликована только на 127.0.0.1. "
+                           f"Если оба сервиса на одной машине, укажите в «Адресе для запросов сервера» "
+                           f"{SAME_MACHINE_HINT}")
+    return PodeluError(f"Не удалось подключиться к {url} — проверьте адрес и доступность сети")
 
 
 def is_uuid(value):
@@ -129,9 +210,12 @@ class PodeluClient:
     """Сессия «По Делу»: login() → запросы → logout(). Как контекстный менеджер выходит из «По Делу» сам."""
 
     def __init__(self, base_url, login, password, accept_invalid_certs=False, timeout=TIMEOUT,
-                 total_timeout=TOTAL_TIMEOUT):
-        """total_timeout — предел всей операции в секундах (вход, запросы; выход — сверх него); None — без предела."""
-        self.base_url = check_base_url(base_url)
+                 total_timeout=TOTAL_TIMEOUT, server_url=""):
+        """total_timeout — предел всей операции в секундах (вход, запросы; выход — сверх него); None — без предела.
+        server_url — адрес для запросов сервера, если «По Делу» видна серверу «Пульса» по другому адресу (0.5.1)."""
+        # Запросы (и Referer/Origin, которые «По Делу» сверяет со своим адресом) — на адрес для запросов сервера
+        self.via_server = bool(server_url)
+        self.base_url = check_base_url(server_url or base_url)
         if not login or not password:
             raise PodeluError("Укажите логин и пароль учётной записи «По Делу»")
         if re.search(r"[\x00-\x1f\x7f]", f"{login}{password}"):
@@ -207,14 +291,14 @@ class PodeluClient:
                 raise PodeluError("Ошибка TLS-сертификата «По Делу». Если используется самоподписанный или "
                                   "корпоративный сертификат, включите «Не проверять TLS-сертификат»") from None
             except requests.exceptions.ConnectTimeout:
-                raise PodeluError(f"Превышено время ожидания подключения к {self.base_url}") from None
+                raise PodeluError(f"Превышено время ожидания подключения к {self.base_url} — проверьте межсетевой экран "
+                                  "и прокси сервера «Пульса» (NO_PROXY для внутренних адресов)") from None
             except requests.exceptions.ReadTimeout:
                 if remaining is not None and read >= remaining:
                     raise self._too_long() from None
                 raise PodeluError("«По Делу» не ответила вовремя — попробуйте ещё раз") from None
-            except requests.exceptions.ConnectionError:
-                raise PodeluError(f"Не удалось подключиться к {self.base_url}: проверьте адрес и доступность "
-                                  "сети") from None
+            except requests.exceptions.ConnectionError as exc:
+                raise connection_error(exc, self.base_url, self.via_server) from None
             except (requests.RequestException, ValueError):
                 # Прочие ошибки запроса — без текста исключения: в нём могли бы оказаться заголовки или тело
                 raise PodeluError("Не удалось выполнить запрос к «По Делу» — проверьте адрес подключения") from None

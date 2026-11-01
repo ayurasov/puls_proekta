@@ -23,7 +23,7 @@ from app import audit
 from app.api.podelu import bp
 from app.extensions import db, limiter
 from app.models import Project
-from app.podelu_client import PodeluError, check_base_url
+from app.podelu_client import PodeluError, check_base_url, check_server_url
 from app.security import ApiError, admin_required, current_user, login_required, project_levels, require_project
 from app.services import podelu as podelu_service
 from app.services import podelu_links as links
@@ -35,6 +35,7 @@ def _user_key():
 
 class LinksIn(BaseModel):
     baseUrl: str = Field(default="", max_length=500)
+    serverUrl: str = Field(default="", max_length=500)
     key: str = Field(default="", max_length=300)
     acceptInvalidCerts: bool = False
     enabled: bool = False
@@ -44,6 +45,9 @@ def _form(payload):
     data = payload.model_dump()
     try:
         data["baseUrl"] = check_base_url(data["baseUrl"]) if data["baseUrl"].strip() else ""
+        if data["serverUrl"].strip() and not data["baseUrl"]:
+            raise PodeluError("Сначала укажите адрес «По Делу»")
+        data["serverUrl"] = check_server_url(data["serverUrl"], data["baseUrl"])
         data["key"] = links.check_key(data["key"]) if data["key"].strip() else ""
     except PodeluError as exc:
         raise ApiError(400, "validation_error", str(exc)) from None
@@ -76,6 +80,8 @@ def put_links():
         elif settings["baseUrl"] != data["baseUrl"]:
             # сохранённый ключ уходит только на тот адрес, для которого он был введён
             raise ApiError(400, "validation_error", "Адрес «По Делу» изменён — введите ключ заново")
+        elif (settings.get("serverUrl") or "") != data["serverUrl"]:
+            raise ApiError(400, "validation_error", "Адрес для запросов сервера изменён — введите ключ заново")
         elif data["acceptInvalidCerts"] and not settings["acceptInvalidCerts"]:
             raise ApiError(400, "validation_error", "Без проверки сертификата введите ключ заново")
     if data["key"]:
@@ -84,16 +90,17 @@ def put_links():
     else:
         key = links.decrypt_key(settings["keyEncrypted"]) if settings["keyEncrypted"] else ""
     settings["baseUrl"] = data["baseUrl"]
+    settings["serverUrl"] = data["serverUrl"]
     settings["acceptInvalidCerts"] = data["acceptInvalidCerts"]
-    # Проверка действительна, пока не менялись адрес и ключ
-    if settings["checkedFingerprint"] != links.fingerprint(data["baseUrl"], key):
+    # Проверка действительна, пока не менялись адреса и ключ
+    if settings["checkedFingerprint"] != links.fingerprint(data["baseUrl"], key, data["serverUrl"]):
         settings.update({"checkedAt": None, "checkedVersion": "", "checkedFingerprint": ""})
     if data["enabled"] and not settings["checkedAt"]:
         raise ApiError(409, "check_required", "Сначала проверьте связь с «По Делу» — показ задач включается после "
                        "успешной проверки")
     settings["enabled"] = data["enabled"]
     links.save_settings(settings)
-    changed = [k for k in ("baseUrl", "acceptInvalidCerts", "enabled") if old.get(k) != settings.get(k)]
+    changed = [k for k in ("baseUrl", "serverUrl", "acceptInvalidCerts", "enabled") if (old.get(k) or "") != (settings.get(k) or "")]
     if data["key"]:
         changed.append("key")
     if changed:
@@ -134,10 +141,11 @@ def test_links():
     settings = links.get_settings()
     saved_key = links.decrypt_key(settings["keyEncrypted"]) if settings["keyEncrypted"] else ""
     remembered = bool(settings["baseUrl"] == base and saved_key == client.key and
+                      (settings.get("serverUrl") or "") == client.server_url and
                       settings["acceptInvalidCerts"] == bool(client.session.verify is False))
     if remembered:
         settings.update({"checkedAt": links.now_iso(), "checkedVersion": info["version"],
-                         "checkedFingerprint": links.fingerprint(base, client.key)})
+                         "checkedFingerprint": links.fingerprint(base, client.key, client.server_url)})
         links.save_settings(settings)
         db.session.commit()
     warnings = []
@@ -146,7 +154,7 @@ def test_links():
                         "Интеграции → «Пульс проекта»")
     if not settings.get("inbound"):
         warnings.append("Ключ «Пульса» для «По Делу» ещё не выпущен — без него «По Делу» не сможет искать проекты")
-    return jsonify({"ok": True, **info, "remembered": remembered, "warnings": warnings,
+    return jsonify({"ok": True, **info, "url": client.request_url, "remembered": remembered, "warnings": warnings,
                     "settings": links.admin_json(suggested_url=_suggested_url())})
 
 
