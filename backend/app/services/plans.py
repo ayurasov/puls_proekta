@@ -62,7 +62,8 @@ def fill_plan_from_document(plan, user, doc, event_summary):
         ops.append({"op": "link.create", "link": link})
     for note in doc.get("notes", []):
         ops.append({"op": "note.create", "note": note})
-    editor = PlanEditor(plan, user)
+    # Пакет собирает сервер: идентификаторы строк в MS Project (extra.msp) копия плана сохраняет
+    editor = PlanEditor(plan, user, trusted=True)
     editor.skip_invalid_links = True
     if ops:
         # Пакет собирает сервер: копия большого плана не упирается в ограничение пакета из браузера

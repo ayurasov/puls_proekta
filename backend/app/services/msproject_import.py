@@ -149,6 +149,7 @@ def _apply_ops(plan, user, ops, summary):
     editor = PlanEditor(plan, user)
     # Связь, которую нельзя создать (строку пропустили), не останавливает загрузку — она попадает в исправления
     editor.skip_invalid_links = True
+    editor.trusted = True  # пакет собирает сервер: идентификаторы строк в MS Project (extra.msp) записываются
     events = editor.apply(ops, max_ops=None) if ops else []
     # Изменения строк — в историю строк (новая строка, сроки, название…), как у обычной правки
     db.session.add_all(events)

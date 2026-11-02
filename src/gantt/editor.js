@@ -14,7 +14,7 @@ import { api, AuthRequiredError, NetworkError } from '../api/client'
 import { applyBatch, touchedKeys } from './domain/ops'
 import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree'
 import { hasActiveFilters, myAssigneeKeys, visibilityPredicate } from './domain/filters'
-import { computeDependencyShifts, dependentKeys, linkProblem } from './domain/dependencies'
+import { computeDependencyShifts, dependentKeys, effectiveEnd, linkProblem } from './domain/dependencies'
 import { createCalendar } from './domain/calendar'
 import { STEP, insertPosition } from './domain/positions'
 import { addDays, diffDays, todayLocal } from './domain/dates'
@@ -24,9 +24,19 @@ import { countLabel } from '../utils/format'
 const POLL_VISIBLE_MS = 4000
 const POLL_HIDDEN_MS = 30000
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000, 20000, 30000]
-// Поля, от которых зависят сроки по связям: только их изменение запускает автосдвиг
-const SCHEDULE_FIELDS = new Set(['start', 'end', 'date', 'offset', 'status', 'completedDate', 'parentKey', 'duration',
-  'endMode', 'durationType', 'constraintType', 'constraintDate'])
+// Пакет на сервер — не больше стольких операций (сервер принимает до 2000): большая правка уходит частями
+export const MAX_BATCH_OPS = 1500
+
+/**
+ * То в строке, от чего зависят сроки по связям: её сроки, окончание для последующих (у завершённой — дата
+ * завершения, иначе со сдвигом), родитель (рамка подзадачи) и «Начало не ранее». Автосдвиг запускает только правка,
+ * которая это меняет: смена статуса без смены дат не трогает последующие (и не переставляет давно несогласованные).
+ */
+function scheduleSignature(item) {
+  if (!item) return ''
+  return [item.start, item.end, item.date, effectiveEnd(item), item.parentKey || '', item.constraintType || '',
+    item.constraintDate || ''].join('|')
+}
 
 export const DEFAULT_DISPLAY = {
   useRuCalendar: true, showWeekends: true, showHolidays: true, showProgress: true, progressStyle: 'fill', showNotes: true,
@@ -281,10 +291,21 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   function takeBatch() {
+    const first = state.queue[0]
+    if (first && first.ops.length > MAX_BATCH_OPS) {
+      // Большая правка (автосдвиг длинной цепочки, «Выровнять по связям») уходит частями по порядку, по одной за
+      // запрос; отмена у неё одна. Если часть отклонена, оставшиеся части не отправляются, а план перечитывается.
+      const origin = toRaw(first.origin || first)
+      const head = { ...first, ops: first.ops.slice(0, MAX_BATCH_OPS), origin }
+      const rest = { ...first, ops: first.ops.slice(MAX_BATCH_OPS), origin }
+      head.tags = touchedKeys(head.ops)
+      rest.tags = touchedKeys(rest.ops)
+      state.queue.splice(0, 1, head, rest)
+    }
     const entries = []
     let count = 0
     for (const entry of state.queue) {
-      if (entries.length && (isolate || count + entry.ops.length > 1500)) break
+      if (entries.length && (isolate || count + entry.ops.length > MAX_BATCH_OPS)) break
       entries.push(entry)
       count += entry.ops.length
     }
@@ -390,6 +411,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       }
       const [entry] = batch.entries
       dropUndo(entry.undoRef)
+      // Отклонена часть большой правки — её остальные части тоже не отправляются
+      if (entry.origin) state.queue = state.queue.filter((e) => toRaw(e.origin) !== toRaw(entry.origin))
       ui.error(`Не сохранено: ${entry.label || 'изменение'}`, err.message || 'Сервер отклонил изменение')
       resyncNeeded = !stopped
     }
@@ -573,21 +596,23 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     const allLinks = links || linkList.value
     let only = null
     if (!all) {
-      only = new Set([...changes].filter(([key, fields]) => !state.items[key] || Object.keys(fields).some((f) => SCHEDULE_FIELDS.has(f))).map(([key]) => key))
+      only = new Set([...changes]
+        .filter(([key, fields]) => !state.items[key] || scheduleSignature(state.items[key]) !== scheduleSignature({ ...state.items[key], ...fields }))
+        .map(([key]) => key))
       for (const key of seeds) only.add(key)
       if (!only.size) return []
-      const successors = new Map()
-      for (const link of allLinks) {
-        if (!successors.has(link.from)) successors.set(link.from, [])
-        successors.get(link.from).push(link.to)
+      // Зависящие строки — один обход: последующие по связям и вложенные (рамка родительской задачи)
+      const next = new Map()
+      const add = (from, to) => {
+        if (!next.has(from)) next.set(from, [])
+        next.get(from).push(to)
       }
-      let grew = true
-      while (grew) {
-        grew = false
-        for (const item of hypothetical) {
-          if (!only.has(item.key) && only.has(item.parentKey)) { only.add(item.key); grew = true }
-          if (!only.has(item.key)) continue
-          for (const next of successors.get(item.key) || []) if (!only.has(next)) { only.add(next); grew = true }
+      for (const link of allLinks) add(link.from, link.to)
+      for (const item of hypothetical) if (item.parentKey) add(item.parentKey, item.key)
+      const queue = [...only]
+      while (queue.length) {
+        for (const key of next.get(queue.pop()) || []) {
+          if (!only.has(key)) { only.add(key); queue.push(key) }
         }
       }
     }
@@ -763,6 +788,13 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     // Копия — без связей: связи исходной строки к копии не относятся
     const copy = { ...item, key: copyKey, name: `${item.name} (копия)`, position, commentCount: 0 }
     delete copy.updatedAt; delete copy.updatedById; delete copy.updatedRev; delete copy.deleted
+    // Идентификаторы строки в MS Project (extra.msp) — только у исходной: иначе обновление из файла приняло бы копию
+    // за строку файла (сервер их из браузера и не примет)
+    if (copy.extra?.msp) {
+      const { msp: _msp, ...rest } = copy.extra
+      if (Object.keys(rest).length) copy.extra = rest
+      else delete copy.extra
+    }
     if (item.type === 'task') {
       copy.start = addDays(item.start, shiftDays)
       copy.end = addDays(item.end, shiftDays)
@@ -797,14 +829,24 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         ops.push({ op: 'item.update', key: child.key, fields: { parentKey: newParent || null } })
       }
     }
+    const removed = new Set()
     for (const link of linkList.value) {
-      if (toDelete.has(link.from) || toDelete.has(link.to)) ops.push({ op: 'link.delete', key: link.key })
+      if (toDelete.has(link.from) || toDelete.has(link.to)) {
+        ops.push({ op: 'link.delete', key: link.key })
+        removed.add(link.key)
+      }
     }
     for (const note of noteList.value) {
       if (note.rowKey && toDelete.has(note.rowKey)) ops.push({ op: 'note.delete', key: note.key })
     }
     for (const key of toDelete) ops.push({ op: 'item.delete', key })
-    const entry = commit(ops, label)
+    // Последующие удалённых строк встают по оставшимся связям, поднятые вложенные — по рамке нового родителя (как
+    // при удалении связи)
+    const moved = new Map(ops.filter((op) => op.op === 'item.update').map((op) => [op.key, op.fields]))
+    const seeds = linkList.value.filter((l) => removed.has(l.key) && !toDelete.has(l.to)).map((l) => l.to)
+    const cascade = cascadeOps(moved, { links: linkList.value.filter((l) => !removed.has(l.key)), seeds })
+      .filter((op) => !toDelete.has(op.key))
+    const entry = commit([...ops, ...cascade], label)
     if (toDelete.has(state.view.panelKey)) state.view.panelKey = null
     if (toDelete.has(state.view.selectedKey)) state.view.selectedKey = null
     return entry

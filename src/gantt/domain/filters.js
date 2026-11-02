@@ -186,9 +186,11 @@ function compile(filters, ctx, items) {
   const rest = milestones
     ? conditions.map((c) => (c.group === 'traits' ? { ...c, values: c.values.filter((v) => v !== 'milestones') } : c)).filter((c) => c.values.length)
     : conditions
+  // Крайний срок бывает и у вехи: «Срыв крайнего срока» отбирает и вехи (как метка на диаграмме и статистика)
+  const deadlines = conditions.some((c) => c.group === 'dates' && c.values.includes('deadline'))
   return {
     milestones,
-    test: (item) => item.type === (milestones ? 'milestone' : 'task')
+    test: (item) => (item.type === (milestones ? 'milestone' : 'task') || (deadlines && item.type === 'milestone'))
       && rest.every(({ group, values }) => values.some((value) => TESTS[group](item, value, env))),
   }
 }
@@ -252,6 +254,7 @@ export function filterCounts(items, filters = {}, ctx = {}) {
   const jiraValues = [...JIRA_OPTIONS, ...JIRA_CATEGORY_OPTIONS].map((o) => o.value)
   for (const item of items) {
     if (item.type === 'milestone') bump('traits', 'milestones')
+    if (item.type === 'milestone' && matchesDate(item, 'deadline', env)) bump('dates', 'deadline')
     if (item.type !== 'task') continue
     bump('statuses', item.status || 'new')
     bump('assignees', item.assigneeKey || NONE)

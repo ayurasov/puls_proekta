@@ -13,7 +13,7 @@ import { ISSUE_KEY_RE, issueKeyFromLinks, jiraLinkFromInput } from '../jira'
 import { CONSTRAINT_TYPES, STATUSES, STATUS_BY_KEY, DEPENDENCY_TYPES, linkShortLabel, resolveColor } from '../domain/colors'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { resolveEnd } from '../domain/calendar'
-import { dependencyConstraints } from '../domain/dependencies'
+import { dependencyConstraints, isNested } from '../domain/dependencies'
 import { deadlineMissed, descendantKeys, groupSpan, shiftedEnd } from '../domain/tree'
 import { useDialogs } from '../../composables/useDialogs'
 import { useDirectoryStore } from '../../stores/directory'
@@ -164,27 +164,34 @@ const predecessors = computed(() => itemLinks.value.predecessors.map((link) => (
 const successors = computed(() => itemLinks.value.successors.map((link) => ({ link, row: editor.source.items[link.to] })))
 // Зависящие от строки не годятся в предшественники: связь с ними замкнула бы цикл — они видны, но недоступны
 const dependents = computed(() => editor.dependentsOf(item.value.key))
+// Недоступны и родительские и вложенные строки: вложенная задача и так в сроках родительской (как в MS Project)
 const predecessorOptions = computed(() => {
   const taken = new Set(itemLinks.value.predecessors.map((link) => link.from))
+  const key = item.value.key
   return editor.itemList
-    .filter((i) => (i.type === 'task' || i.type === 'milestone') && i.key !== item.value.key && !taken.has(i.key))
-    .map((i) => ({ key: i.key, label: `${i.type === 'milestone' ? '◆ ' : ''}${i.name}`, cyclic: dependents.value.has(i.key) }))
+    .filter((i) => (i.type === 'task' || i.type === 'milestone') && i.key !== key && !taken.has(i.key))
+    .map((i) => {
+      const blocked = dependents.value.has(i.key) ? ' — зависит от этой строки'
+        : isNested(byKey.value, i.key, key) || isNested(byKey.value, key, i.key) ? ' — вложена в эту строку или наоборот' : ''
+      return { key: i.key, label: `${i.type === 'milestone' ? '◆ ' : ''}${i.name}`, blocked }
+    })
 })
+const blockedCount = computed(() => predecessorOptions.value.filter((o) => o.blocked).length)
+// Предшественник выбирается в списке и добавляется кнопкой (или Enter): листание списка стрелками связей не создаёт
+const newPredecessor = ref('')
 const linkQuery = ref('')
+watch(() => item.value.key, () => { newPredecessor.value = ''; linkQuery.value = '' })
 const shownPredecessorOptions = computed(() => filterOptions(predecessorOptions.value, linkQuery.value, null))
 const LAG_KIND_TITLES = {
   calendar: 'Лаг в календарных днях — нажмите, чтобы считать рабочие',
   working: 'Лаг в рабочих днях по производственному календарю — нажмите, чтобы считать календарные',
 }
-function addPredecessor(key) {
+function addPredecessor() {
+  const option = predecessorOptions.value.find((o) => o.key === newPredecessor.value)
+  if (!option || option.blocked) return
   linkQuery.value = ''
-  const option = predecessorOptions.value.find((o) => o.key === key)
-  if (!option) return
-  if (option.cyclic) {
-    ui.error(`«${option.label}» уже зависит от «${item.value.name}»`, 'Связь замкнула бы цикл')
-    return
-  }
-  editor.createLink({ from: key, to: item.value.key }, `Предшественник «${item.value.name}»`)
+  newPredecessor.value = ''
+  editor.createLink({ from: option.key, to: item.value.key }, `Предшественник «${item.value.name}»`)
 }
 function setLinkType(link, type) {
   editor.updateLink(link.key, { type }, 'Тип связи')
@@ -531,15 +538,19 @@ function duplicate() {
             </ul>
             <span v-else class="field-hint">Нет — сроки задаются вручную</span>
           </div>
-          <div v-if="!readonly" class="field">
+          <form v-if="!readonly" class="field" data-testid="link-add-form" @submit.prevent="addPredecessor">
+            <span class="field-label">Добавить предшественника</span>
             <input v-if="predecessorOptions.length > LONG_LIST" v-model="linkQuery" class="input input-sm list-search" type="search" placeholder="Найти задачу или веху…" aria-label="Поиск предшественника" />
-            <select class="select" value="" aria-label="Добавить предшественника" data-testid="link-add" @change="addPredecessor($event.target.value); $event.target.value = ''">
-              <option value="">+ Добавить предшественника…</option>
-              <option v-for="o in shownPredecessorOptions" :key="o.key" :value="o.key" :disabled="o.cyclic">{{ o.label }}{{ o.cyclic ? ' — зависит от этой строки' : '' }}</option>
-            </select>
+            <span class="with-action">
+              <select v-model="newPredecessor" class="select" aria-label="Предшественник для добавления" data-testid="link-add" @keydown.enter.prevent="addPredecessor">
+                <option value="">Выберите задачу или веху…</option>
+                <option v-for="o in shownPredecessorOptions" :key="o.key" :value="o.key" :disabled="Boolean(o.blocked)">{{ o.label }}{{ o.blocked }}</option>
+              </select>
+              <button class="btn" type="submit" :disabled="!newPredecessor" data-testid="link-add-submit"><AppIcon name="plus" :size="14" /> Добавить</button>
+            </span>
             <span v-if="linkQuery && !shownPredecessorOptions.length" class="field-hint">Ничего не найдено</span>
-            <span v-else-if="dependents.size" class="field-hint">Строки, которые зависят от этой, недоступны: связь с ними замкнула бы цикл</span>
-          </div>
+            <span v-else-if="blockedCount" class="field-hint">Строки, которые зависят от этой или вложены в неё (и родительские), недоступны</span>
+          </form>
           <div class="field">
             <span class="field-label">Последующие</span>
             <ul v-if="successors.length" class="link-list">
