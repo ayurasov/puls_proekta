@@ -25,12 +25,14 @@ TREE_LIMIT = 300        # строк дерева в плане загрузки
 CHANGES_LIMIT = 500     # строк каждого списка изменений в плане обновления
 
 
-def clean_options(raw):
-    """Параметры загрузки из интерфейса → проверенные (лишнее отбрасывается)."""
+def clean_options(raw, target=None):
+    """Параметры загрузки из интерфейса → проверенные (лишнее отбрасывается). Обновление из файла — всегда
+    мастер-копия: план и дальше ведётся в MS Project."""
     raw = raw if isinstance(raw, dict) else {}
     category = raw.get("categoryField")
+    mode = "master" if target == "update" else raw.get("mode") if raw.get("mode") in MODES else "once"
     return {
-        "mode": raw.get("mode") if raw.get("mode") in MODES else "once",
+        "mode": mode,
         "durations": raw.get("durations") if raw.get("durations") in ("dates", "working") else "dates",
         "baseline": raw.get("baseline") if raw.get("baseline") in ("current", "baseline") else "current",
         "categoryField": str(category)[:100] if category not in (None, "") else None,
@@ -38,9 +40,12 @@ def clean_options(raw):
     }
 
 
-def _context():
-    """Сотрудники, адреса Jira и производственный календарь — для сопоставления."""
-    users = [{"id": u.id, "name": u.name, "email": u.email}
+def _context(viewer=None):
+    """Сотрудники, адреса Jira и производственный календарь — для сопоставления. Ресурсы связываются с
+    сотрудниками по email только у администратора: иначе план загрузки отвечал бы, чей это email (адреса
+    сотрудников видит только администратор); остальным — по ФИО, как в «Структуре компании»."""
+    by_email = viewer is not None and viewer.role == "admin"
+    users = [{"id": u.id, "name": u.name, "email": u.email if by_email else None}
              for u in db.session.execute(select(User).where(User.is_active.is_(True))).scalars()]
     conn = jira_service.get_connection()
     jira_urls = [conn["baseUrl"], *(conn.get("linkUrls") or [])] if conn and conn.get("baseUrl") else []
@@ -56,13 +61,13 @@ def fingerprint(data, options):
     return digest.hexdigest()
 
 
-def read_document(data, options, file_name=""):
+def read_document(data, options, file_name="", viewer=None):
     """Файл → документ загрузки «Пульса». Ошибки файла — 400 с текстом для сотрудника."""
     try:
         project = read_mspdi(data)
     except MsProjectError as exc:
         raise ApiError(400, "msproject_invalid", exc.message) from None
-    doc = map_project(project, {**_context(), **{k: v for k, v in options.items()
+    doc = map_project(project, {**_context(viewer), **{k: v for k, v in options.items()
                                                  if k in ("durations", "baseline", "categoryField")}})
     source = dict(doc["settings"].get("source") or {})
     source.update({"kind": "msproject", "master": options["mode"] == "master", "fileName": (file_name or "")[:255],
@@ -91,9 +96,9 @@ def _assignee_matches(doc):
             for a in doc["assignees"]]
 
 
-def preview(data, options, target, plan=None, file_name=""):
+def preview(data, options, target, plan=None, file_name="", viewer=None):
     """План загрузки: что будет создано или изменено, предупреждения, дерево первых строк."""
-    doc = read_document(data, options, file_name)
+    doc = read_document(data, options, file_name, viewer)
     out = {
         "fingerprint": fingerprint(data, options), "project": doc["project"], "stats": doc["stats"],
         "warnings": doc["warnings"], "customFields": doc.get("customFields") or [], "tree": _tree(doc),
@@ -101,7 +106,7 @@ def preview(data, options, target, plan=None, file_name=""):
         "truncated": len(doc["items"]) > TREE_LIMIT,
     }
     if target == "update":
-        changes = diff_plan(snapshot_document(plan), doc).to_dict()
+        changes = diff_plan(snapshot_document(plan), doc, reserved_keys=_taken_keys(plan)).to_dict()
         out["changes"] = _short_changes(changes)
         out["planRevision"] = plan.revision
         source = (plan.settings or {}).get("source") or {}
@@ -126,16 +131,22 @@ def _short_changes(changes):
 # ---------- применение ----------
 
 def _snapshot(plan, user, label):
-    """Снимок плана перед заменой или обновлением — его можно вернуть в «Версиях» («Перед импортом»)."""
-    create_snapshot(plan, user, reason="before_import", label=label)
+    """Снимок плана перед заменой или обновлением — его можно вернуть в «Версиях» («Перед импортом»). Источник
+    плана записывается в снимок явно, даже пустой: иначе восстановление оставило бы план мастер-копией."""
+    snapshot = create_snapshot(plan, user, reason="before_import", label=label)
+    data = dict(snapshot.data)
+    data["plan"] = dict(data["plan"], settings={**data["plan"]["settings"],
+                                                "source": (plan.settings or {}).get("source")})
+    snapshot.data = data
 
 
 def _apply_ops(plan, user, ops, summary):
     editor = PlanEditor(plan, user)
     # Связь, которую нельзя создать (строку пропустили), не останавливает загрузку — она попадает в исправления
     editor.skip_invalid_links = True
-    if ops:
-        editor.apply(ops, max_ops=None)
+    events = editor.apply(ops, max_ops=None) if ops else []
+    # Изменения строк — в историю строк (новая строка, сроки, название…), как у обычной правки
+    db.session.add_all(events)
     plan.revision = editor.revision
     plan.updated_at = editor.now
     plan.updated_by_id = user.id
@@ -213,11 +224,13 @@ def replace_plan(plan, user, doc, file_name):
 
 
 def _taken_keys(plan):
-    """Ключи строк и связей плана, в том числе удалённых (в корзине плана), — новые строки их не занимают."""
-    from app.models import PlanLink
+    """Ключи строк, связей и исполнителей плана, в том числе удалённых (в корзине плана), — новые их не занимают:
+    иначе создание совпало бы с удалённой строкой и было бы принято за повтор пакета."""
+    from app.models import PlanAssignee, PlanLink
 
-    taken = set(db.session.execute(select(PlanItem.key).where(PlanItem.plan_id == plan.id)).scalars())
-    taken |= set(db.session.execute(select(PlanLink.key).where(PlanLink.plan_id == plan.id)).scalars())
+    taken = set()
+    for model in (PlanItem, PlanLink, PlanAssignee):
+        taken |= set(db.session.execute(select(model.key).where(model.plan_id == plan.id)).scalars())
     return taken
 
 
@@ -239,9 +252,14 @@ def _free_keys(doc, taken):
 def update_plan(plan, user, doc, options, file_name):
     """Обновить план, который ведётся в MS Project: строки по GUID и UID, только поля MS Project."""
     _snapshot(plan, user, f"До обновления из MS Project: {file_name}")
-    changes = diff_plan(snapshot_document(plan), doc)
+    changes = diff_plan(snapshot_document(plan), doc, reserved_keys=_taken_keys(plan))
     ops = to_ops(changes, {"deleteMissing": options["deleteMissing"]})
-    ops.append({"op": "plan.update", "fields": {"settings": {"source": doc["settings"]["source"]}}})
+    settings = {"source": doc["settings"]["source"]}
+    categories = list((plan.settings or {}).get("categories") or [])
+    added = [c for c in doc["settings"].get("categories") or [] if c not in categories]
+    if added:
+        settings["categories"] = categories + added
+    ops.append({"op": "plan.update", "fields": {"settings": settings}})
     counts = changes.counts or {}
     summary = (f"Обновлено из MS Project: {file_name} — новых {len(changes.new)}, изменено {len(changes.changed)}, "
                f"нет в файле {len(changes.missing)}")

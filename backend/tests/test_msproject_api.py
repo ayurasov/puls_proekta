@@ -164,3 +164,67 @@ def test_export_round_trip(app, admin):
     assert sum(len(t.links) for t in project.tasks) == len(doc["links"]) if hasattr(project.tasks[0], "links") else True
     outsider = new_client(app, "chuzhoy", "editor")
     assert outsider.get(f"/api/plans/{plan_id}/export/msproject").status_code == 404
+
+
+# ---------- ревью 0.7.0 ----------
+
+def _master_plan(admin):
+    project_id, _ = create_project(admin)
+    res = _apply(admin, CRM.read_bytes(), "plan", {"mode": "master", "categoryField": "Этап"}, projectId=project_id)
+    assert res.status_code == 200, res.get_json()
+    return project_id, res.get_json()["planId"]
+
+
+def test_review_archived_plan_is_not_replaced_or_updated(app, admin):
+    project_id, plan_id = _master_plan(admin)
+    other = admin.post(f"/api/projects/{project_id}/plans", json={"title": "Ещё план"}).get_json()
+    assert other["id"]
+    assert admin.post(f"/api/plans/{plan_id}/archive").status_code == 200
+    for target in ("update", "replace"):
+        res = _preview(admin, CRM.read_bytes(), target, {"mode": "master"}, planId=plan_id)
+        assert res.status_code == 409 and res.get_json()["error"] == "archived", target
+
+
+def test_review_update_writes_row_history_keeps_master_and_adds_categories(app, admin):
+    from app.models import PlanEvent
+
+    _project_id, plan_id = _master_plan(admin)
+    task = next(i for i in _plan(admin, plan_id)["items"] if i["name"] == "Разработка устава проекта")
+    changed = CRM.read_bytes().decode().replace("<Name>Разработка устава проекта</Name>", "<Name>Устав проекта</Name>")
+    # Обновление без явного режима — план остаётся мастер-копией
+    res = _apply(admin, changed.encode(), "update", {"categoryField": "Этап"}, planId=plan_id)
+    assert res.status_code == 200, res.get_json()
+    plan = _plan(admin, plan_id)["plan"]
+    assert plan["settings"]["source"]["master"] is True
+    with app.app_context():
+        events = db.session.execute(select(PlanEvent).where(
+            PlanEvent.plan_id == plan_id, PlanEvent.entity_key == task["key"])).scalars().all()
+        assert any("Устав проекта" in (e.summary or "") for e in events), [e.summary for e in events]
+
+
+def test_review_resources_matched_by_email_only_for_admin(app, admin):
+    from tests.conftest import make_user
+
+    make_user(app, "drugoy", "editor", name="Совсем Другой Человек", email="ivanov@romashka.ru")
+    project_id, _ = create_project(admin)
+    by_admin = _preview(admin, CRM.read_bytes(), "plan", projectId=project_id).get_json()
+    assert any(a["userName"] == "Совсем Другой Человек" for a in by_admin["assignees"])
+    editor = new_client(app, "pravit", "editor")
+    from tests.test_projects_access import _uid
+    admin.post("/api/access", json={"userIds": [_uid(app, "pravit")], "projectIds": [project_id], "level": "edit"})
+    by_editor = _preview(editor, CRM.read_bytes(), "plan", projectId=project_id).get_json()
+    assert not any(a["userName"] == "Совсем Другой Человек" for a in by_editor["assignees"])
+
+
+def test_review_restoring_before_import_snapshot_clears_master_source(app, admin):
+    project_id, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [{"op": "item.create", "item": {"key": "old", "type": "task", "name": "Прежняя",
+                                                            "start": "2026-05-01", "end": "2026-05-05"}}])
+    assert _apply(admin, CRM.read_bytes(), "replace", {"mode": "master"}, planId=plan_id).status_code == 200
+    assert _plan(admin, plan_id)["plan"]["settings"]["source"]["master"] is True
+    snaps = admin.get(f"/api/plans/{plan_id}/snapshots").get_json()
+    before = next(s for s in snaps if s["reason"] == "before_import")
+    assert admin.post(f"/api/plans/{plan_id}/snapshots/{before['id']}/restore").status_code == 200
+    restored = _plan(admin, plan_id)
+    assert "source" not in restored["plan"]["settings"]
+    assert {i["name"] for i in restored["items"]} == {"Прежняя"}

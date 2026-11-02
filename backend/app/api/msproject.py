@@ -13,13 +13,14 @@ from flask import Blueprint, Response, jsonify, request, session
 from sqlalchemy import func, select
 
 from app import audit
-from app.api.plans import _plan_with_access
+from app.api.plans import _audit_plan, _plan_with_access
 from app.extensions import db, limiter
 from app.models import CalendarDay, Direction, ItemComment, Project, User
 from app.security import ApiError, current_user, login_required, require_project
 from app.services import msproject_import as importer
 from app.services.msproject import write_mspdi
 from app.services.plan_doc import snapshot_document
+from app.services.plan_ops import lock_plan
 from app.services.plans import create_plan, unique_plan_title
 
 bp = Blueprint("msproject", __name__, url_prefix="/api")
@@ -44,7 +45,7 @@ def _form():
     target = request.form.get("target") or "project"
     if target not in importer.TARGETS:
         raise ApiError(400, "validation_error", "Неизвестное назначение загрузки")
-    return data, importer.clean_options(raw), target, (upload.filename or "")[:255]
+    return data, importer.clean_options(raw, target), target, (upload.filename or "")[:255]
 
 
 def _int(name):
@@ -66,7 +67,8 @@ def _check_target(target, user):
     if target == "plan":
         project, _level = require_project(_int("projectId") or 0, "edit")
         return project, None
-    plan, project, _level = _plan_with_access(_int("planId") or 0, "edit")
+    # План в архиве не меняется ни правками, ни загрузкой
+    plan, project, _level = _plan_with_access(_int("planId") or 0, "edit", allow_archived=False)
     return project, plan
 
 
@@ -77,7 +79,7 @@ def preview():
     user = current_user()
     data, options, target, file_name = _form()
     _project, plan = _check_target(target, user)
-    return jsonify(importer.preview(data, options, target, plan=plan, file_name=file_name))
+    return jsonify(importer.preview(data, options, target, plan=plan, file_name=file_name, viewer=user))
 
 
 @bp.post("/import/msproject/apply")
@@ -89,7 +91,10 @@ def apply():
     project, plan = _check_target(target, user)
     if request.form.get("fingerprint") != importer.fingerprint(data, options):
         raise ApiError(409, "preview_outdated", "Файл или параметры изменились после проверки — проверьте ещё раз")
-    doc = importer.read_document(data, options, file_name)
+    if plan is not None:
+        # Как обычная правка: план заблокирован до конца транзакции, ревизия — перечитана после блокировки
+        plan = lock_plan(plan.id)
+    doc = importer.read_document(data, options, file_name, viewer=user)
     title = " ".join((request.form.get("title") or doc["project"].get("title") or doc["project"].get("name")
                       or "Проект из MS Project").split())[:500]
 
@@ -109,17 +114,17 @@ def apply():
     elif target == "plan":
         plan = create_plan(project, user, unique_plan_title(project, title), settings=importer.settings_for(doc))
         importer.fill(plan, user, doc, f"План создан импортом из MS Project: {file_name} ({len(doc['items'])} строк)")
-        audit.record("Планы", "create", f"plan #{plan.id}", "title", "", f"{plan.title} (из MS Project)")
+        _audit_plan(project, plan, "create", new=f"{plan.title} (из MS Project)", field="title")
         result = {"projectId": project.id, "planId": plan.id}
     elif target == "replace":
         importer.check_revision(plan, _int("planRevision"))
         importer.replace_plan(plan, user, doc, file_name)
-        audit.record("Планы", "update", f"plan #{plan.id}", "content", "", f"заменено из MS Project: {file_name}")
+        _audit_plan(project, plan, "update", new=f"заменено из MS Project: {file_name}", field="content")
         result = {"projectId": project.id, "planId": plan.id}
     else:
         importer.check_revision(plan, _int("planRevision"))
         counts = importer.update_plan(plan, user, doc, options, file_name)
-        audit.record("Планы", "update", f"plan #{plan.id}", "content", "", f"обновлено из MS Project: {file_name}")
+        _audit_plan(project, plan, "update", new=f"обновлено из MS Project: {file_name}", field="content")
         result = {"projectId": project.id, "planId": plan.id, **counts}
     db.session.commit()
     return jsonify(result)
