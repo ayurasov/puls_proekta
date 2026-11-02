@@ -238,3 +238,35 @@ def test_review_update_keeps_one_time_mode_unless_chosen(app, admin):
     assert _plan(admin, plan_id)["plan"]["settings"]["source"]["master"] is False
     assert _apply(admin, CRM.read_bytes(), "update", {"mode": "master"}, planId=plan_id).status_code == 200
     assert _plan(admin, plan_id)["plan"]["settings"]["source"]["master"] is True
+
+
+def _small_file(resource):
+    """Одна задача на ресурсе resource; заметка в RTF с байтом \\'00, который в базу попасть не должен."""
+    ns = "http://schemas.microsoft.com/project"
+    return (f'<?xml version="1.0" encoding="UTF-8"?><Project xmlns="{ns}"><Name>t.xml</Name>'
+            "<Tasks><Task><UID>0</UID><ID>0</ID><Name>P</Name><OutlineLevel>0</OutlineLevel><Summary>1</Summary></Task>"
+            "<Task><UID>1</UID><ID>1</ID><Name>A</Name><OutlineLevel>1</OutlineLevel><Start>2026-03-02T08:00:00</Start>"
+            "<Finish>2026-03-02T17:00:00</Finish><Duration>PT8H0M0S</Duration><Notes>{\\rtf1 a\\'00b}</Notes></Task></Tasks>"
+            f"<Resources><Resource><UID>1</UID><ID>1</ID><Name>{resource}</Name><Type>1</Type></Resource></Resources>"
+            "<Assignments><Assignment><UID>1</UID><TaskUID>1</TaskUID><ResourceUID>1</ResourceUID></Assignment></Assignments>"
+            "</Project>").encode()
+
+
+def test_review_replace_with_new_resource_takes_free_key(app, admin):
+    project_id, _ = create_project(admin)
+    res = _apply(admin, _small_file("Иванов Иван"), "plan", {"mode": "once"}, projectId=project_id)
+    plan_id = res.get_json()["planId"]
+    with app.app_context():
+        note = db.session.execute(select(ItemComment).where(ItemComment.plan_id == plan_id)).scalar_one()
+        assert note.text.endswith("ab") and "\x00" not in note.text
+    # Другой пользователь заменяет план файлом, где у задачи другой ресурс: ключ прежнего исполнителя занят
+    other = new_client(app, "pm2", "admin")
+    assert _apply(other, _small_file("Петров Пётр"), "replace", {"mode": "once"}, planId=plan_id).status_code == 200
+    doc = _plan(admin, plan_id)
+    by_key = {a["key"]: a["name"] for a in doc["assignees"]}
+    assert sorted(by_key.values()) == ["Иванов Иван", "Петров Пётр"]
+    assert [by_key[i["assigneeKey"]] for i in doc["items"]] == ["Петров Пётр"]
+    # Тот же пользователь — прежний исполнитель не переименовывается
+    assert _apply(admin, _small_file("Сидоров Семён"), "replace", {"mode": "once"}, planId=plan_id).status_code == 200
+    names = sorted(a["name"] for a in _plan(admin, plan_id)["assignees"])
+    assert names == ["Иванов Иван", "Петров Пётр", "Сидоров Семён"]

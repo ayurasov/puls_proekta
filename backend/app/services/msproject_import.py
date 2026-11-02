@@ -70,10 +70,11 @@ def read_document(data, options, file_name="", viewer=None):
     """Файл → документ загрузки «Пульса». Ошибки файла — 400 с текстом для сотрудника."""
     try:
         project = read_mspdi(data)
+        # Сопоставление тоже может отклонить файл (даты и длительности вне допустимого) — так же 400, а не 500
+        doc = map_project(project, {**_context(viewer), **{k: v for k, v in options.items()
+                                                     if k in ("durations", "baseline", "categoryField")}})
     except MsProjectError as exc:
         raise ApiError(400, "msproject_invalid", exc.message) from None
-    doc = map_project(project, {**_context(viewer), **{k: v for k, v in options.items()
-                                                 if k in ("durations", "baseline", "categoryField")}})
     source = dict(doc["settings"].get("source") or {})
     source.update({"kind": "msproject", "master": options["mode"] == "master", "fileName": (file_name or "")[:255],
                    "importedAt": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")})
@@ -212,7 +213,12 @@ def replace_plan(plan, user, doc, file_name):
             remap[assignee["key"]] = existing
         else:
             new_assignees.append(assignee)
-    keys = _free_keys(doc, _taken_keys(plan))
+    taken = _taken_keys(plan)
+    keys = _free_keys([*doc["items"], *doc.get("links", [])], taken)
+    # Новый исполнитель не занимает ключ прежнего: иначе создание приняли бы за повтор (переименование прежнего)
+    # или отклонили бы как занятый ключ, если прежнего завёл другой пользователь
+    assignee_keys = _free_keys(new_assignees, taken)
+    remap.update(assignee_keys)
     items = []
     for item in doc["items"]:
         item = dict(item, key=keys[item["key"]], parentKey=keys.get(item.get("parentKey")) if item.get("parentKey") else None)
@@ -221,7 +227,7 @@ def replace_plan(plan, user, doc, file_name):
         items.append(item)
     links = [dict(link, key=keys.get(link["key"], link["key"]), **{"from": keys[link["from"]], "to": keys[link["to"]]})
              for link in doc.get("links", [])]
-    ops += [{"op": "assignee.create", "assignee": a} for a in new_assignees]
+    ops += [{"op": "assignee.create", "assignee": dict(a, key=assignee_keys[a["key"]])} for a in new_assignees]
     ops += [{"op": "item.create", "item": i} for i in items]
     ops += [{"op": "link.create", "link": link} for link in links]
     ops.append({"op": "plan.update", "fields": {"settings": settings_for(doc, plan.settings)}})
@@ -240,10 +246,10 @@ def _taken_keys(plan):
     return taken
 
 
-def _free_keys(doc, taken):
-    """Ключи строк и связей документа, не занятые в плане (удалённые строки плана остаются в корзине)."""
+def _free_keys(entries, taken):
+    """Ключи записей документа, не занятые в плане (удалённые строки плана остаются в корзине): старый ключ → новый."""
     keys = {}
-    for entry in [*doc["items"], *doc.get("links", [])]:
+    for entry in entries:
         key = entry["key"]
         n = 1
         candidate = key
