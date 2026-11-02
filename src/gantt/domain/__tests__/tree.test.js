@@ -18,3 +18,14 @@ describe('номера строк по структуре (WBS)', () => {
     expect(numbers.has('p')).toBe(false)
   })
 })
+
+describe('номера строк у мастер-копии MS Project', () => {
+  it('коды WBS из файла; у строки, добавленной в «Пульсе», номера нет', async () => {
+    const { rowNumbers } = await import('../tree')
+    const index = buildIndex([
+      { ...row('a', null, 1), extra: { msp: { wbs: 'A.1' } } }, { ...row('b', null, 2) },
+    ])
+    expect(Object.fromEntries(rowNumbers(index, { source: { kind: 'msproject', master: true } }))).toEqual({ a: 'A.1' })
+    expect(Object.fromEntries(rowNumbers(index, { source: { kind: 'msproject', master: false } }))).toEqual({ a: '1', b: '2' })
+  })
+})

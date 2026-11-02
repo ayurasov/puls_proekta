@@ -12,7 +12,7 @@
 import { computed, reactive, toRaw } from 'vue'
 import { api, AuthRequiredError, NetworkError } from '../api/client'
 import { applyBatch, touchedKeys } from './domain/ops'
-import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree'
+import { buildIndex, descendantKeys, flattenTree, parentOf, rowNumbers } from './domain/tree'
 import { hasActiveFilters, myAssigneeKeys, visibilityPredicate } from './domain/filters'
 import { computeDependencyShifts, dependentKeys, effectiveEnd, linkProblem } from './domain/dependencies'
 import { createCalendar } from './domain/calendar'
@@ -159,6 +159,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       } : null,
       mine: myAssigneeKeys(assigneeList.value, filterEnv.user),
       links: linkList.value,
+      // Номера строк — только при поиске: поиск «2.3» находит строку по номеру
+      numbers: (state.view.search || '').trim() ? rowNumbers(index.value, settings.value) : null,
     }
   })
   const filtersActive = computed(() => hasActiveFilters(state.view, filterContext.value))

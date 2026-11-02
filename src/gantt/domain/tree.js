@@ -37,6 +37,20 @@ export function outlineNumbers(index) {
   return out
 }
 
+/**
+ * Номера строк плана: Map(key → номер). У мастер-копии MS Project — коды WBS из файла (у строк, добавленных в
+ * «Пульсе», номера нет: вычисленный мог бы совпасть с кодом из файла), иначе — номер по структуре.
+ */
+export function rowNumbers(index, settings) {
+  const source = settings?.source
+  if (source?.kind === 'msproject' && source.master) {
+    const out = new Map()
+    for (const item of index.byKey.values()) if (item.extra?.msp?.wbs) out.set(item.key, item.extra.msp.wbs)
+    return out
+  }
+  return outlineNumbers(index)
+}
+
 export function comparePosition(a, b) {
   return (a.position - b.position) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 }

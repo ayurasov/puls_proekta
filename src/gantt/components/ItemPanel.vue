@@ -30,6 +30,11 @@ const ui = useUiStore()
 const directory = useDirectoryStore()
 const tab = ref('main')
 const readonly = computed(() => !editor.canEdit)
+// Строка мастер-копии MS Project: поля, которые следующее «Обновить из MS Project» перезапишет из файла (ADR-0012)
+const fromMsProject = computed(() => {
+  const source = editor.settings.source
+  return Boolean(source?.kind === 'msproject' && source.master && item.value?.extra?.msp)
+})
 const item = computed(() => props.item)
 
 // Черновики текстовых полей: удалённые правки не затирают то, что сотрудник сейчас печатает
@@ -341,6 +346,10 @@ function duplicate() {
         <span v-else-if="span"><AppIcon name="calendar" :size="12" /> {{ formatDayNoYear(span.start) }} — {{ formatDay(span.end) }}</span>
         <span v-if="parentName" class="crumb" :title="`Входит в «${parentName}»`"><AppIcon name="folder" :size="12" /> <span class="ellipsis">{{ parentName }}</span></span>
       </div>
+      <p v-if="fromMsProject" class="msp-note" data-testid="panel-msp-note">
+        <AppIcon name="info" :size="13" /> Ведётся в MS Project: название, структура, сроки, связи, прогресс, исполнитель и крайний
+        срок обновятся из файла при следующем «Обновить из MS Project». Комментарии, пометки, цвет и Jira — только здесь.
+      </p>
     </div>
 
     <div class="tabs-wrap">
@@ -790,4 +799,5 @@ function duplicate() {
 .s-key { font-weight: 700; font-size: 12px; color: #0052cc; }
 .foreign { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; color: #8a5a00; background: var(--color-warning-soft); border-radius: var(--radius-sm); padding: 6px 8px; line-height: 1.45; }
 .foreign :deep(svg) { flex-shrink: 0; margin-top: 2px; }
+.msp-note { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; padding: 7px 10px; border-radius: 8px; background: #eef3ff; color: #2b4db5; font-size: 12px; line-height: 1.45; }
 </style>

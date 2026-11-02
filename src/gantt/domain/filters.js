@@ -215,8 +215,11 @@ export function visibilityPredicate(index, filters, ctx = {}) {
   let searchVisible = null
   if (search) {
     searchVisible = new Set()
+    // «2.3» — строка с этим номером и всё, что в ней (номера — ctx.numbers, Map(key → номер))
+    const number = /^\d+(\.\d+)*\.?$/.test(search) && ctx.numbers ? search.replace(/\.$/, '') : null
     for (const item of items) {
-      if ((item.name || '').toLowerCase().includes(search)) {
+      const own = number ? ctx.numbers.get(item.key) : null
+      if ((item.name || '').toLowerCase().includes(search) || (own && (own === number || own.startsWith(`${number}.`)))) {
         searchVisible.add(item.key)
         for (const a of ancestorKeys(index, item.key)) searchVisible.add(a)
       }

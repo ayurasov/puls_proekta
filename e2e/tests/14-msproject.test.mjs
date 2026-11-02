@@ -50,6 +50,10 @@ test('проект из MS Project — мастер-копия: план заг�
   const first = page.locator('[data-testid=row-number]').first()
   await first.waitFor()
   assert.match(await first.textContent(), /^\d+(\.\d+)*$/)
+  // Карточка строки мастер-копии подсказывает, что обновится из файла
+  await page.locator('.grid-row', { hasText: 'Разработка устава проекта' }).locator('.open-btn').click()
+  await page.locator('[data-testid=panel-msp-note]').waitFor()
+  await page.keyboard.press('Escape')
   assert.deepEqual(page.errors, [])
 })
 

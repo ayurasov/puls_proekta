@@ -8,7 +8,7 @@ import { dayX, fitZoom, nextZoom } from '../domain/layout'
 import {
   CONSTRAINT_TYPES, EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, linkShortLabel, resolveColor, textColorOnWhite,
 } from '../domain/colors'
-import { deadlineMissed, descendantKeys, outlineNumbers, parentOf } from '../domain/tree'
+import { deadlineMissed, descendantKeys, parentOf, rowNumbers } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
 import { countLabel } from '../../utils/format'
 
@@ -38,14 +38,9 @@ const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progres
 const columns = computed(() => Object.entries(COLUMN_WIDTHS)
   .filter(([key]) => view.columns[key] && (key !== 'jira' || jira.state.connected)).map(([key, width]) => ({ key, width })))
 // Номер строки по структуре (1.2.3); в плане, который ведётся в MS Project, — код WBS из файла
-const numbers = computed(() => (view.columns.wbs ? outlineNumbers(editor.index) : null))
+const numbers = computed(() => (view.columns.wbs ? rowNumbers(editor.index, editor.settings) : null))
 function numberFor(item) {
-  if (!numbers.value) return ''
-  const source = editor.settings.source
-  // Мастер-копия — коды WBS из файла; у строки, добавленной в «Пульсе», номера нет: вычисленный номер мог бы
-  // совпасть с кодом из файла
-  if (source?.kind === 'msproject' && source.master) return item.extra?.msp?.wbs || ''
-  return numbers.value.get(item.key) || ''
+  return numbers.value?.get(item.key) || ''
 }
 const MIN_NAME_WIDTH = 140
 const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
@@ -571,7 +566,9 @@ const tooltipData = computed(() => {
     const who = item.updatedById && state.users[String(item.updatedById)]?.name
     rowsOut.push(['Изменено', new Date(item.updatedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) + (who ? ` · ${who}` : '')])
   }
-  return { title: item.name, type: item.type, rows: rowsOut }
+  // Номер строки (1.2.3 или код WBS из MS Project) — в заголовке подсказки, если колонка номеров включена
+  const number = numberFor(item)
+  return { title: number ? `${number} ${item.name}` : item.name, type: item.type, rows: rowsOut }
 })
 
 /** Предшественники строки для подсказки: «Анализ; Дизайн (НН +2 дн.)». */
