@@ -7,6 +7,7 @@ HTML, гиперссылки, неактивная задача, пустая с
 """
 
 import json
+import random
 import time
 import xml.etree.ElementTree as ET
 from copy import deepcopy
@@ -18,9 +19,10 @@ import pytest
 
 from app.services.msproject import import_document
 from app.services.msproject.diff import diff_plan, to_ops
-from app.services.msproject.mapping import ITEM_LIMIT, MS_NOTE_PREFIX, map_project, round_half
-from app.services.msproject.model import MsProjectError
+from app.services.msproject.mapping import ITEM_LIMIT, MS_NOTE_PREFIX, convert_lag, map_project, round_half
+from app.services.msproject.model import Link, MsProjectError
 from app.services.msproject.reader import MAX_BYTES, parse_duration, read_file, read_mspdi
+from app.services.msproject.schedule import RuCalendar, inconsistent_rows
 from app.services.msproject.text import plain_text
 from app.services.msproject.writer import write_mspdi
 
@@ -444,10 +446,12 @@ def test_ограничения(doc):
 def test_все_типы_ограничений():
     rows = "".join(task(n + 1, f"Задача {n}", body=f"<ConstraintType>{n}</ConstraintType>"
                         "<ConstraintDate>2026-03-04T08:00:00</ConstraintDate>") for n in range(8))
-    items = mapped(mspdi(rows))["items"]
-    assert [(i["constraintType"], i["constraintDate"]) for i in items] == [
-        (None, None), ("alap", None), ("mso", "2026-03-04"), ("mfo", "2026-03-03"), ("snet", "2026-03-04"),
+    document = mapped(mspdi(rows))
+    # «Начало не ранее» 04.03 у задачи, начатой 02.03, «Пульс» сдвинул бы — дата прижата к началу задачи
+    assert [(i["constraintType"], i["constraintDate"]) for i in document["items"]] == [
+        (None, None), ("alap", None), ("mso", "2026-03-04"), ("mfo", "2026-03-03"), ("snet", "2026-03-02"),
         ("snlt", "2026-03-04"), ("fnet", "2026-03-03"), ("fnlt", "2026-03-03")]
+    assert warning(document, "constraints_adjusted")["examples"] == ["Задача 4"]
 
 
 def test_ограничения_суммарных_задач_не_переносятся():
@@ -546,28 +550,52 @@ def test_связи_всех_типов(doc):
 
 def test_лаг_в_рабочих_единицах(doc):
     assert (link(doc, "l6-7")["lag"], link(doc, "l6-7")["lagKind"]) == (3, "working")     # 3д
-    assert link(doc, "l11-12")["lag"] == 1     # 4ч = 0,5 дня → 1
+    assert link(doc, "l11-12")["lag"] == 0     # +4ч после окончания в 17:00 — следующее утро
     assert link(doc, "l15-22")["lag"] == 5     # 1н
     assert link(doc, "l41-43")["lag"] == 20    # 1мес (20 дней в месяце)
     assert link(doc, "l22-23")["lag"] == 2     # 2д? — оценка
     assert link(doc, "l28-29")["lag"] == 2
     assert link(doc, "l17-19")["lag"] == -1    # опережение
+    assert (link(doc, "l20-21")["lag"], link(doc, "l20-21")["lagKind"]) == (-1, "working")  # SF
 
 
 def test_лаг_в_прошедших_единицах(doc):
     assert (link(doc, "l7-8")["lag"], link(doc, "l7-8")["lagKind"]) == (2, "calendar")    # 2ед
-    assert (link(doc, "l26-28")["lag"], link(doc, "l26-28")["lagKind"]) == (2, "calendar")  # 36еч = 1,5 → 2
+    # 36еч после вехи 21.05 (чт) 17:00 — суббота 05:00; MS Project начинает задачу в понедельник 25.05:
+    # лаг подобран под дату файла
+    assert (link(doc, "l26-28")["lag"], link(doc, "l26-28")["lagKind"]) == (3, "calendar")
+    assert warning(doc, "lags_adjusted")["examples"] == ["Разработка завершена → Функциональное тестирование"]
 
 
 def test_лаг_в_процентах_от_длительности_предшественника(doc):
     assert (link(doc, "l11-14")["lag"], link(doc, "l11-14")["lagKind"]) == (5, "working")  # 50 % от 10 дней
 
 
-def test_лаг_в_минутах_часах_и_прошедших_неделях():
-    rows = (task(1, "А") + task(2, "Б", body=pred(1, lag=4800, fmt=3)) + task(3, "В", body=pred(2, lag=6000, fmt=6))
-            + task(4, "Г", body=pred(3, lag=100800, fmt=10)) + task(5, "Д", body=pred(4, lag=0, fmt=21)))
-    lags = [(x["lag"], x["lagKind"]) for x in mapped(mspdi(rows))["links"]]
-    assert lags == [(1, "working"), (0, "calendar"), (7, "calendar"), (0, "working")]
+@pytest.mark.parametrize("kind, tenths, fmt, expected", [
+    (1, 4800, 3, (1, "working")),        # 480м = 1 день
+    (1, 2400, 5, (0, "working")),        # FS +4ч — следующее утро
+    (1, -2400, 5, (-1, "working")),      # FS −4ч — тот же день
+    (1, 7200, 5, (1, "working")),        # FS +12ч
+    (3, 2400, 5, (0, "working")),        # SS +4ч — тот же день
+    (0, 2400, 5, (1, "working")),        # FF +4ч — окончание на следующий день
+    (0, -2400, 5, (0, "working")),       # FF −4ч — тот же день
+    (2, 0, 7, (-1, "working")),          # SF 0 — окончание накануне начала предшественника
+    (2, 9600, 7, (1, "working")),        # SF +2д
+    (1, 6000, 6, (0, "calendar")),       # FS +10еч
+    (1, 21600, 6, (1, "calendar")),      # FS +36еч
+    (0, 28800, 8, (2, "calendar")),      # FF +2ед
+    (1, 100800, 10, (7, "calendar")),    # FS +1ен
+    (1, 0, 21, (0, "working")),          # без лага
+    (1, 24000, 41, (5, "working")),      # 1н? — оценка
+])
+def test_перевод_лага_в_дни(kind, tenths, fmt, expected):
+    assert convert_lag(Link(1, 2, kind, tenths, fmt), 4800, 480) == expected
+
+
+def test_лаг_в_процентах_и_месяцах():
+    assert convert_lag(Link(1, 2, 1, 50, 19), 4800, 480) == (5, "working")      # 50 % от 10 дней
+    assert convert_lag(Link(1, 2, 1, 25, 20), 4800, 480) == (2, "working")      # 25 % от 10 дней — 2,5 → 2
+    assert convert_lag(Link(1, 2, 1, 96000, 11), None, 480) == (20, "working")  # 1мес = 20 дней
 
 
 def test_округление_половины_от_нуля():
@@ -588,7 +616,7 @@ def test_связь_суммарной_по_началу_берёт_первую
     rows = (task(1, "Фаза", "2026-03-02T08:00:00", "2026-03-13T17:00:00", body="<Summary>1</Summary>")
             + task(2, "Поздняя", "2026-03-09T08:00:00", "2026-03-13T17:00:00", level=2)
             + task(3, "Ранняя", "2026-03-02T08:00:00", "2026-03-06T17:00:00", level=2)
-            + task(4, "После", "2026-03-04T08:00:00", "2026-03-10T17:00:00", body=pred(1, kind=3, lag=4800)))
+            + task(4, "После", "2026-03-03T08:00:00", "2026-03-10T17:00:00", body=pred(1, kind=3, lag=4800)))
     links = mapped(mspdi(rows))["links"]
     assert [(x["from"], x["to"], x["type"], x["lag"]) for x in links] == [("i3", "i4", "SS", 1)]
 
@@ -702,7 +730,7 @@ def test_итоги_и_предупреждения(doc):
                                      "materialResources": 1}}
     codes = [w["code"] for w in doc["warnings"]]
     assert codes == ["inactive_tasks", "null_tasks", "external_tasks", "recurring_tasks", "cross_project_links",
-                     "links_to_skipped", "summary_links", "duplicate_links", "constraints_info",
+                     "links_to_skipped", "summary_links", "duplicate_links", "lags_adjusted", "constraints_info",
                      "multiple_assignments", "group_assignments", "material_resources", "hyperlinks_in_notes",
                      "priority_not_transferred", "costs_not_transferred", "task_calendars_not_transferred"]
     for entry in doc["warnings"]:
@@ -800,7 +828,8 @@ def op_for(ops, kind, key):
 def test_обновление_без_изменений(doc):
     changes = diff_plan(as_plan(doc), doc)
     assert changes.counts == {"new": 0, "changed": 0, "recreated": 0, "unchanged": 41, "missing": 0, "pulsOnly": 0,
-                              "linksAdded": 0, "linksRemoved": 0, "linksChanged": 0, "assigneesAdded": 0}
+                              "linksAdded": 0, "linksRemoved": 0, "linksChanged": 0, "assigneesAdded": 0,
+                              "deletedInPuls": 0}
     assert to_ops(changes) == [] and changes.warnings == []
     assert changes.key_map["i6"] == "k6" and changes.assignees["matched"] == {"a1": "p1", "a2": "p2", "a3": "p3"}
 
@@ -891,7 +920,7 @@ def test_обновление_связи(doc):
     assert changes.links["removed"] == [{"key": "x12-13", "from": "k12", "to": "k13", "type": "FS", "lag": 0,
                                          "lagKind": "working"}]
     assert changes.links["changed"] == [{"key": "x11-12", "from": "k11", "to": "k12",
-                                         "fields": {"lag": {"before": 1, "after": 3}}}]
+                                         "fields": {"lag": {"before": 0, "after": 3}}}]
     assert to_ops(changes) == [
         {"op": "link.delete", "key": "x12-13"},
         {"op": "link.update", "key": "x11-12", "fields": {"lag": 3}},
@@ -1381,3 +1410,407 @@ def test_круговой_обход_плана_пульса():
         ("FS", 2, "working"), ("SS", 3, "calendar")]
     assert [(a["key"], a["name"], a["userId"]) for a in document["assignees"]] == [
         ("a1", "Иванов Иван", 1), ("a2", "Петрова Анна", 2)]
+
+
+# ================================================================ согласование со связями «Пульса» (даты файла — главные)
+VITEST_FIXTURES = Path(__file__).resolve().parents[2] / "src" / "gantt" / "domain" / "__tests__" / "fixtures"
+SCHEDULE_FIELDS = ("key", "type", "name", "parentKey", "start", "end", "date", "offset", "status", "completedDate",
+                   "constraintType", "constraintDate")
+
+
+def puls_calendar(document):
+    return RuCalendar(document["pulsCalendar"]["holidays"], document["pulsCalendar"]["workdays"])
+
+
+def varied_file(phases=24, per_phase=25, seed=7):
+    """MSPDI со случайными (но повторяемыми) сроками и связями: все типы, лаги в минутах, часах, днях, неделях,
+    прошедших единицах и процентах, отрицательные лаги, связи суммарных задач, вехи в 08:00 и 17:00, окончания в
+    08:00, завершённые задачи с фактом раньше окончания, «Начало не ранее», даты на выходных и праздниках."""
+    rnd = random.Random(seed)
+    formats = [7, 7, 7, 5, 3, 8, 6, 9, 10, 19, 20, 39, 40]
+    minutes = [0, 0, 240, 480, 960, 2400, -480, -240, 720, 2160]
+    parts = [f'<?xml version="1.0" encoding="UTF-8"?><Project xmlns="{NS}"><Name>Случайный.xml</Name>'
+             "<MinutesPerDay>480</MinutesPerDay><Tasks>"
+             "<Task><UID>0</UID><ID>0</ID><Name>Случайный</Name><OutlineLevel>0</OutlineLevel><Summary>1</Summary></Task>"]
+    uid, leaves, phases_done = 0, [], []
+    origin = date(2026, 1, 12)
+    for phase in range(phases):
+        uid += 1
+        phase_uid = uid
+        parts.append(f"<Task><UID>{uid}</UID><ID>{uid}</ID><Name>Фаза {phase + 1}</Name><OutlineLevel>1</OutlineLevel>"
+                     "<Start>2026-01-12T08:00:00</Start><Finish>2026-12-30T17:00:00</Finish><Summary>1</Summary></Task>")
+        for n in range(per_phase):
+            uid += 1
+            start = origin + timedelta(days=rnd.randint(0, 330))
+            body = []
+            if rnd.random() < 0.1:
+                at = rnd.choice(["08:00:00", "17:00:00"])
+                body.append(f"<Start>{start}T{at}</Start><Finish>{start}T{at}</Finish><Duration>PT0H0M0S</Duration>"
+                            "<Milestone>1</Milestone>")
+            else:
+                days = rnd.randint(1, 15)
+                finish = f"{start + timedelta(days=days)}T08:00:00" if rnd.random() < 0.1 else \
+                    f"{start + timedelta(days=days - 1)}T17:00:00"
+                body.append(f"<Start>{start}T{rnd.choice(['08:00:00', '13:00:00'])}</Start><Finish>{finish}</Finish>"
+                            f"<Duration>PT{days * 8}H0M0S</Duration>")
+                if rnd.random() < 0.15:
+                    actual = start + timedelta(days=max(0, days - 1 - rnd.randint(0, 2)))
+                    body.append(f"<PercentComplete>100</PercentComplete><ActualFinish>{actual}T17:00:00</ActualFinish>")
+            if rnd.random() < 0.08:
+                snet = start + timedelta(days=rnd.randint(-3, 3))
+                body.append(f"<ConstraintType>4</ConstraintType><ConstraintDate>{snet}T08:00:00</ConstraintDate>")
+            for _ in range(rnd.choice([0, 1, 1, 2, 3]) if leaves else 0):
+                source = rnd.choice(phases_done) if phases_done and rnd.random() < 0.05 else rnd.choice(leaves)
+                fmt = rnd.choice(formats)
+                lag = rnd.choice([0, 25, 50, 100]) if fmt in (19, 20) else rnd.choice(minutes) * 10
+                body.append(pred(source, kind=rnd.randint(0, 3), lag=lag, fmt=fmt))
+            parts.append(f"<Task><UID>{uid}</UID><ID>{uid}</ID><Name>Работа {phase + 1}.{n + 1}</Name>"
+                         f"<OutlineLevel>2</OutlineLevel>{''.join(body)}</Task>")
+            leaves.append(uid)
+        phases_done.append(phase_uid)
+    parts.append("</Tasks></Project>")
+    return "".join(parts).encode()
+
+
+def vitest_fixture(name, document):
+    """Строки и связи документа загрузки — для msprojectConsistency.test.js (тот же расчёт на клиенте)."""
+    items = [{k: item[k] for k in SCHEDULE_FIELDS if item.get(k) not in (None, "")} for item in document["items"]]
+    lines = ['{', f' "name": {json.dumps(name, ensure_ascii=False)},',
+             f' "calendar": {json.dumps(document["pulsCalendar"], ensure_ascii=False, sort_keys=True)},',
+             ' "items": [']
+    lines += [f"  {json.dumps(item, ensure_ascii=False, sort_keys=True)}," for item in items]
+    lines[-1] = lines[-1].rstrip(",")
+    lines += [' ],', ' "links": [']
+    lines += [f"  {json.dumps(link, ensure_ascii=False, sort_keys=True)}," for link in document["links"]]
+    lines[-1] = lines[-1].rstrip(",")
+    lines += [' ]', '}', '']
+    return "\n".join(lines)
+
+
+@pytest.mark.parametrize("case", ["crm", "crm-working", "6day", "generated"])
+def test_план_согласован_со_связями_пульса(case):
+    """Автосдвиг «Пульса» не трогает ни одной строки плана из файла; документы — для теста vitest на клиенте."""
+    source = {"crm": CRM.read_bytes(), "crm-working": CRM.read_bytes(), "6day": SIX_DAY.read_bytes(),
+              "generated": None}[case]
+    document = map_project(read_mspdi(source or varied_file()),
+                           {"durations": "working"} if case == "crm-working" else {})
+    assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
+    assert document["links"]
+    if case != "crm-working":
+        path = VITEST_FIXTURES / f"msproject-{case}.json"
+        text = vitest_fixture(case, document)
+        if not path.exists() or path.read_text(encoding="utf-8") != text:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        assert json.loads(path.read_text(encoding="utf-8"))["links"] == document["links"]
+
+
+def test_без_подбора_лагов_план_был_бы_не_согласован(doc):
+    """Проверка самой проверки: лаги «как в файле» (4ч → 1 день, SF 0) автосдвиг передвинул бы."""
+    links = deepcopy(doc["links"])
+    link_by_key = {x["key"]: x for x in links}
+    link_by_key["l11-12"]["lag"] = 1
+    link_by_key["l20-21"]["lag"] = 0
+    assert inconsistent_rows(doc["items"], links, puls_calendar(doc)) == ["i12", "i21"]
+
+
+ALIGN_CASES = {
+    # SF: окончание — к началу предшественника, то есть в конце предыдущего рабочего дня
+    "SF": (task(1, "А", "2026-03-02T08:00:00", "2026-03-06T17:00:00")
+           + task(2, "Б", "2026-02-25T08:00:00", "2026-02-27T17:00:00", body=pred(1, kind=2)),
+           [(-1, "working")], False),
+    # +4ч после окончания в пятницу 17:00 — понедельник
+    "FS +4ч": (task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00")
+               + task(2, "Б", "2026-03-16T13:00:00", "2026-03-17T17:00:00", body=pred(1, lag=2400, fmt=5)),
+               [(0, "working")], False),
+    # +36еч после четверга 17:00 — суббота 05:00, MS Project начинает в понедельник
+    "FS +36еч на выходной": (task(1, "А", "2026-03-10T08:00:00", "2026-03-12T17:00:00")
+                             + task(2, "Б", "2026-03-16T08:00:00", "2026-03-17T17:00:00",
+                                    body=pred(1, lag=21600, fmt=6)),
+                             [(3, "calendar")], True),
+    # Задача позже, чем требует связь (выравнивание, ручная дата): связь становится определяющей
+    "резерв": (task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00")
+               + task(2, "Б", "2026-03-18T08:00:00", "2026-03-19T17:00:00", body=pred(1)),
+               [(2, "working")], True),
+    # Задача раньше, чем требует связь: лаг — до даты файла
+    "опережение": (task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00")
+                   + task(2, "Б", "2026-03-11T08:00:00", "2026-03-12T17:00:00", body=pred(1)),
+                   [(-3, "working")], True),
+    # Два предшественника: определяющий — поздний, второй остаётся неопределяющим
+    "два предшественника": (task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00")
+                            + task(2, "В", "2026-03-02T08:00:00", "2026-03-04T17:00:00")
+                            + task(3, "Б", "2026-03-16T08:00:00", "2026-03-17T17:00:00", body=pred(1) + pred(2)),
+                            [(0, "working"), (0, "working")], False),
+    # Вехи: FS — в день окончания, SS — в день начала
+    "вехи": (task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00")
+             + task(2, "Конец", "2026-03-13T17:00:00", "2026-03-13T17:00:00", duration="PT0H0M0S", body=pred(1))
+             + task(3, "Начало", "2026-03-10T08:00:00", "2026-03-10T08:00:00", duration="PT0H0M0S",
+                    body=pred(1, kind=3)),
+             [(0, "working"), (0, "working")], False),
+    # Завершённая задача: связь считается от даты завершения (факта)
+    "факт": (task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00",
+                  body="<PercentComplete>100</PercentComplete><ActualFinish>2026-03-12T17:00:00</ActualFinish>")
+             + task(2, "Б", "2026-03-16T08:00:00", "2026-03-17T17:00:00", body=pred(1)),
+             [(1, "working")], True),
+    # «Начало не ранее» держит задачу сам — связь не трогается
+    "начало не ранее": (task(1, "А", "2026-03-10T08:00:00", "2026-03-11T17:00:00")
+                        + task(2, "Б", "2026-03-16T08:00:00", "2026-03-17T17:00:00",
+                               body=pred(1) + "<ConstraintType>4</ConstraintType>"
+                                              "<ConstraintDate>2026-03-16T08:00:00</ConstraintDate>"),
+                        [(0, "working")], False),
+    # Предшественник кончается накануне праздника: следующий рабочий день — после праздника (09.03.2026)
+    "праздник": (task(1, "А", "2026-03-02T08:00:00", "2026-03-06T17:00:00")
+                 + task(2, "Б", "2026-03-10T08:00:00", "2026-03-11T17:00:00", body=pred(1)),
+                 [(0, "working")], False),
+}
+
+
+@pytest.mark.parametrize("case", list(ALIGN_CASES))
+def test_лаги_подобраны_под_даты_файла(case):
+    rows, lags, adjusted = ALIGN_CASES[case]
+    document = mapped(mspdi(rows))
+    assert [(x["lag"], x["lagKind"]) for x in document["links"]] == lags
+    assert (warning(document, "lags_adjusted") is not None) == adjusted
+    assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
+
+
+def test_по_базовому_плану_лаги_не_подбираются(crm):
+    base = map_project(crm, {"baseline": "baseline"})
+    assert warning(base, "lags_adjusted") is None
+    assert link(base, "l11-12")["lag"] == 0 and link(base, "l26-28")["lag"] == 1
+
+
+def test_календарь_пульса_из_параметров():
+    rows = task(1, "А", "2026-03-10T08:00:00", "2026-03-13T17:00:00") + task(
+        2, "Б", "2026-03-17T08:00:00", "2026-03-18T17:00:00", body=pred(1))
+    document = mapped(mspdi(rows), calendar={"holidays": ["2026-03-16"], "workdays": []})
+    assert document["pulsCalendar"] == {"holidays": ["2026-03-16"], "workdays": []}
+    assert [(x["lag"], x["lagKind"]) for x in document["links"]] == [(0, "working")]
+
+
+# ================================================================ замечания проверки 0.7.0
+def test_review_doctype_в_utf16_без_метки_после_пробела():
+    """MEDIUM 4: expat считает UTF-16 любой файл с нулём во втором байте — пробел перед DOCTYPE прятал его."""
+    doc = ('<!DOCTYPE Project [<!ENTITY a "AAAAAAAAAA"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>'
+           f'<Project xmlns="{NS}"><Name>&b;</Name><Tasks><Task><UID>1</UID><Name>&b;</Name>'
+           "<OutlineLevel>1</OutlineLevel><Start>2026-03-02T08:00:00</Start><Finish>2026-03-02T17:00:00</Finish>"
+           "</Task></Tasks></Project>")
+    for data in ((" " + doc).encode("utf-16-le"), ("\n" + doc).encode("utf-16-be"),
+                 ("\t\n " + doc).encode("utf-16-le"), b"\xff\xfe" + (" " + doc).encode("utf-16-le")):
+        with pytest.raises(MsProjectError, match="DOCTYPE"):
+            read_mspdi(data)
+
+
+def test_review_исключения_календаря_на_тысячелетия():
+    """MEDIUM 5: еженедельное исключение 1900–9000 с пустой маской перебиралось день за днём (2 с на штуку),
+    «по 31.12.9999» давало OverflowError."""
+    exception = ("<Exception><TimePeriod><FromDate>1900-01-01T00:00:00</FromDate><ToDate>{to}</ToDate></TimePeriod>"
+                 "<Name>x</Name><Type>{kind}</Type><Period>1</Period><DaysOfWeek>{mask}</DaysOfWeek>"
+                 "<DayWorking>0</DayWorking></Exception>")
+    exceptions = "".join(exception.format(to="9000-01-01T00:00:00", kind=6, mask=0) for _ in range(10))
+    exceptions += exception.format(to="9999-12-31T23:59:59", kind=1, mask=0)
+    exceptions += exception.format(to="9999-12-31T23:59:59", kind=6, mask=2)
+    calendars = (f"<Calendar><UID>1</UID><Name>С</Name><IsBaseCalendar>1</IsBaseCalendar>"
+                 f"<Exceptions>{exceptions}</Exceptions></Calendar>")
+    data = mspdi(task(1, "А"), calendars=calendars, head="<CalendarUID>1</CalendarUID>")
+    started = time.perf_counter()
+    document = mapped(data)
+    assert time.perf_counter() - started < 1
+    days = document["calendar"]["exceptions"]
+    assert days and min(d["date"] for d in days) >= "2025-01-01" and max(d["date"] for d in days) <= "2027-12-31"
+
+
+def test_review_даты_вне_диапазона_ms_project():
+    """MEDIUM 7: 0001-01-01 и 9999-12-31 давали OverflowError (500) — теперь это пустые даты."""
+    rows = (task(1, "Год один", start="0001-01-01T00:00:00") + task(2, "Год 9999", finish="9999-12-31T17:00:00")
+            + task(3, "Обычная", body="<Deadline>9999-12-31T17:00:00</Deadline>"))
+    document = mapped(mspdi(rows))
+    assert [i["name"] for i in document["items"]] == ["Обычная"] and document["items"][0]["deadline"] is None
+    assert warning(document, "invalid_dates")["examples"] == ["Год один", "Год 9999"]
+
+
+def test_review_rtf_вне_юникода_nul_и_суррогаты():
+    """MEDIUM 7: \\u1114112 ронял разбор (500), \\'00, \\u0 и суррогаты попадали в комментарий (PostgreSQL)."""
+    assert plain_text("{\\rtf1 a \\u1114112 b}") == "a"
+    assert plain_text("{\\rtf1 a\\'00b\\u0?c}") == "abc"   # после \uN — один замещающий символ («?»)
+    assert plain_text("{\\rtf1 x\\u55296 y}") == "x"
+    assert plain_text("<p>a&#0;b</p>") == "a\ufffdb"
+    rows = task(1, "А", body="<Notes>{\\rtf1 до\\'00после \\u55296?}</Notes>")
+    text = mapped(mspdi(rows))["comments"][0]["text"]
+    assert "\x00" not in text and not any(0xD800 <= ord(ch) <= 0xDFFF for ch in text)
+
+
+def test_review_ограничение_без_даты():
+    """MEDIUM 7: «Начало не ранее» без даты проходило проверку, а применение давало 400."""
+    document = mapped(mspdi(task(1, "А", body="<ConstraintType>4</ConstraintType>")
+                            + task(2, "Б", body="<ConstraintType>1</ConstraintType>")))
+    assert [(i["constraintType"], i["constraintDate"]) for i in document["items"]] == [(None, None), ("alap", None)]
+    assert warning(document, "constraints_without_date")["examples"] == ["А"]
+
+
+def test_review_шкала_не_длиннее_15_лет():
+    """MEDIUM 7: проект на 20 лет давал шкалу, которую сервер отклонял («Шкала не может быть длиннее 15 лет»)."""
+    document = mapped(mspdi(task(1, "А", "2010-01-01T08:00:00", "2031-01-01T17:00:00")
+                            + task(2, "Б", "2026-03-02T08:00:00", "2026-03-02T17:00:00")))
+    plan_range = document["settings"]["range"]
+    assert (date.fromisoformat(plan_range["end"]) - date.fromisoformat(plan_range["start"])).days <= 366 * 15
+    assert plan_range["start"] == "2009-12-25" and warning(document, "range_too_long")
+
+
+def test_review_ошибки_значений_не_роняют_сервер(crm, monkeypatch):
+    """MEDIUM 7: любая ошибка арифметики дат при сопоставлении — MsProjectError (400), а не 500."""
+    from app.services.msproject import mapping
+
+    def broken(*_args, **_kwargs):
+        raise OverflowError("date value out of range")
+
+    monkeypatch.setattr(mapping, "_range", broken)
+    with pytest.raises(MsProjectError, match="недопустимые значения"):
+        map_project(crm)
+
+
+def test_review_uid_ресурса_не_из_ключа_пульса():
+    """LOW 14: ключ исполнителя «Пульса» из одних цифр (a1234567890) давал UID больше 32 бит."""
+    plan = puls_plan()
+    plan["assignees"] = [{"key": "a1234567890", "name": "Иванов", "position": 1},
+                         {"key": "a3", "name": "Петров", "position": 2},
+                         {"key": "a9999999999", "name": "Сидоров", "position": 3}]
+    plan["items"][0]["extra"] = {"msp": {"uid": 9_999_999_999}}
+    root = written(plan)
+    assert [int(r.findtext(Q + "UID")) for r in root.iter(Q + "Resource")] == [4, 3, 5]
+    assert max(int(t.findtext(Q + "UID")) for t in root.iter(Q + "Task")) < 10
+
+
+def test_review_ровно_предельное_число_задач():
+    """LOW 15: суммарная задача проекта (UID 0) входила в ограничение числа задач."""
+    rows = ("<Task><UID>0</UID><ID>0</ID><Name>Проект</Name><OutlineLevel>0</OutlineLevel></Task>"
+            + task(1, "А") + task(2, "Б") + task(3, "В"))
+    assert len(read_mspdi(mspdi(rows), max_tasks=3).tasks) == 4
+    with pytest.raises(MsProjectError, match="больше 2 задач"):
+        read_mspdi(mspdi(rows), max_tasks=2)
+
+
+def test_review_обновление_большого_плана_линейно():
+    """LOW 18: позиции считались перебором всех строк для каждой группы (4,7 с на 2500 групп)."""
+    document = map_project(read_mspdi(big_file(groups=2499, per_group=7)))
+    plan = as_plan(document)
+    started = time.perf_counter()
+    changes = diff_plan(plan, document)
+    assert time.perf_counter() - started < 2.5
+    assert changes.counts["changed"] == 0 and changes.counts["unchanged"] == len(document["items"])
+
+
+class FakePlan:
+    """План «Пульса» для сценариев обновления: строки, связи, исполнители и корзина; создание с занятым ключом
+    (в том числе удалённым) — ошибка, как на сервере (409 key_exists или пропуск повтора)."""
+
+    def __init__(self, document):
+        self.stores = {"item": {}, "link": {}, "assignee": {}}
+        self.trash = {"item": {}, "link": {}, "assignee": {}}
+        self.settings = deepcopy(document["settings"])
+        self.apply([{"op": "assignee.create", "assignee": a} for a in document["assignees"]]
+                   + [{"op": "item.create", "item": i} for i in document["items"]]
+                   + [{"op": "link.create", "link": x} for x in document["links"]])
+
+    def keys(self):
+        return {key for kind in self.stores for key in [*self.stores[kind], *self.trash[kind]]}
+
+    def document(self):
+        return {"items": sorted(deepcopy(list(self.stores["item"].values())), key=lambda i: i["position"]),
+                "links": deepcopy(list(self.stores["link"].values())),
+                "assignees": deepcopy(list(self.stores["assignee"].values())), "settings": self.settings}
+
+    def apply(self, ops):
+        for op in ops:
+            kind, action = op["op"].split(".")
+            store = self.stores[kind]
+            if action == "create":
+                payload = op[kind]
+                assert payload["key"] not in self.keys(), f"key_exists: {payload['key']}"
+                store[payload["key"]] = deepcopy(payload)
+            elif action == "update":
+                store[op["key"]].update(deepcopy(op["fields"]))
+            elif action == "delete":
+                self.trash[kind][op["key"]] = store.pop(op["key"])
+                if kind == "item":
+                    for key, value in list(self.stores["link"].items()):
+                        if op["key"] in (value["from"], value["to"]):
+                            self.trash["link"][key] = self.stores["link"].pop(key)
+
+    def update(self, document, **options):
+        changes = diff_plan(self.document(), document, reserved_keys=self.keys())
+        self.apply(to_ops(changes, options))
+        return changes
+
+
+def test_review_строка_удалена_в_пульсе_есть_в_файле(doc):
+    """Строка, удалённая в «Пульсе», но оставшаяся в файле, возвращается новой строкой со свежим ключом, и это
+    видно в плане изменений; ключ из корзины не занимается (сервер отклонил бы создание или пропустил его)."""
+    plan = FakePlan(doc)
+    plan.apply([{"op": "item.delete", "key": "i29"}])
+    changes = plan.update(doc)
+    entry = changes.new[0]
+    assert (entry["key"], entry["deletedInPuls"], entry["deletedKey"]) == ("i29x2", True, "i29")
+    assert changes.counts["deletedInPuls"] == 1 and changes.warnings[0]["code"] == "deleted_in_puls"
+    assert [x["key"] for x in changes.links["added"]] == ["l28-29x2"]
+    assert next(i for i in plan.document()["items"] if i["key"] == "i29x2")["name"] == "Нагрузочное тестирование"
+    again = diff_plan(plan.document(), doc, reserved_keys=plan.keys())
+    assert to_ops(again) == [] and again.counts["new"] == 0
+
+
+def test_review_строка_удалена_в_пульсе_известна_по_guid(doc):
+    """Удалённая строка в документе плана (deleted: true) узнаётся по GUID, даже если ключ у неё другой."""
+    plan = as_plan(doc)
+    plan_row(plan, "k29")["deleted"] = True
+    changes = diff_plan(plan, doc)
+    assert [(c["key"], c["deletedKey"]) for c in changes.new] == [("i29", "k29")]
+
+
+def test_review_связь_удалена_в_ms_project_и_добавлена_снова(doc):
+    plan = FakePlan(doc)
+    without = deepcopy(doc)
+    without["links"] = [x for x in without["links"] if x["key"] != "l12-13"]
+    removed = plan.update(without)
+    assert [x["key"] for x in removed.links["removed"]] == ["l12-13"]
+    readded = plan.update(doc)
+    assert [x["key"] for x in readded.links["added"]] == ["l12-13x2"]
+    assert to_ops(diff_plan(plan.document(), doc, reserved_keys=plan.keys())) == []
+
+
+def test_review_задача_суммарная_задача(doc):
+    """Задача стала суммарной, потом снова задачей: строка каждый раз создаётся заново со свежим ключом и не
+    теряется (раньше второе создание попадало на ключ из корзины)."""
+    plan = FakePlan(doc)
+    grouped = deepcopy(doc)
+    closing = row(grouped, 42)
+    group = {k: closing[k] for k in ("key", "name", "parentKey", "position", "jiraUrl", "extra")}
+    group.update({"type": "group", "color": "slate"})
+    grouped["items"][grouped["items"].index(closing)] = group
+    child = deepcopy(closing)
+    child.update({"key": "i100", "name": "Подписание актов", "parentKey": "i42", "position": closing["position"] + 1,
+                  "extra": {"msp": {"uid": 100, "guid": "00000000-0000-4000-8000-000000000100", "wbs": "7.1",
+                                    "outlineNumber": "7.1"}}})
+    grouped["items"].insert(grouped["items"].index(group) + 1, child)
+    grouped["links"] = [{**x, "to": "i100", "key": "l41-100"} if x["key"] == "l41-42" else x for x in grouped["links"]]
+    first = plan.update(grouped, deleteMissing=True)
+    assert first.changed[0]["newKey"] == "i42x2" and [c["key"] for c in first.new] == ["i100"]
+    back = plan.update(doc, deleteMissing=True)
+    assert back.changed[0]["newKey"] == "i42x3" and [m["key"] for m in back.missing] == ["i100"]
+    final = plan.document()
+    closing_rows = [i for i in final["items"] if i["extra"]["msp"]["uid"] == 42]
+    assert [(i["key"], i["type"]) for i in closing_rows] == [("i42x3", "task")]
+    assert all(i["key"] != "i100" for i in final["items"])
+    assert to_ops(diff_plan(final, doc, reserved_keys=plan.keys()), {"deleteMissing": True}) == []
+
+
+def test_review_копия_строки_в_пульсе_не_удаляется(doc):
+    """Копия строки, сделанная в «Пульсе» (с тем же extra.msp), — не «отсутствует в файле»: её задача в файле
+    есть, и «удалить отсутствующие» её не трогает."""
+    plan = FakePlan(doc)
+    copy = deepcopy(row(doc, 8))
+    copy.update({"key": "icopy", "name": "Отчёт об обследовании (копия)", "position": copy["position"] + 1})
+    plan.apply([{"op": "item.create", "item": copy}])
+    changes = diff_plan(plan.document(), doc, reserved_keys=plan.keys())
+    assert changes.missing == [] and [c["key"] for c in changes.puls_only] == ["icopy"]
+    assert changes.puls_only[0]["copyOf"]["uid"] == 8
+    assert to_ops(changes, {"deleteMissing": True}) == []

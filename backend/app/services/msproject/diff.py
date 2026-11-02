@@ -18,8 +18,19 @@
 связь со строкой, добавленной в «Пульсе», остаётся.
 
 Строки, которых нет в файле (`missing`), удаляются только с параметром `deleteMissing`; строки, добавленные в
-«Пульсе» (без `extra.msp`), не удаляются никогда. Строка, сменившая в файле тип (задача стала суммарной),
-создаётся заново под новым ключом, прежняя удаляется — комментарии остаются у прежней (её можно восстановить).
+«Пульсе» (без `extra.msp`), не удаляются никогда — как и копии строк из файла, сделанные в «Пульсе» (у них тот
+же GUID, что у строки, которую обновляет файл: их задача в файле есть). Строка, сменившая в файле тип (задача
+стала суммарной), создаётся заново под новым ключом, прежняя удаляется — комментарии остаются у прежней (её
+можно восстановить).
+
+Ключи. `reserved_keys` — все ключи плана, в том числе удалённых строк, связей и исполнителей (корзина плана):
+новые строки, связи, исполнители и строки, создаваемые заново при смене типа, их не получают. Строка, удалённая
+в «Пульсе», но оставшаяся в файле, возвращается **новой строкой со свежим ключом** (не восстановлением: у
+удалённой строки могли смениться тип и родитель, а её комментарии остаются в корзине) — в плане изменений она
+помечена `deletedInPuls` (и `deletedKey`, если ключ известен) и попадает в предупреждение `deleted_in_puls`.
+Удалённая строка узнаётся по документу плана (строки с `deleted: true`) или по ключу: строки, созданные
+загрузкой, получают ключ файла (`i<UID>`), и он остаётся занятым в корзине. Связь, удалённая в MS Project и
+снова добавленная, тоже получает свежий ключ.
 """
 
 from __future__ import annotations
@@ -44,7 +55,10 @@ DIFF_WARNINGS = {
     "other_project": "Файл — другой проект MS Project: GUID проекта не совпадает с источником плана",
     "type_changed": "Строки сменили тип в MS Project — они будут созданы заново, комментарии останутся у прежних "
                     "(удалённых) строк",
-    "duplicate_rows": "В плане несколько строк с одной задачей MS Project — обновляется первая",
+    "duplicate_rows": "В плане несколько строк с одной задачей MS Project — обновляется первая, копии остаются "
+                      "строками «Пульса»",
+    "deleted_in_puls": "Строки, удалённые в «Пульсе», есть в файле — они будут созданы заново (удалённые остаются "
+                       "в корзине плана)",
 }
 
 
@@ -182,9 +196,19 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
         if example and len(entry["examples"]) < 5:
             entry["examples"].append(example)
 
+    reserved_keys = set(reserved_keys or ())
     all_items = [i for i in existing_document.get("items") or [] if isinstance(i, dict) and i.get("key")]
     alive = [i for i in all_items if not i.get("deleted")]
-    used_items = {i["key"] for i in all_items} | set(reserved_keys)
+    alive_keys = {i["key"] for i in alive}
+    used_items = {i["key"] for i in all_items} | reserved_keys
+    deleted_by_guid, deleted_by_uid = {}, {}
+    for item in all_items:
+        if item.get("deleted"):
+            guid, uid, _ = _msp(item)
+            if guid:
+                deleted_by_guid.setdefault(guid, item["key"])
+            if uid is not None:
+                deleted_by_uid.setdefault(uid, item["key"])
     imported = list(import_document.get("items") or [])
     import_options = import_document.get("options") or {}
 
@@ -237,7 +261,7 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
     # ---- исполнители: по сотруднику, затем по ФИО
     all_assignees = [a for a in existing_document.get("assignees") or [] if isinstance(a, dict)]
     existing_assignees = [a for a in all_assignees if not a.get("deleted")]
-    used_assignees = {a.get("key") for a in all_assignees} | set(reserved_keys)
+    used_assignees = {a.get("key") for a in all_assignees} | reserved_keys
     by_user = {a["userId"]: a for a in existing_assignees if a.get("userId") is not None}
     by_name = {}
     for assignee in existing_assignees:
@@ -273,6 +297,12 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
     for index, wanted in enumerate(targets):
         siblings.setdefault(wanted["parentKey"], []).append(index)
     import_keys = {key_map[i["key"]] for i in imported}
+    # Наибольшая позиция строк родителя, которых нет в файле (строки «Пульса»), — один проход по плану
+    others = {}
+    for item in alive:
+        if item["key"] not in import_keys:
+            parent = item.get("parentKey")
+            others[parent] = max(others.get(parent, 0.0), float(item.get("position") or 0))
     for parent, indexes in siblings.items():
         values = []
         for index in indexes:
@@ -281,9 +311,7 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
                 values.append(float(existing.get("position") or 0))
             else:
                 values.append(None)
-        others = [float(i.get("position") or 0) for i in alive
-                  if i.get("parentKey") == parent and i["key"] not in import_keys]
-        for index, position in zip(indexes, _positions(values, max(others + [0.0])), strict=True):
+        for index, position in zip(indexes, _positions(values, others.get(parent, 0.0)), strict=True):
             targets[index]["position"] = position
 
     # ---- строки
@@ -294,6 +322,14 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
             entry = {"key": wanted["key"], "importKey": item["key"], "type": kind, "name": item.get("name"),
                      "order": order, "item": wanted}
             if existing is None:
+                guid, uid, _ = _msp(item)
+                deleted = (deleted_by_guid.get(guid) if guid else None) or (
+                    deleted_by_uid.get(uid) if uid is not None and not guid else None)
+                if deleted is None and item["key"] in reserved_keys and item["key"] not in alive_keys:
+                    deleted = item["key"]   # ключ строки, созданной загрузкой, — в корзине плана
+                if deleted is not None:
+                    entry.update({"deletedInPuls": True, "deletedKey": deleted})
+                    warn("deleted_in_puls", item.get("name"))
                 changes.new.append(entry)
             else:
                 entry.update({"key": existing["key"], "newKey": wanted["key"], "recreate": True,
@@ -334,10 +370,20 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
 
     matched_keys = {existing["key"] for key, existing in match.items() if key not in recreate}
     replaced = {match[key]["key"] for key in recreate}
+    file_guids, file_uids = set(), set()
+    for item in imported:
+        guid, uid, _ = _msp(item)
+        file_guids.add(guid)
+        file_uids.add(uid)
     for item in alive:
         if item["key"] in matched_keys or item["key"] in replaced:
             continue
         guid, uid, msp = _msp(item)
+        if (guid and guid in file_guids) or (not guid and uid is not None and uid in file_uids):
+            # Копия строки из файла, сделанная в «Пульсе» (тот же GUID): задача в файле есть — не «отсутствует»
+            changes.puls_only.append({"key": item["key"], "type": item.get("type"), "name": item.get("name"),
+                                      "copyOf": msp})
+            continue
         if guid or uid is not None:
             changes.missing.append({"key": item["key"], "type": item.get("type"), "name": item.get("name"),
                                     "msp": msp})
@@ -387,6 +433,7 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
         "pulsOnly": len(changes.puls_only), "linksAdded": len(changes.links["added"]),
         "linksRemoved": len(changes.links["removed"]), "linksChanged": len(changes.links["changed"]),
         "assigneesAdded": len(changes.assignees["added"]),
+        "deletedInPuls": sum(1 for entry in changes.new if entry.get("deletedInPuls")),
     }
     return changes
 
