@@ -1,6 +1,6 @@
 ---
 title: "Пульс Проекта — руководство по развёртыванию"
-subtitle: "Версия 0.6.1"
+subtitle: "Версия 0.7.0"
 date: "Октябрь 2026"
 lang: ru
 ---
@@ -54,7 +54,7 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Шаг 1. Получение дистрибутива
 
 ```bash
-sudo git clone --branch v0.6.1 <адрес репозитория puls_proekta> /opt/puls
+sudo git clone --branch v0.7.0 <адрес репозитория puls_proekta> /opt/puls
 cd /opt/puls
 ```
 
@@ -86,7 +86,7 @@ sudo docker compose ps
 
 ```bash
 curl -fsS http://127.0.0.1:39663/api/health/ready; echo
-# {"status":"ok","schema":"0006_integration_keys","version":"0.6.1"}
+# {"status":"ok","schema":"0007_plan_links","version":"0.7.0"}
 curl -sI http://127.0.0.1:39663/ | grep -i content-security-policy
 ```
 
@@ -301,7 +301,7 @@ sudo docker compose start backend frontend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.6.1
+sudo sh deploy/update.sh v0.7.0
 ```
 
 Скрипт: копия `pre-update` → получение версии из git (ветка — только перемоткой вперёд) → сборка и перезапуск
@@ -453,13 +453,13 @@ sudo docker compose logs backup              # резервные копии
 cd puls_proekta
 docker compose build
 docker pull postgres:16-alpine
-docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.6.1-images.tar.gz
+docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.7.0-images.tar.gz
 ```
 
 На сервере:
 
 ```bash
-gunzip -c puls-0.6.1-images.tar.gz | sudo docker load
+gunzip -c puls-0.7.0-images.tar.gz | sudo docker load
 cd /opt/puls
 sudo docker compose up -d          # без --build: используются загруженные образы
 ```
@@ -485,6 +485,8 @@ sudo docker compose up -d          # без --build: используются з
 | Jira: «Соединение установлено», но задачи в планах не загружаются | Обновите «Пульс» до 0.3.1 или новее; «Проверить подключение» теперь проверяет и поиск задач и показывает версию Jira |
 | Перенос 1.0.x: код 2, «Расхождения» | Ничего не записано; отчёт `import/import-report.md` — разработчику |
 | Нет места на диске | `docker system df`; старые копии в `BACKUP_DIR`; `docker image prune` |
+| Загрузка из MS Project: «Слишком большой запрос» | Файл больше 25 МБ: увеличьте `MAX_CONTENT_LENGTH` (backend, байты) и `client_max_body_size` в `nginx.conf` (frontend), пересоберите и перезапустите |
+| Загрузка из MS Project: «Это не файл MS Project XML» | Сохраните проект в MS Project как XML: «Файл → Сохранить как → XML (*.xml)»; файл `.mpp` пока не читается |
 
 # Справочник команд
 

@@ -1,4 +1,4 @@
-# Пульс Проекта — v0.6.0
+# Пульс Проекта — v0.7.0
 
 Корпоративная on-premise система планирования проектов на диаграммах Ганта: направления и проекты, несколько
 планов у проекта, задачи, вехи, группы, связи, пометки, исполнители, комментарии, история изменений и
@@ -43,9 +43,9 @@
 | Переход с 1.0.1 (runbook) | [MD](docs/runbooks/v0.2.0-migration-from-1.0.1.md) |
 | Ревизия 1.0.1: найденные дефекты и решения | [MD](docs/review/v0.2.0-revision-1.0.1.md) |
 | Нагрузочное тестирование | [MD](docs/performance/loadtest-v0.2.0.md) |
-| Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0011](docs/architecture/adr-0011-integration-keys.md) |
+| Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0012](docs/architecture/adr-0012-ms-project.md) |
 | Независимые проверки | [0.4.0](docs/review/v0.4.0-independent-checks.md), [0.2.1 и 0.3.0](docs/review/v0.3.0-independent-checks.md) |
-| Release notes | [v0.5.0](docs/release-notes/v0.5.0.md), [v0.4.0](docs/release-notes/v0.4.0.md), [v0.3.1](docs/release-notes/v0.3.1.md), [v0.3.0](docs/release-notes/v0.3.0.md), [v0.2.1](docs/release-notes/v0.2.1.md), [v0.2.0](docs/release-notes/v0.2.0.md) |
+| Release notes | [v0.7.0](docs/release-notes/v0.7.0.md), [v0.6.1](docs/release-notes/v0.6.1.md), [v0.6.0](docs/release-notes/v0.6.0.md), [v0.5.1](docs/release-notes/v0.5.1.md), [v0.5.0](docs/release-notes/v0.5.0.md), [v0.4.0](docs/release-notes/v0.4.0.md), [v0.3.1](docs/release-notes/v0.3.1.md), [v0.3.0](docs/release-notes/v0.3.0.md), [v0.2.1](docs/release-notes/v0.2.1.md), [v0.2.0](docs/release-notes/v0.2.0.md) |
 
 Руководства пользователя и администратора открываются и в самом приложении — пункт «Руководство» в боковом
 меню (`/guide`, `/guide/admin`), значок «?» у инструментов ведёт к нужному разделу. Источник — те же
@@ -54,6 +54,12 @@
 DOCX и PDF собираются из Markdown командой `python3 tools/docs/build_manuals.py` (pandoc, python-docx, pypdf,
 Chromium из Playwright). Снимки экранов — `node tools/docs/screenshots.mjs` на демонстрационных данных
 вымышленной компании (`tools/demo/seed_demo.py`).
+
+## Что нового в 0.7.0
+
+Импорт из MS Project — разовый или мастер-копия с обновлением из файла, экспорт в MS Project XML; несколько
+предшественников и связи вех; крайние сроки и «начало не ранее»; номера строк 1.2.3
+([release notes](docs/release-notes/v0.7.0.md), [ADR-0012](docs/architecture/adr-0012-ms-project.md)).
 
 ## Что нового в 0.6.1
 
@@ -273,7 +279,7 @@ docker compose start backend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.4.0   # копия pre-update → git → сборка → миграции → проверка готовности
+sudo sh deploy/update.sh v0.7.0   # копия pre-update → git → сборка → миграции → проверка готовности
 ```
 
 При ошибке скрипт печатает команды отката (прежняя версия и восстановление копии `pre-update`). Порядок и
