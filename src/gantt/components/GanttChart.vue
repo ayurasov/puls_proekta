@@ -6,7 +6,7 @@ import { createChartContext, dependencyPaths, legendEntries, rowModel } from '..
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { dayX, fitZoom, nextZoom } from '../domain/layout'
 import { EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, resolveColor, textColorOnWhite } from '../domain/colors'
-import { descendantKeys, parentOf } from '../domain/tree'
+import { descendantKeys, outlineNumbers, parentOf } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
 import { countLabel } from '../../utils/format'
 
@@ -33,6 +33,13 @@ const resizing = ref(false)
 const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progress: 52, jira: 150 }
 const columns = computed(() => Object.entries(COLUMN_WIDTHS)
   .filter(([key]) => view.columns[key] && (key !== 'jira' || jira.state.connected)).map(([key, width]) => ({ key, width })))
+// Номер строки по структуре (1.2.3); в плане, который ведётся в MS Project, — код WBS из файла
+const numbers = computed(() => (view.columns.wbs ? outlineNumbers(editor.index) : null))
+function numberFor(item) {
+  if (!numbers.value) return ''
+  const fromFile = editor.settings.source?.kind === 'msproject' ? item.extra?.msp?.wbs : null
+  return fromFile || numbers.value.get(item.key) || ''
+}
 const MIN_NAME_WIDTH = 140
 const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
 const gridWidth = computed(() => nameWidth.value + columns.value.reduce((s, c) => s + c.width, 0))
@@ -665,7 +672,7 @@ function noteLabel(note) {
                     @click.stop @dblclick.stop @keydown.enter.prevent="finishRename()" @keydown.esc.prevent="finishRename(false)" @blur="finishRename()"
                   />
                   <template v-else>
-                    <div class="name" :title="row.item.name">{{ row.item.name }}</div>
+                    <div class="name" :title="numberFor(row.item) ? `${numberFor(row.item)} ${row.item.name}` : row.item.name"><span v-if="numberFor(row.item)" class="wbs" data-testid="row-number">{{ numberFor(row.item) }}</span>{{ row.item.name }}</div>
                     <div v-if="rowHeight >= 36 && metaLine(row.item).length" class="meta">
                       <template v-for="(part, i) in metaLine(row.item)" :key="i">
                         <span v-if="i" class="sep">·</span><span :style="part.color ? { color: part.color } : null">{{ part.text }}</span>
@@ -889,6 +896,7 @@ function noteLabel(note) {
 .type-milestone .mark { color: #0f766e; }
 .name-block { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
 .name { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbs { margin-right: 6px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .type-group .name { font-weight: 700; }
 .meta { font-size: 11.5px; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
 .meta .sep { margin: 0 4px; opacity: 0.6; }

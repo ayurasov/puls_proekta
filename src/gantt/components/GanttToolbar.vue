@@ -100,7 +100,7 @@ async function runExport(format) {
 }
 
 const columnLabels = computed(() => ({
-  start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Исполнитель', progress: 'Прогресс',
+  wbs: 'Номер (1.2.3)', start: 'Начало', end: 'Окончание', duration: 'Длительность', assignee: 'Исполнитель', progress: 'Прогресс',
   ...(jira.state.connected ? { jira: 'Задача Jira' } : {}),
 }))
 const jiraLinked = computed(() => (jira.state.connected ? jira.linkedItems().length : 0))

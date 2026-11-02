@@ -17,6 +17,26 @@ export function buildIndex(items) {
   return { byKey, children, roots: children.get(null) || [] }
 }
 
+/**
+ * Номера строк по структуре плана (1, 1.2, 1.2.3 — как WBS в MS Project): Map(key → номер). Считается по всему
+ * дереву, а не по видимым строкам: номер строки не меняется от фильтров и свёрнутых групп. Цикл в данных
+ * (родитель — собственный потомок) номеров не зацикливает: такие строки без номера.
+ */
+export function outlineNumbers(index) {
+  const out = new Map()
+  const walk = (parentKey, prefix) => {
+    const list = index.children.get(parentKey) || []
+    list.forEach((item, i) => {
+      if (out.has(item.key)) return
+      const number = prefix ? `${prefix}.${i + 1}` : String(i + 1)
+      out.set(item.key, number)
+      walk(item.key, number)
+    })
+  }
+  walk(null, '')
+  return out
+}
+
 export function comparePosition(a, b) {
   return (a.position - b.position) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 }
