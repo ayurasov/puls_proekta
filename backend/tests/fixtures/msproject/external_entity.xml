@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Внешняя сущность: попытка прочитать файл сервера -->
+<!DOCTYPE Project [<!ENTITY secret SYSTEM "file:///etc/passwd">]>
+<Project xmlns="http://schemas.microsoft.com/project">
+	<Name>&secret;</Name>
+</Project>
