@@ -6,13 +6,16 @@
 import { addDays, diffDays, formatDayNoYear } from './domain/dates'
 import { buildHeader, dayX, layoutMilestoneLabels, pxPerDay, totalDays } from './domain/layout'
 import { BAR_OPACITY, blendWithWhite, readableText, resolveColor, shadeColor, STATUS_BY_KEY, textColorOnWhite } from './domain/colors'
-import { groupSpan, shiftedEnd } from './domain/tree'
+import { deadlineMissed, groupSpan, shiftedEnd } from './domain/tree'
+import { linksFromItems } from './domain/dependencies'
 
 export const BAR_HEIGHT = 24
 /** Полоса в строке с пометкой: ниже и тоньше, чтобы подпись пометки над ней не наезжала на полосу. */
 export const BAR_HEIGHT_WITH_NOTE = 20
 export const GROUP_BAR_HEIGHT = 10
 export const TOP_ROW = 22
+/** Крайний срок на строке (ADR-0012, 5.4): стрелка ▼ над полосой — в срок и с опозданием. */
+export const DEADLINE_COLORS = { ok: '#16a34a', missed: '#dc2626' }
 
 export function createChartContext({ range, scale, zoom, rowHeight, display, calendar, today, index, notes, assignees }) {
   const px = pxPerDay(scale, zoom)
@@ -197,7 +200,21 @@ export function rowModel(row, i, ctx, preview = null) {
     const color = resolveColor(item.lineColor || item.color, 'teal')
     model.milestone = { x: dayX(range, px, item.date) + px - 1, y: roomForNote ? mid + 4 : mid, size: 7, fill: color.color, label: item.name }
   }
+  // Крайний срок — у конца своего дня, вершиной к полосе (или к ромбу вехи)
+  if ((model.bar || model.milestone) && item.deadline && item.deadline >= range.start && item.deadline <= range.end) {
+    const top = model.bar ? model.bar.y : model.milestone.y - 9
+    const missed = deadlineMissed(item)
+    model.deadline = {
+      x: dayX(range, px, item.deadline) + px - 1, y: top - 1, missed,
+      color: missed ? DEADLINE_COLORS.missed : DEADLINE_COLORS.ok,
+    }
+  }
   return model
+}
+
+/** Треугольник ▼ крайнего срока: вершина — (x, y). */
+export function deadlinePath(d) {
+  return `M${d.x - 5} ${d.y - 7}h10l-5 7Z`
 }
 
 function spanWithPreview(index, key, preview) {
@@ -209,18 +226,18 @@ function spanWithPreview(index, key, preview) {
 }
 
 /**
- * Связи «предшественник → задача» как ломаные со стрелкой. rowsByKey: key → модель строки
- * (только видимые строки; связи с невидимыми строками не рисуются).
+ * Связи «предшественник → последующая» как ломаные со стрелкой — для всех связей, в том числе в вехи и от вех.
+ * models — модели видимых строк (связи с невидимыми строками не рисуются), links — связи плана (без них —
+ * из полей строк до 0.7.0).
  */
-export function dependencyPaths(models, ctx) {
+export function dependencyPaths(models, ctx, links = null) {
   const byKey = new Map(models.map((m) => [m.key, m]))
   const paths = []
-  for (const m of models) {
-    const item = m.item
-    if (item.type !== 'task' || !item.dependencyKey || !m.bar) continue
-    const pred = byKey.get(item.dependencyKey)
-    if (!pred) continue
-    const type = item.dependencyType || 'FS'
+  for (const link of links || linksFromItems(models.map((m) => m.item))) {
+    const m = byKey.get(link.to)
+    const pred = byKey.get(link.from)
+    if (!m || !pred || m === pred || !(m.bar || m.milestone)) continue
+    const type = link.type || 'FS'
     let x1
     let y1
     if (pred.bar) {
@@ -228,11 +245,12 @@ export function dependencyPaths(models, ctx) {
       y1 = pred.mid
     } else if (pred.milestone) {
       x1 = pred.milestone.x
-      y1 = pred.mid
+      y1 = pred.milestone.y
     } else continue
     const toStart = type === 'FS' || type === 'SS'
-    const x2 = toStart ? m.bar.x : m.bar.x + m.bar.w
-    const y2 = m.mid
+    // В веху — к левой или правой вершине ромба
+    const x2 = m.bar ? (toStart ? m.bar.x : m.bar.x + m.bar.w) : m.milestone.x + (toStart ? -9 : 9)
+    const y2 = m.bar ? m.mid : m.milestone.y
     const stub = 8
     let d
     if (toStart) {
@@ -247,7 +265,7 @@ export function dependencyPaths(models, ctx) {
       const xr = Math.max(x1, x2) + stub
       d = `M${x1} ${y1} H${xr} V${y2} H${x2 + 1}`
     }
-    paths.push({ key: `${pred.key}->${m.key}`, from: pred.key, to: m.key, d, toStart, x2, y2 })
+    paths.push({ key: link.key || `${pred.key}->${m.key}`, from: pred.key, to: m.key, type, d, toStart, x2, y2 })
   }
   return paths
 }

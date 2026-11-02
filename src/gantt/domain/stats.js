@@ -1,5 +1,5 @@
 import { diffDays } from './dates'
-import { buildIndex, groupSpan } from './tree'
+import { buildIndex, deadlineMissed, groupSpan } from './tree'
 
 /** Статистика плана (окно «Статистика»; показатели 1.0.x и несколько новых). */
 export function planStatistics(items, assignees, today) {
@@ -49,5 +49,8 @@ export function planStatistics(items, assignees, today) {
     byAssignee: [...byAssignee.values()].sort((a, b) => b.total - a.total),
     groupStats,
     upcomingMilestones: milestones.filter((m) => m.date >= today).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 8),
+    // Крайние сроки (ADR-0012, 5.4): у скольких задач и вех задан и у скольких сорван
+    withDeadline: [...tasks, ...milestones].filter((i) => i.deadline).length,
+    missedDeadlines: [...tasks, ...milestones].filter(deadlineMissed),
   }
 }

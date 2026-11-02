@@ -54,11 +54,15 @@ describe('строки для добавления', () => {
   it('без групп — задачи подряд, связи «блокирует» среди добавляемых и строк плана', () => {
     const rows = buildImportRows(issues.slice(0, 3), { links: true, linkedRows: new Map([['X-5', { key: 'i-old', end: '2026-11-01' }]]), today: TODAY })
     expect(rows.map((r) => r.ref)).toEqual(['A-1', 'A-2', 'A-3'])
-    expect(rows[1].data).toMatchObject({ dependencyRef: 'A-1', dependencyType: 'FS' })
-    expect(rows[2].data).toMatchObject({ dependencyKey: 'i-old', dependencyType: 'FS' })
-    expect(rows[0].data.dependencyRef).toBeUndefined()
+    // Все блокирующие задачи — предшественники (0.7.0); неизвестная задача A-9 пропускается
+    expect(rows[1].predecessors).toEqual([{ ref: 'A-1', type: 'FS' }])
+    expect(rows[2].predecessors).toEqual([{ key: 'i-old', type: 'FS' }])
+    expect(rows[0].predecessors).toBeUndefined()
+    const both = buildImportRows([issues[0], issue('B-1', { links: { blockedBy: ['A-1', 'X-5'], blocks: [] } })],
+      { links: true, linkedRows: new Map([['X-5', { key: 'i-old', end: '2026-11-01' }]]), today: TODAY })
+    expect(both[1].predecessors).toEqual([{ ref: 'A-1', type: 'FS' }, { key: 'i-old', type: 'FS' }])
     // Без флажка связей — без предшественников
-    expect(buildImportRows(issues.slice(0, 3), { today: TODAY }).every((r) => !r.data.dependencyRef && !r.data.dependencyKey)).toBe(true)
+    expect(buildImportRows(issues.slice(0, 3), { today: TODAY }).every((r) => !r.predecessors)).toBe(true)
   })
 
   it('по эпикам: эпик — группа (существующая используется повторно), выбранный эпик — только группа', () => {

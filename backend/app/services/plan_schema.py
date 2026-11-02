@@ -204,9 +204,6 @@ ITEM_FIELDS = {
     "progress": ("progress", "progress"),
     "offset": ("offset_days", "int"),
     "completedDate": ("completed_date", "date"),
-    "dependencyKey": ("dependency_key", "key"),
-    "dependencyType": ("dependency_type", "dependency_type"),
-    "dependencyLag": ("dependency_lag", "int"),
     "assigneeKey": ("assignee_key", "key"),
     "category": ("category", "short"),
     "color": ("color", "color"),
@@ -215,19 +212,41 @@ ITEM_FIELDS = {
     "comment": ("comment", "text"),
     "lineStyle": ("line_style", "line_style"),
     "lineColor": ("line_color", "color"),
+    # Крайний срок и ограничение даты (ADR-0012, 5.4) — у задач и вех
+    "deadline": ("deadline", "date"),
+    "constraintType": ("constraint_type", "constraint_type"),
+    "constraintDate": ("constraint_date", "date"),
 }
+# Поля строки-задачи до 0.7.0: один предшественник. Теперь связи — операции link.*, а эти поля в операциях
+# строк переводятся в связи (plan_ops.PlanEditor._legacy_dependency) — для старых документов и скриптов
+LEGACY_DEPENDENCY_FIELDS = ("dependencyKey", "dependencyType", "dependencyLag")
+# Поля, которых нет у групп
+SCHEDULE_ONLY_FIELDS = ("deadline", "constraintType", "constraintDate")
 
 FIELD_LABELS = {
     "name": "Название", "parentKey": "Родитель", "position": "Порядок", "status": "Статус", "start": "Начало",
     "end": "Окончание", "date": "Дата", "endMode": "Режим завершения", "duration": "Длительность",
     "durationType": "Тип дней", "progress": "Прогресс", "offset": "Сдвиг", "completedDate": "Дата завершения",
-    "dependencyKey": "Предшественник", "dependencyType": "Тип связи", "dependencyLag": "Лаг связи",
     "assigneeKey": "Исполнитель", "category": "Категория", "color": "Цвет", "barText": "Текст на полосе",
     "jiraUrl": "Ссылка Jira", "comment": "Комментарий", "lineStyle": "Стиль линии", "lineColor": "Цвет линии",
+    "deadline": "Крайний срок", "constraintType": "Ограничение", "constraintDate": "Дата ограничения",
 }
 
 STATUS_LABELS = {"new": "Новая", "inwork": "В работе", "blocked": "Заблокирована", "done": "Завершена"}
 TYPE_LABELS = {"task": "Задача", "milestone": "Веха", "group": "Группа"}
+# Ограничения дат MS Project; на расчёт влияет только «Начало не ранее»
+CONSTRAINT_LABELS = {
+    "snet": "Начало не ранее", "snlt": "Начало не позднее", "fnet": "Окончание не ранее",
+    "fnlt": "Окончание не позднее", "mso": "Фиксированное начало", "mfo": "Фиксированное окончание",
+    "alap": "Как можно позже",
+}
+# Ограничения, у которых нет даты
+CONSTRAINTS_WITHOUT_DATE = ("alap",)
+LINK_TYPES = ("FS", "SS", "FF", "SF")
+LINK_TYPE_LABELS = {"FS": "окончание → начало", "SS": "начало → начало", "FF": "окончание → окончание",
+                    "SF": "начало → окончание"}
+LAG_KIND_LABELS = {"calendar": "кал.", "working": "раб."}
+MAX_LAG = 3650
 
 
 # Короткие текстовые поля строк — по размеру столбца
@@ -287,9 +306,11 @@ def convert_field(api_name, value):
         if value not in ("calendar", "working"):
             raise ApiError(400, "validation_error", "Неизвестный тип дней")
         return attr, value
-    if kind == "dependency_type":
-        if value not in ("FS", "SS", "FF", "SF"):
-            raise ApiError(400, "validation_error", "Неизвестный тип связи")
+    if kind == "constraint_type":
+        if value in (None, ""):
+            return attr, None
+        if value not in CONSTRAINT_LABELS:
+            raise ApiError(400, "validation_error", "Неизвестный тип ограничения")
         return attr, value
     if kind == "color":
         if value in (None, ""):
@@ -334,9 +355,6 @@ def item_to_api(item):
             "progress": item.progress or 0,
             "offset": item.offset_days or 0,
             "completedDate": item.completed_date.isoformat() if item.completed_date else None,
-            "dependencyKey": item.dependency_key,
-            "dependencyType": item.dependency_type or "FS",
-            "dependencyLag": item.dependency_lag or 0,
             "category": item.category,
             "barText": item.bar_text,
             "jiraUrl": item.jira_url,
@@ -353,7 +371,55 @@ def item_to_api(item):
     elif item.type == "group":
         # Группа может быть эпиком Jira («Задачи из Jira» группами по эпикам)
         data["jiraUrl"] = item.jira_url
+    if item.type in ("task", "milestone"):
+        data.update({
+            "deadline": item.deadline.isoformat() if item.deadline else None,
+            "constraintType": item.constraint_type,
+            "constraintDate": item.constraint_date.isoformat() if item.constraint_date else None,
+        })
     if item.deleted_at is not None:
+        data["deleted"] = True
+    return data
+
+
+def legacy_links(items):
+    """Связи из полей строк до 0.7.0 (dependencyKey/Type/Lag) — у документов и снимков старого формата."""
+    out = []
+    for item in items:
+        if not isinstance(item, dict) or not item.get("dependencyKey") or item.get("type", "task") != "task":
+            continue
+        lag = item.get("dependencyLag")
+        out.append({
+            "from": item["dependencyKey"], "to": item.get("key"),
+            "type": item.get("dependencyType") if item.get("dependencyType") in LINK_TYPES else "FS",
+            "lag": lag if isinstance(lag, int) and not isinstance(lag, bool) else 0, "lagKind": "calendar",
+        })
+    return out
+
+
+def document_links(doc):
+    """Связи документа плана: список links (с 0.7.0) или — у документов до 0.7.0 — из полей строк."""
+    if isinstance(doc.get("links"), list):
+        return [link for link in doc["links"] if isinstance(link, dict)]
+    return legacy_links(doc.get("items") or [])
+
+
+def without_legacy_fields(item):
+    """Строка документа без полей предшественника до 0.7.0: связи переносятся отдельно (document_links)."""
+    return {k: v for k, v in item.items() if k not in LEGACY_DEPENDENCY_FIELDS}
+
+
+def link_to_api(link):
+    data = {
+        "key": link.key,
+        "from": link.from_key,
+        "to": link.to_key,
+        "type": link.type or "FS",
+        "lag": link.lag or 0,
+        "lagKind": link.lag_kind or "calendar",
+        "updatedRev": link.updated_rev,
+    }
+    if link.deleted_at is not None:
         data["deleted"] = True
     return data
 

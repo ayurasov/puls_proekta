@@ -10,11 +10,11 @@ import ItemHistory from './ItemHistory.vue'
 import JiraIssueCard from './JiraIssueCard.vue'
 import PodeluTaskList from '../../components/integrations/PodeluTaskList.vue'
 import { ISSUE_KEY_RE, issueKeyFromLinks, jiraLinkFromInput } from '../jira'
-import { STATUSES, STATUS_BY_KEY, DEPENDENCY_TYPES, resolveColor } from '../domain/colors'
+import { CONSTRAINT_TYPES, STATUSES, STATUS_BY_KEY, DEPENDENCY_TYPES, linkShortLabel, resolveColor } from '../domain/colors'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { resolveEnd } from '../domain/calendar'
-import { dependencyConstraints, dependentKeys } from '../domain/dependencies'
-import { descendantKeys, groupSpan } from '../domain/tree'
+import { dependencyConstraints } from '../domain/dependencies'
+import { deadlineMissed, descendantKeys, groupSpan, shiftedEnd } from '../domain/tree'
 import { useDialogs } from '../../composables/useDialogs'
 import { useDirectoryStore } from '../../stores/directory'
 import { useUiStore } from '../../stores/ui'
@@ -145,23 +145,81 @@ const descendants = computed(() => descendantKeys(editor.index, item.value.key))
 const parentOptions = computed(() => editor.itemList
   .filter((i) => i.type !== 'milestone' && i.key !== item.value.key && !descendants.value.has(i.key))
   .map((i) => ({ key: i.key, label: `${i.type === 'group' ? '▣ ' : ''}${i.name}` })))
-// Зависящие от этой задачи не предлагаются: связь с ними замкнула бы цикл
-const dependents = computed(() => dependentKeys(editor.itemList, item.value.key))
-const dependencyOptions = computed(() => editor.itemList
-  .filter((i) => (i.type === 'task' || i.type === 'milestone') && i.key !== item.value.key && !dependents.value.has(i.key))
-  .map((i) => ({ key: i.key, label: `${i.type === 'milestone' ? '◆ ' : ''}${i.name}` })))
 // В большом плане списки строк длинные — над ними поле поиска (выбранная строка видна всегда)
 const LONG_LIST = 25
-const dependencyQuery = ref('')
 const parentQuery = ref('')
 function filterOptions(options, query, selectedKey) {
   const q = query.trim().toLowerCase()
   if (!q) return options
   return options.filter((o) => o.key === selectedKey || o.label.toLowerCase().includes(q))
 }
-const shownDependencyOptions = computed(() => filterOptions(dependencyOptions.value, dependencyQuery.value, item.value.dependencyKey))
 const shownParentOptions = computed(() => filterOptions(parentOptions.value, parentQuery.value, item.value.parentKey))
-const constraints = computed(() => (item.value.type === 'task' ? dependencyConstraints(item.value, byKey.value) : null))
+const constraints = computed(() => (item.value.type === 'task'
+  ? dependencyConstraints(item.value, byKey.value, editor.linkList, editor.calendar) : null))
+
+// Связи (ADR-0012, 5.1): предшественники с типом и лагом, последующие строки
+const linkable = computed(() => item.value.type === 'task' || item.value.type === 'milestone')
+const itemLinks = computed(() => editor.linksOf(item.value.key))
+const predecessors = computed(() => itemLinks.value.predecessors.map((link) => ({ link, row: editor.source.items[link.from] })))
+const successors = computed(() => itemLinks.value.successors.map((link) => ({ link, row: editor.source.items[link.to] })))
+// Зависящие от строки не годятся в предшественники: связь с ними замкнула бы цикл — они видны, но недоступны
+const dependents = computed(() => editor.dependentsOf(item.value.key))
+const predecessorOptions = computed(() => {
+  const taken = new Set(itemLinks.value.predecessors.map((link) => link.from))
+  return editor.itemList
+    .filter((i) => (i.type === 'task' || i.type === 'milestone') && i.key !== item.value.key && !taken.has(i.key))
+    .map((i) => ({ key: i.key, label: `${i.type === 'milestone' ? '◆ ' : ''}${i.name}`, cyclic: dependents.value.has(i.key) }))
+})
+const linkQuery = ref('')
+const shownPredecessorOptions = computed(() => filterOptions(predecessorOptions.value, linkQuery.value, null))
+const LAG_KIND_TITLES = {
+  calendar: 'Лаг в календарных днях — нажмите, чтобы считать рабочие',
+  working: 'Лаг в рабочих днях по производственному календарю — нажмите, чтобы считать календарные',
+}
+function addPredecessor(key) {
+  linkQuery.value = ''
+  const option = predecessorOptions.value.find((o) => o.key === key)
+  if (!option) return
+  if (option.cyclic) {
+    ui.error(`«${option.label}» уже зависит от «${item.value.name}»`, 'Связь замкнула бы цикл')
+    return
+  }
+  editor.createLink({ from: key, to: item.value.key }, `Предшественник «${item.value.name}»`)
+}
+function setLinkType(link, type) {
+  editor.updateLink(link.key, { type }, 'Тип связи')
+}
+function setLinkLag(link, value) {
+  editor.updateLink(link.key, { lag: Math.max(-3650, Math.min(3650, parseInt(value, 10) || 0)) }, 'Лаг связи')
+}
+function setLagKind(link, kind) {
+  if (kind !== (link.lagKind || 'calendar')) editor.updateLink(link.key, { lagKind: kind }, 'Лаг связи')
+}
+function removeLink(link) {
+  editor.deleteLink(link.key, `Удаление связи «${item.value.name}»`)
+}
+function openRow(key) {
+  editor.revealItem(key)
+  editor.select(key, { openPanel: true })
+}
+
+// Крайний срок и ограничение даты (ADR-0012, 5.4)
+const deadlineLate = computed(() => deadlineMissed(item.value))
+const itemEnd = computed(() => (item.value.type === 'milestone' ? item.value.date : shiftedEnd(item.value)))
+// Ограничения MS Project, кроме «Начало не ранее» задачи, — сведения: показываются, на расчёт не влияют
+const constraintNote = computed(() => {
+  const type = item.value.constraintType
+  if (!type || !CONSTRAINT_TYPES[type] || (type === 'snet' && item.value.type === 'task')) return ''
+  const date = item.value.constraintDate ? ` ${formatDay(item.value.constraintDate)}` : ''
+  return `${CONSTRAINT_TYPES[type].toLowerCase()}${date}`
+})
+function setDeadline(value) {
+  if ((item.value.deadline || '') !== (value || '')) save({ deadline: value || null }, 'Крайний срок')
+}
+function setStartNotEarlier(value) {
+  if (value) save({ constraintType: 'snet', constraintDate: value }, 'Начало не ранее')
+  else if (item.value.constraintType === 'snet') save({ constraintType: null, constraintDate: null }, 'Начало не ранее')
+}
 const duration = computed(() => (item.value.type === 'task' ? diffDays(item.value.start, item.value.end) + 1 : 0))
 const workingDays = computed(() => (item.value.type === 'task' ? editor.calendar.countWorkingDays(item.value.start, item.value.end) : 0))
 const span = computed(() => (item.value.type !== 'milestone' ? groupSpan(editor.index, item.value.key) : null))
@@ -237,8 +295,10 @@ function onCategory(event) {
 }
 function hintText(hint) {
   if (hint.kind === 'parent') return `В пределах родительской задачи: ${formatDay(hint.from)} — ${formatDay(hint.to)}`
-  if (hint.kind === 'start') return `По связи начало не раньше ${formatDay(hint.value)}`
-  return `По связи окончание не раньше ${formatDay(hint.value)}`
+  if (hint.kind === 'snet') return `Начало не ранее ${formatDay(hint.value)} — ограничение задачи`
+  const by = hint.name ? `По связи с «${hint.name}»` : 'По связи'
+  if (hint.kind === 'start') return `${by} начало не раньше ${formatDay(hint.value)}`
+  return `${by} окончание не раньше ${formatDay(hint.value)}`
 }
 
 function duplicate() {
@@ -323,6 +383,22 @@ function duplicate() {
               <span class="fact">{{ duration }} кал. дн.</span>
               <span class="fact">{{ workingDays }} раб. дн.</span>
             </div>
+            <div class="form-grid">
+              <label class="field">
+                <span class="field-label">Крайний срок</span>
+                <input class="input" type="date" :value="item.deadline || ''" :disabled="readonly" data-testid="panel-deadline" @change="setDeadline($event.target.value)" />
+              </label>
+              <label class="field">
+                <span class="field-label">Начало не ранее</span>
+                <input class="input" type="date" :value="item.constraintType === 'snet' ? item.constraintDate || '' : ''" :disabled="readonly" data-testid="panel-snet" @change="setStartNotEarlier($event.target.value)" />
+              </label>
+            </div>
+            <p v-if="deadlineLate" class="deadline-pill is-late" data-testid="panel-deadline-late">
+              <AppIcon name="flag" :size="12" /> Срыв крайнего срока: окончание {{ formatDay(itemEnd) }} позже {{ formatDay(item.deadline) }}
+            </p>
+            <p v-if="constraintNote" class="constraint-note small" data-testid="panel-constraint">
+              <AppIcon name="info" :size="13" /> Ограничение из MS Project: {{ constraintNote }} — на расчёт сроков не влияет
+            </p>
             <ul v-if="constraints?.hints.length" class="hints">
               <li v-for="(hint, i) in constraints.hints" :key="i"><AppIcon name="link" :size="12" /> {{ hintText(hint) }}</li>
             </ul>
@@ -357,41 +433,18 @@ function duplicate() {
         </section>
 
         <section class="sec">
-          <div class="sec-head"><span class="sec-title">Исполнитель и связь</span></div>
+          <div class="sec-head"><span class="sec-title">Исполнитель</span></div>
           <div class="sec-card">
             <label class="field">
-              <span class="field-label">Исполнитель</span>
               <span class="with-avatar">
                 <UserAvatar v-if="assignee" class="avatar-adorn" :user="assigneeUser" :color="resolveColor(assignee.color).color" :size="22" />
                 <span v-else class="avatar-adorn avatar-empty"><AppIcon name="user" :size="13" /></span>
-                <select class="select" :value="item.assigneeKey || ''" :disabled="readonly" @change="save({ assigneeKey: $event.target.value || null }, 'Исполнитель')">
+                <select class="select" :value="item.assigneeKey || ''" :disabled="readonly" aria-label="Исполнитель" @change="save({ assigneeKey: $event.target.value || null }, 'Исполнитель')">
                   <option value="">— не назначен —</option>
                   <option v-for="a in editor.assigneeList" :key="a.key" :value="a.key">{{ a.name }}{{ a.role ? ' · ' + a.role : '' }}</option>
                 </select>
               </span>
             </label>
-            <div class="field">
-              <span class="field-label">Предшественник</span>
-              <input v-if="!readonly && dependencyOptions.length > LONG_LIST" v-model="dependencyQuery" class="input input-sm list-search" type="search" placeholder="Найти задачу или веху…" aria-label="Поиск предшественника" />
-              <select class="select" :value="item.dependencyKey || ''" :disabled="readonly" aria-label="Предшественник" @change="save({ dependencyKey: $event.target.value || null }, 'Предшественник'); dependencyQuery = ''">
-                <option value="">— нет —</option>
-                <option v-for="o in shownDependencyOptions" :key="o.key" :value="o.key">{{ o.label }}</option>
-              </select>
-              <span v-if="dependencyQuery && shownDependencyOptions.length <= (item.dependencyKey ? 1 : 0)" class="field-hint">Ничего не найдено</span>
-            </div>
-            <div v-if="item.dependencyKey" class="form-grid">
-              <label class="field">
-                <span class="field-label">Тип связи</span>
-                <select class="select" :value="item.dependencyType || 'FS'" :disabled="readonly" @change="save({ dependencyType: $event.target.value }, 'Тип связи')">
-                  <option v-for="t in DEPENDENCY_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
-                </select>
-              </label>
-              <label class="field">
-                <span class="field-label">Лаг, дн.</span>
-                <input class="input" type="number" :value="item.dependencyLag || 0" :disabled="readonly" @change="save({ dependencyLag: parseInt($event.target.value, 10) || 0 }, 'Лаг связи')" />
-                <span class="field-hint">+ задержка, − опережение</span>
-              </label>
-            </div>
           </div>
         </section>
       </template>
@@ -403,10 +456,22 @@ function duplicate() {
         <section class="sec">
           <div class="sec-head"><span class="sec-title">Параметры вехи</span></div>
           <div class="sec-card">
-            <label class="field">
-              <span class="field-label">Дата</span>
-              <input class="input" type="date" :value="item.date" :disabled="readonly" @change="$event.target.value && save({ date: $event.target.value }, 'Дата вехи')" />
-            </label>
+            <div class="form-grid">
+              <label class="field">
+                <span class="field-label">Дата</span>
+                <input class="input" type="date" :value="item.date" :disabled="readonly" @change="$event.target.value && save({ date: $event.target.value }, 'Дата вехи')" />
+              </label>
+              <label class="field">
+                <span class="field-label">Крайний срок</span>
+                <input class="input" type="date" :value="item.deadline || ''" :disabled="readonly" data-testid="panel-deadline" @change="setDeadline($event.target.value)" />
+              </label>
+            </div>
+            <p v-if="deadlineLate" class="deadline-pill is-late" data-testid="panel-deadline-late">
+              <AppIcon name="flag" :size="12" /> Срыв крайнего срока: веха {{ formatDay(item.date) }} позже {{ formatDay(item.deadline) }}
+            </p>
+            <p v-if="constraintNote" class="constraint-note small" data-testid="panel-constraint">
+              <AppIcon name="info" :size="13" /> Ограничение из MS Project: {{ constraintNote }}
+            </p>
             <div class="field">
               <span class="field-label">Линия</span>
               <SegmentedControl block stacked aria-label="Линия" :model-value="item.lineStyle || 'dashed'" :options="LINE_STYLES" :disabled="readonly" @update:model-value="setLineStyle" />
@@ -430,6 +495,67 @@ function duplicate() {
           </div>
         </section>
       </template>
+
+      <!-- Связи задачи или вехи: предшественники (тип, лаг) и последующие строки -->
+      <section v-if="linkable" class="sec" data-testid="item-links">
+        <div class="sec-head">
+          <span class="sec-title">Связи</span>
+          <span v-if="predecessors.length || successors.length" class="sec-count is-links">{{ predecessors.length + successors.length }}</span>
+        </div>
+        <div class="sec-card">
+          <div class="field">
+            <span class="field-label">Предшественники</span>
+            <ul v-if="predecessors.length" class="link-list">
+              <li v-for="{ link, row } in predecessors" :key="link.key" class="link-item" data-testid="link-pred">
+                <div class="link-top">
+                  <AppIcon class="link-mark" :name="row.type === 'milestone' ? 'diamond' : 'gantt'" :size="12" />
+                  <button class="link-name" type="button" :title="`Открыть «${row.name}»`" @click="openRow(row.key)">{{ row.name }}</button>
+                  <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm" type="button" title="Удалить связь" aria-label="Удалить связь" data-testid="link-remove" @click="removeLink(link)"><AppIcon name="close" :size="14" /></button>
+                </div>
+                <div class="link-params">
+                  <select class="select select-sm" :value="link.type || 'FS'" :disabled="readonly" aria-label="Тип связи" data-testid="link-type" @change="setLinkType(link, $event.target.value)">
+                    <option v-for="t in DEPENDENCY_TYPES" :key="t.key" :value="t.key">{{ t.label }}</option>
+                  </select>
+                  <span class="number-suffix lag-input" title="Лаг: + задержка, − опережение">
+                    <input class="input input-sm" type="number" min="-3650" max="3650" :value="link.lag || 0" :disabled="readonly" aria-label="Лаг, дней" data-testid="link-lag"
+                           @change="setLinkLag(link, $event.target.value)" @keydown.esc.stop="$event.target.value = link.lag || 0; $event.target.blur()" />
+                    <span class="suffix" aria-hidden="true">дн.</span>
+                  </span>
+                  <button
+                    class="btn btn-sm lag-kind" :class="{ 'is-working': link.lagKind === 'working' }" type="button" :disabled="readonly"
+                    :aria-pressed="link.lagKind === 'working'" :title="LAG_KIND_TITLES[link.lagKind === 'working' ? 'working' : 'calendar']"
+                    data-testid="link-lag-kind" @click="setLagKind(link, link.lagKind === 'working' ? 'calendar' : 'working')"
+                  >{{ link.lagKind === 'working' ? 'раб.' : 'кал.' }}</button>
+                </div>
+              </li>
+            </ul>
+            <span v-else class="field-hint">Нет — сроки задаются вручную</span>
+          </div>
+          <div v-if="!readonly" class="field">
+            <input v-if="predecessorOptions.length > LONG_LIST" v-model="linkQuery" class="input input-sm list-search" type="search" placeholder="Найти задачу или веху…" aria-label="Поиск предшественника" />
+            <select class="select" value="" aria-label="Добавить предшественника" data-testid="link-add" @change="addPredecessor($event.target.value); $event.target.value = ''">
+              <option value="">+ Добавить предшественника…</option>
+              <option v-for="o in shownPredecessorOptions" :key="o.key" :value="o.key" :disabled="o.cyclic">{{ o.label }}{{ o.cyclic ? ' — зависит от этой строки' : '' }}</option>
+            </select>
+            <span v-if="linkQuery && !shownPredecessorOptions.length" class="field-hint">Ничего не найдено</span>
+            <span v-else-if="dependents.size" class="field-hint">Строки, которые зависят от этой, недоступны: связь с ними замкнула бы цикл</span>
+          </div>
+          <div class="field">
+            <span class="field-label">Последующие</span>
+            <ul v-if="successors.length" class="link-list">
+              <li v-for="{ link, row } in successors" :key="link.key" class="link-item" data-testid="link-succ">
+                <div class="link-top">
+                  <AppIcon class="link-mark" :name="row.type === 'milestone' ? 'diamond' : 'gantt'" :size="12" />
+                  <button class="link-name" type="button" :title="`Открыть «${row.name}»`" @click="openRow(row.key)">{{ row.name }}</button>
+                  <span class="link-short" :title="DEPENDENCY_TYPES.find((t) => t.key === (link.type || 'FS'))?.label">{{ linkShortLabel(link) || 'ОН' }}</span>
+                  <button v-if="!readonly" class="btn btn-ghost btn-icon btn-sm" type="button" title="Удалить связь" aria-label="Удалить связь" data-testid="link-remove" @click="removeLink(link)"><AppIcon name="close" :size="14" /></button>
+                </div>
+              </li>
+            </ul>
+            <span v-else class="field-hint">Нет</span>
+          </div>
+        </div>
+      </section>
 
       <!-- Группа и задача с вложенными: сроки и ход работ по вложенным -->
       <section v-if="item.type === 'group' || span" class="sec">
@@ -624,6 +750,29 @@ function duplicate() {
   .range::-webkit-slider-thumb { width: 24px; height: 24px; }
 }
 .sec-count { margin-left: 6px; font-size: 11px; font-weight: 700; padding: 0 7px; border-radius: 999px; background: #dcfff1; color: #216e4e; }
+.sec-count.is-links { margin-left: auto; background: var(--color-primary-soft); color: var(--color-primary-dark); }
+
+/* Связи: предшественник — название и под ним тип, лаг и вид лага */
+.link-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.link-item { display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 8px 10px; border-radius: 10px; background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-border); }
+.link-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.link-mark { flex-shrink: 0; color: var(--color-text-muted); }
+.link-name { flex: 1; min-width: 0; padding: 0; border: 0; background: none; font: inherit; font-size: 13px; font-weight: 600; color: var(--color-text); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.link-name:hover { color: var(--color-primary-dark); text-decoration: underline; }
+.link-short { flex-shrink: 0; font-size: 11px; font-weight: 700; color: var(--color-text-secondary); padding: 1px 7px; border-radius: 999px; background: #eef1f7; white-space: nowrap; }
+.link-params { display: flex; align-items: center; gap: 6px; }
+.link-params .select { flex: 1; min-width: 0; min-height: 30px; padding-top: 3px; padding-bottom: 3px; font-size: 12.5px; }
+.lag-input { width: 70px; flex-shrink: 0; }
+.lag-input .input { padding-right: 26px; }
+/* Вид лага — переключатель «кал.» / «раб.» одной кнопкой */
+.lag-kind { flex-shrink: 0; min-width: 48px; min-height: 30px; padding: 0 8px; font-size: 12px; font-weight: 600; }
+.lag-kind.is-working { background: var(--color-primary-soft); border-color: var(--color-primary); color: var(--color-primary-dark); }
+
+/* Крайний срок и ограничение даты */
+.deadline-pill { display: flex; align-items: center; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 8px; font-size: 12px; font-weight: 600; }
+.deadline-pill.is-late { background: var(--color-danger-soft); color: #c62933; }
+.constraint-note { display: flex; align-items: flex-start; gap: 6px; margin: 0; padding: 6px 10px; border-radius: 8px; background: #eef1f7; color: var(--color-text-secondary); line-height: 1.45; }
+.constraint-note :deep(svg) { flex-shrink: 0; margin-top: 2px; }
 .suggest { list-style: none; margin: 4px 0 0; padding: 4px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-2, 0 8px 24px rgba(15, 23, 42, 0.12)); max-height: 240px; overflow: auto; }
 .suggest li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 8px; border-radius: 6px; cursor: pointer; font-size: 13px; }
 .suggest li:hover { background: var(--color-hover); }

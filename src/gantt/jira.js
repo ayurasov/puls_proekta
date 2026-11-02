@@ -95,11 +95,12 @@ export function milestoneFromVersion(version) {
 }
 
 /**
- * Строки для «Задач из Jira»: [{ type, data, ref, children?, parentKey? }] для editor.createItems.
+ * Строки для «Задач из Jira»: [{ type, data, ref, children?, parentKey?, predecessors? }] для editor.createItems.
  * group: 'none' | 'epics' | 'sprints' — эпик или спринт становится группой (уже существующая группа плана —
  * привязанная к эпику или с названием спринта — используется повторно); выбранный эпик — только группа.
- * links: связи «блокирует» → предшественник строки (из тех, что добавляются, или уже в плане: linkedRows —
- * Map ключ задачи → ключ строки); при нескольких блокирующих — та, что заканчивается позже.
+ * links: связи «блокирует» → предшественники строки (FS) — среди тех, что добавляются (по метке ref), или уже в
+ * плане (linkedRows — Map ключ задачи → { key, end } строки). С 0.7.0 переносятся все блокирующие задачи: у строки
+ * может быть несколько предшественников.
  */
 export function buildImportRows(issues, { group = 'none', epics = {}, epicGroups = new Map(), groupsByName = new Map(), links = false, linkedRows = new Map(), today } = {}) {
   const rows = []
@@ -138,13 +139,9 @@ export function buildImportRows(issues, { group = 'none', epics = {}, epicGroups
   if (links) {
     for (const { entry, issue } of tasks.values()) {
       const blockers = (issue.links?.blockedBy || [])
-        .map((key) => (tasks.has(key) ? { ref: key, end: tasks.get(key).entry.data.end } : linkedRows.has(key) ? { key: linkedRows.get(key).key, end: linkedRows.get(key).end } : null))
+        .map((key) => (tasks.has(key) ? { ref: key, type: 'FS' } : linkedRows.has(key) ? { key: linkedRows.get(key).key, type: 'FS' } : null))
         .filter(Boolean)
-      if (!blockers.length) continue
-      const latest = blockers.reduce((a, b) => ((b.end || '') > (a.end || '') ? b : a))
-      if (latest.ref) entry.data.dependencyRef = latest.ref
-      else entry.data.dependencyKey = latest.key
-      entry.data.dependencyType = 'FS'
+      if (blockers.length) entry.predecessors = blockers
     }
   }
   return rows
@@ -153,10 +150,11 @@ export function buildImportRows(issues, { group = 'none', epics = {}, epicGroups
 /**
  * Что можно перенести из задачи Jira в строку: [{ field, label, from, to, fields, note? }].
  * Без данных в Jira поле не предлагается. «Заблокирована» меняется только на «Завершена»: блокировка в Jira
- * обычно не отдельная категория статуса. Если сроки задачи задаёт связь (автосдвиг), из Jira берётся только
- * та дата, которую связь не определяет: при FS/SS — окончание, при FF/SF — начало.
+ * обычно не отдельная категория статуса. Если сроки задачи задают связи (автосдвиг), из Jira берётся только
+ * та дата, которую связи не определяют: linked = { start, end } — начало задают связи FS/SS, окончание — FF/SF
+ * (linkedDates). Если связи задают обе даты, сроки из Jira не переносятся.
  */
-export function jiraChanges(item, issue, { calendar, today, linked = false } = {}) {
+export function jiraChanges(item, issue, { calendar, today, linked = null } = {}) {
   if (!item || !issue) return []
   const out = []
   if (issue.summary && issue.summary !== item.name) {
@@ -175,23 +173,36 @@ export function jiraChanges(item, issue, { calendar, today, linked = false } = {
       }
       out.push({ field: 'status', label: 'Статус', from: current, to: status, fields, jiraStatus: issue.status })
     }
-    const endDriven = linked && ['FF', 'SF'].includes(item.dependencyType)
-    const start = linked && !endDriven ? item.start : issue.start || item.start
+    const startDriven = Boolean(linked?.start)
+    const endDriven = Boolean(linked?.end)
+    const start = startDriven ? item.start : issue.start || item.start
     const end = endDriven ? item.end : issue.due || item.end
     if ((start !== item.start || end !== item.end) && start <= end) {
       const fields = { start, end }
       if (item.endMode === 'duration') {
         fields.duration = item.durationType === 'working' && calendar ? calendar.countWorkingDays(start, end) : diffDays(start, end) + 1
       }
-      const note = linked ? (endDriven ? 'окончание задаёт связь' : 'начало задаёт связь') : null
+      const note = endDriven ? 'окончание задаёт связь' : startDriven ? 'начало задаёт связь' : null
       out.push({ field: 'dates', label: 'Сроки', from: [item.start, item.end], to: [start, end], fields, note })
     }
     const progress = out.some((c) => c.fields.progress === 100) ? null : issue.progress
     if (progress !== null && progress !== undefined && progress !== (item.progress || 0) && item.status !== 'done') {
       out.push({ field: 'progress', label: 'Прогресс', from: item.progress || 0, to: progress, fields: { progress } })
     }
-  } else if (item.type === 'milestone' && issue.due && issue.due !== item.date) {
+  } else if (item.type === 'milestone' && issue.due && issue.due !== item.date && !linked?.start && !linked?.end) {
+    // Дату вехи-последующей задаёт связь (0.7.0) — из Jira она не переносится
     out.push({ field: 'date', label: 'Дата', from: item.date, to: issue.due, fields: { date: issue.due } })
+  }
+  return out
+}
+
+/** Какие даты строки задают её связи: { start } — есть входящая FS/SS, { end } — FF/SF (links — связи плана). */
+export function linkedDates(item, links) {
+  const out = { start: false, end: false }
+  for (const link of links || []) {
+    if (link.to !== item?.key) continue
+    if (link.type === 'FF' || link.type === 'SF') out.end = true
+    else out.start = true
   }
   return out
 }
@@ -301,8 +312,10 @@ export function createJira(editor, ui) {
   }
 
   function changesFor(item) {
-    // Сроки задачи со связью задаёт автосдвиг — из Jira берётся только свободная дата
-    const linked = !!(item?.dependencyKey && editor.state.items[item.dependencyKey] && editor.settings.display.autoShift)
+    // Сроки задачи со связями задаёт автосдвиг — из Jira берётся только свободная дата
+    const linked = editor.settings.display.autoShift
+      ? linkedDates(item, (editor.linkList || []).filter((link) => editor.state.items[link.from]))
+      : null
     return jiraChanges(item, issueFor(item), { calendar: editor.calendar, today: editor.state.today, linked })
   }
 
