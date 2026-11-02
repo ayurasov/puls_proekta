@@ -346,3 +346,26 @@ def test_simultaneous_same_field_edits_are_serialized(app, admin, monkeypatch):
     assert later["conflicts"], "второй пакет должен узнать об одновременной правке того же поля"
     final = admin.get(f"/api/plans/{plan_id}").get_json()
     assert final["plan"]["revision"] == max(a["revision"], b["revision"])
+
+
+def test_v061_progress_style_is_validated_and_defaults_to_fill(app, admin):
+    """0.6.1: вид прогресса на полосах — заливка по умолчанию (как в 1.0), неизвестное значение не сохраняется."""
+    from app.services.legacy_format import legacy_settings
+
+    _, plan_id = create_project(admin)
+    response = admin.patch(f"/api/plans/{plan_id}", json={"settings": {"display": {"showNotes": True}}})
+    assert response.get_json()["settings"]["display"]["progressStyle"] == "fill"
+    for style in ("strip", "tint", "percent", "fill"):
+        response = admin.patch(f"/api/plans/{plan_id}", json={"settings": {"display": {"progressStyle": style}}})
+        assert response.get_json()["settings"]["display"]["progressStyle"] == style
+    response = admin.patch(f"/api/plans/{plan_id}", json={"settings": {"display": {"progressStyle": "rainbow"}}})
+    assert response.get_json()["settings"]["display"]["progressStyle"] == "fill"
+    # «Не показывать» — прежний флаг showProgress, вид при этом запоминается
+    response = admin.patch(
+        f"/api/plans/{plan_id}", json={"settings": {"display": {"showProgress": False, "progressStyle": "tint"}}}
+    )
+    display = response.get_json()["settings"]["display"]
+    assert display["showProgress"] is False and display["progressStyle"] == "tint"
+    # Файл формата 1.0 переносит вид прогресса, если он в нём есть; без него — заливка
+    assert legacy_settings({"settings": {"progressStyle": "strip"}})["display"]["progressStyle"] == "strip"
+    assert legacy_settings({"settings": {"progressStyle": "x"}})["display"]["progressStyle"] == "fill"

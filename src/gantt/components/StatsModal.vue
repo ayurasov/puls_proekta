@@ -1,9 +1,10 @@
 <script setup>
-import { computed, inject, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { api } from '../../api/client'
 import BaseModal from '../../components/common/BaseModal.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
+import SegmentedControl from '../../components/common/SegmentedControl.vue'
 import { planStatistics } from '../domain/stats'
 import { STATUSES } from '../domain/colors'
 import { formatDay, todayLocal } from '../domain/dates'
@@ -12,15 +13,21 @@ import { formatNumber } from '../../utils/format'
 /**
  * Окно «Статистика» плана. Внутри проекта считает по открытому плану (редактор); с главной (planId) —
  * по данным GET /plans/<id>/stats, не открывая план: строка из списков ведёт в план и открывает её карточку.
+ * plans — открытые планы проекта: с главной статистика переключается между ними (0.6.1).
  */
 const props = defineProps({
   planId: { type: Number, default: null },
+  plans: { type: Array, default: () => [] },
 })
 const emit = defineEmits(['close'])
 const router = useRouter()
 const editor = props.planId ? null : inject('gantt')
 const remote = ref(null)
 const loadError = ref(null)
+const currentPlanId = ref(props.planId)
+const planOptions = computed(() => props.plans.map((p) => ({
+  value: p.id, label: p.title, badge: p.total ?? undefined, title: p.total === 0 ? 'Задач пока нет' : p.title,
+})))
 
 const source = computed(() => {
   if (editor) return { items: editor.itemList, assignees: editor.assigneeList, today: editor.state.today }
@@ -33,15 +40,19 @@ const title = computed(() => {
 })
 const pct = (n, total) => (total ? Math.round((n / total) * 100) : 0)
 
+let loadSeq = 0
 async function load() {
   loadError.value = null
+  const seq = ++loadSeq
   try {
-    remote.value = await api.get(`/plans/${props.planId}/stats`)
+    const data = await api.get(`/plans/${currentPlanId.value}/stats`)
+    if (seq === loadSeq) remote.value = data
   } catch (err) {
-    loadError.value = err
+    if (seq === loadSeq) loadError.value = err
   }
 }
 onMounted(() => { if (!editor) load() })
+watch(currentPlanId, () => { remote.value = null; load() })
 
 function planLink(key = null) {
   const plan = remote.value?.plan
@@ -62,13 +73,16 @@ function select(key) {
 <template>
   <BaseModal :title="title" size="wide" @close="emit('close')">
     <template #header-actions><HelpLink topic="plan-stats" /></template>
+    <div v-if="!editor && planOptions.length > 1" class="plan-switch" data-testid="stats-plan-switch">
+      <SegmentedControl v-model="currentPlanId" :options="planOptions" kind="tabs" size="sm" aria-label="План проекта" />
+    </div>
     <div v-if="loadError" class="state">
       <p>{{ loadError.status === 404 ? 'План не найден или доступ к нему закрыт.' : loadError.message || 'Не удалось загрузить статистику' }}</p>
       <button v-if="loadError.status !== 404" class="btn btn-sm" type="button" @click="load">Повторить</button>
     </div>
     <div v-else-if="!stats" class="state muted">Загрузка статистики…</div>
     <template v-else>
-      <p v-if="remote && remote.plan.title !== remote.plan.projectTitle" class="muted small plan-note">Основной план проекта: «{{ remote.plan.title }}»</p>
+      <p v-if="remote && planOptions.length <= 1 && remote.plan.title !== remote.plan.projectTitle" class="muted small plan-note">План проекта: «{{ remote.plan.title }}»</p>
       <div class="cards">
         <div class="card stat"><span class="muted small">Задач</span><strong>{{ stats.total }}</strong></div>
         <div class="card stat"><span class="muted small">Средний прогресс</span><strong>{{ stats.avgProgress }}%</strong></div>
@@ -140,6 +154,8 @@ function select(key) {
 </template>
 
 <style scoped>
+.plan-switch { margin-bottom: 14px; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+.plan-switch::-webkit-scrollbar { display: none; }
 .state { padding: 24px 0; text-align: center; display: flex; flex-direction: column; align-items: center; gap: 10px; }
 .plan-note { margin: -4px 0 10px; }
 .cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 16px; }

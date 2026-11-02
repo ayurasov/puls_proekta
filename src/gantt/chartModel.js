@@ -5,7 +5,7 @@
  */
 import { addDays, diffDays, formatDayNoYear } from './domain/dates'
 import { buildHeader, dayX, layoutMilestoneLabels, pxPerDay, totalDays } from './domain/layout'
-import { BAR_OPACITY, readableText, resolveColor, STATUS_BY_KEY, textColorOnWhite } from './domain/colors'
+import { BAR_OPACITY, blendWithWhite, readableText, resolveColor, shadeColor, STATUS_BY_KEY, textColorOnWhite } from './domain/colors'
 import { groupSpan, shiftedEnd } from './domain/tree'
 
 export const BAR_HEIGHT = 24
@@ -80,6 +80,64 @@ export function fitText(text, width, charWidth = BAR_CHAR_WIDTH) {
   return text.length > max ? text.slice(0, Math.max(1, max - 1)) + '…' : text
 }
 
+/**
+ * Как показывать прогресс на полосах (display.progressStyle, 0.6.1); «Не показывать» — display.showProgress = false.
+ * fill — выполненная часть затемнена во всю высоту полосы, как в 1.0 (по умолчанию); strip — полоска по нижнему
+ * краю; tint — сделанное цветом задачи, остаток светлым; percent — «С процентом»: заливка и процент в начале подписи.
+ */
+export const PROGRESS_STYLES = ['fill', 'strip', 'tint', 'percent']
+/** Затемнение выполненной части («Заливка», «Заливка и %»): в 1.0 — чёрный с прозрачностью 0,25. */
+export const PROGRESS_SHADE = 0.24
+/** Насыщенность остатка в стиле «Светлый остаток». */
+export const PROGRESS_TINT = 0.38
+
+export function progressStyle(display) {
+  if (!display?.showProgress) return null
+  return PROGRESS_STYLES.includes(display.progressStyle) ? display.progressStyle : 'fill'
+}
+
+const r1 = (v) => Math.round(v * 10) / 10
+
+/** Контур выполненной части полосы: левые углы скруглены как у полосы, правый край прямой; 100 % — вся полоса. */
+export function progressPath(x, y, w, h, pct, r = 6) {
+  const pw = r1(w * Math.min(100, pct) / 100)
+  if (pw <= 0) return ''
+  const ry = Math.min(r, h / 2)
+  if (pct >= 100) {
+    const rx = Math.min(r, w / 2)
+    return `M${r1(x + rx)} ${r1(y)}H${r1(x + w - rx)}A${rx} ${ry} 0 0 1 ${r1(x + w)} ${r1(y + ry)}V${r1(y + h - ry)}`
+      + `A${rx} ${ry} 0 0 1 ${r1(x + w - rx)} ${r1(y + h)}H${r1(x + rx)}A${rx} ${ry} 0 0 1 ${r1(x)} ${r1(y + h - ry)}`
+      + `V${r1(y + ry)}A${rx} ${ry} 0 0 1 ${r1(x + rx)} ${r1(y)}Z`
+  }
+  const rx = Math.min(r, pw)
+  return `M${r1(x + rx)} ${r1(y)}H${r1(x + pw)}V${r1(y + h)}H${r1(x + rx)}A${rx} ${ry} 0 0 1 ${r1(x)} ${r1(y + h - ry)}`
+    + `V${r1(y + ry)}A${rx} ${ry} 0 0 1 ${r1(x + rx)} ${r1(y)}Z`
+}
+
+/**
+ * Прогресс на полосе задачи: цвет самой полосы (base), выполненная часть (done: контур и заливка) или полоска (strip),
+ * цвет подписи и префикс процента. Одна функция для диаграммы, предпросмотра в настройках и экспорта.
+ * Подпись стоит по центру полосы, поэтому её цвет подбирается под то, что под центром: выполненная часть или остаток.
+ */
+export function barProgress({ x, y, w, h, fill, status, progress, display }) {
+  const style = progressStyle(display)
+  const pct = style ? Math.max(0, Math.min(100, Math.round(Number(progress) || 0))) : 0
+  const opacity = BAR_OPACITY[status] || 1
+  const result = { style, pct, base: fill, done: null, strip: null, text: readableText(fill, opacity), prefix: '' }
+  if (style === 'strip') {
+    if (pct) result.strip = { x: x + 2, y: y + h - 6, w: Math.max(0, (w - 4) * pct / 100), h: 4 }
+  } else if (style === 'tint') {
+    result.base = blendWithWhite(fill, PROGRESS_TINT)
+    if (pct) result.done = { d: progressPath(x, y, w, h, pct), fill, kind: 'tint' }
+    result.text = readableText(pct >= 50 ? fill : result.base, opacity)
+  } else if (style && pct) {
+    result.done = { d: progressPath(x, y, w, h, pct), fill: `rgba(15, 23, 42, ${PROGRESS_SHADE})`, kind: 'shade' }
+    if (pct >= 50) result.text = readableText(shadeColor(fill, PROGRESS_SHADE), opacity)
+    if (style === 'percent') result.prefix = `${pct}% · `
+  }
+  return result
+}
+
 /** Геометрия строки i (y — верх строки в теле диаграммы). */
 export function rowModel(row, i, ctx, preview = null) {
   const item = preview?.[row.item.key] ? { ...row.item, ...preview[row.item.key] } : row.item
@@ -104,13 +162,14 @@ export function rowModel(row, i, ctx, preview = null) {
     const w = Math.max(10, (diffDays(item.start, item.end) + 1) * px)
     const color = resolveColor(item.color, 'blue')
     const offset = Number(item.offset || 0)
-    const label = barLabel(item, display)
     const h = roomForNote ? BAR_HEIGHT_WITH_NOTE : BAR_HEIGHT
+    const barY = roomForNote ? y + ctx.rowHeight - h - 6 : mid - h / 2
+    const pr = barProgress({ x, y: barY, w, h, fill: color.color, status: item.status, progress: item.progress, display })
+    const label = pr.prefix + barLabel(item, display)
     model.bar = {
-      x, w, y: roomForNote ? y + ctx.rowHeight - h - 6 : mid - h / 2, h, fill: color.color,
-      text: readableText(color.color, BAR_OPACITY[item.status] || 1),
+      x, w, y: barY, h, fill: pr.base, color: color.color, text: pr.text,
       label: fitText(label, w), fullLabel: label,
-      progress: display.showProgress ? Math.max(0, Math.min(100, Number(item.progress || 0))) : 0,
+      progress: pr.pct, progressStyle: pr.style, done: pr.done, strip: pr.strip,
       status: item.status || 'new', offset,
       tail: offset > 0 ? { x: x + w, w: offset * px, kind: 'late' } : offset < 0 ? { x: x + w - Math.min(w, -offset * px), w: Math.min(w, -offset * px), kind: 'early' } : null,
       tailLabel: offset && display.showOffsetLabels ? `сдвиг ${offset > 0 ? '+' : ''}${offset} д (до ${formatDayNoYear(shiftedEnd(item))})` : '',

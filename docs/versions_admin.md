@@ -3,6 +3,26 @@
 Документ содержит технические и эксплуатационные изменения. Пользовательский рассказ — в
 [versions.md](versions.md).
 
+## Версия 0.6.1 (Ноябрь 2026 г.)
+
+Вид прогресса на полосах и карточки проектов по всем планам. Подробно — [release notes](release-notes/v0.6.1.md).
+
+### Обновление
+
+- `sh deploy/update.sh v0.6.1`. Миграций нет (`GET /api/health/ready` → `{"schema":"0006_integration_keys",
+  "version":"0.6.1"}`), новых переменных окружения нет.
+
+### Изменения
+
+- Настройки плана: `settings.display.progressStyle` — `fill` (по умолчанию), `strip`, `tint`, `percent`; неизвестное
+  значение заменяется на `fill`. «Не показывать» — прежний `showProgress: false`. У существующих планов ключа нет —
+  они показывают заливку, как 1.0. Файл формата 1.0 переносит `progressStyle`, если он в нём есть.
+- `GET /api/projects`: `plans[]` — открытые планы в порядке вкладок, у каждого `stats` (`total`, `done`, `inwork`,
+  `blocked`, `overdue`, `progress`, `start`, `end`, `nextMilestone`). `stats` проекта и `stats.planId` — по основному
+  плану: **первой открытой вкладке, в которой есть задачи** (раньше — по первой вкладке, даже пустой).
+- API интеграций (`/api/integration/v1`): `progress`, `overdue`, `inwork`, `blocked`, `nextMilestone`, `planWindow` и
+  `updatedAt` считаются по тому же основному плану — у проекта с пустой первой вкладкой показатели появились.
+
 ## Версия 0.6.0 (Ноябрь 2026 г.)
 
 Ключи интеграций для нескольких систем ([ADR-0011](architecture/adr-0011-integration-keys.md)). Подробно —

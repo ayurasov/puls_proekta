@@ -23,6 +23,9 @@ PALETTE = ("blue", "teal", "green", "orange", "red", "purple", "amber", "pink", 
 TOOLTIP_FIELDS = ("status", "dates", "progress", "dependency", "assignee", "lastChange")
 # Что переносится из Jira в строки плана само — при открытии плана и обновлении из Jira (ADR-0007)
 JIRA_AUTO_FIELDS = ("status", "dates", "progress", "name")
+# Как показывать прогресс на полосах (0.6.1): заливка выполненной части во всю высоту (как в 1.0, по умолчанию),
+# полоска по нижнему краю, светлый остаток, заливка с процентом в подписи. «Не показывать» — showProgress = False.
+PROGRESS_STYLES = ("fill", "strip", "tint", "percent")
 
 DEFAULT_SETTINGS = {
     "range": {"start": "2026-04-01", "end": "2026-12-31"},
@@ -36,6 +39,7 @@ DEFAULT_SETTINGS = {
         "showWeekends": True,
         "showHolidays": True,
         "showProgress": True,
+        "progressStyle": "fill",
         "showNotes": True,
         "autoShift": True,
         "legendEnabled": False,
@@ -154,6 +158,8 @@ def normalize_settings(raw, base=None):
             if key == "legendPosition" and value in ("top", "bottom"):
                 display[key] = value
             elif key == "legendMode" and value in ("all", "main"):
+                display[key] = value
+            elif key == "progressStyle" and value in PROGRESS_STYLES:
                 display[key] = value
             elif key == "tooltipFields" and isinstance(value, list):
                 display[key] = [f for f in value if f in TOOLTIP_FIELDS]

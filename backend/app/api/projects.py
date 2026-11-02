@@ -62,12 +62,8 @@ class ReorderIn(BaseModel):
     items: list[ReorderEntry]
 
 
-def _default_plans(project_ids):
-    """Основной план каждого проекта: первый открытый (не в архиве) по порядку вкладок.
-
-    Копии плана и черновики — отдельные вкладки; если считать задачи всех планов, одна и та же
-    задача в копии посчитается дважды, и процент на карточке разойдётся со «Статистикой» плана.
-    """
+def _open_plans(project_ids):
+    """Открытые (не в архиве, не удалённые) планы проектов по порядку вкладок: {project_id: [(plan_id, title)]}."""
     rows = db.session.execute(
         select(Plan.project_id, Plan.id, Plan.title)
         .where(Plan.project_id.in_(project_ids), Plan.deleted_at.is_(None), Plan.is_archived.is_(False))
@@ -75,27 +71,47 @@ def _default_plans(project_ids):
     ).all()
     plans = {}
     for project_id, plan_id, title in rows:
-        plans.setdefault(project_id, (plan_id, title))
+        plans.setdefault(project_id, []).append((plan_id, title))
     return plans
 
 
-def _task_stats(project_ids):
-    """Задачи основного плана по статусам, средний прогресс, сроки и ближайшая веха — для карточек на главной.
-
-    Средний прогресс считается так же, как «Средний прогресс» в окне «Статистика» плана:
-    среднее поля «Прогресс» по всем задачам плана. Сроки (start, end) — самое раннее начало и самое
-    позднее плановое окончание задач: по ним главная сортирует проекты «по сроку окончания».
-    """
-    if not project_ids:
+def _task_counts(plan_ids):
+    """Число задач (не удалённых) в каждом плане: {plan_id: n}."""
+    if not plan_ids:
         return {}
-    default_plans = _default_plans(project_ids)
-    plan_ids = [plan_id for plan_id, _title in default_plans.values()]
+    return dict(db.session.execute(
+        select(PlanItem.plan_id, func.count(PlanItem.id))
+        .where(PlanItem.plan_id.in_(plan_ids), PlanItem.type == "task", PlanItem.deleted_at.is_(None))
+        .group_by(PlanItem.plan_id)
+    ).all())
+
+
+def _default_plans(project_ids, open_plans=None, counts=None):
+    """Основной план каждого проекта: первая открытая вкладка, в которой есть задачи; если задач нет ни в одной —
+    первая открытая вкладка. {project_id: (plan_id, title)}.
+
+    Копии плана и черновики — отдельные вкладки; если считать задачи всех планов, одна и та же задача в копии
+    посчитается дважды, поэтому сводка проекта берётся по одному плану. Пустая первая вкладка (например, план
+    следующего этапа, заведённый заранее) не должна оставлять карточку проекта без данных (0.6.1)."""
+    open_plans = open_plans if open_plans is not None else _open_plans(project_ids)
+    counts = counts if counts is not None else _task_counts([pid for plans in open_plans.values() for pid, _t in plans])
+    result = {}
+    for project_id, plans in open_plans.items():
+        result[project_id] = next((plan for plan in plans if counts.get(plan[0])), plans[0])
+    return result
+
+
+def _plan_stats(plan_ids):
+    """Задачи плана по статусам, средний прогресс, сроки и ближайшая веха: {plan_id: {...}}.
+
+    Средний прогресс — как «Средний прогресс» в окне «Статистика» плана: среднее поля «Прогресс» по всем задачам
+    плана. Сроки (start, end) — самое раннее начало и самое позднее плановое окончание задач."""
     if not plan_ids:
         return {}
     alive = and_(PlanItem.deleted_at.is_(None), PlanItem.plan_id.in_(plan_ids))
     rows = db.session.execute(
         select(
-            Plan.project_id,
+            PlanItem.plan_id,
             func.count(PlanItem.id),
             func.sum(case((PlanItem.status == "done", 1), else_=0)),
             func.sum(case((PlanItem.status == "inwork", 1), else_=0)),
@@ -105,34 +121,44 @@ def _task_stats(project_ids):
             func.min(PlanItem.start_date),
             func.max(PlanItem.end_date),
         )
-        .join(Plan, Plan.id == PlanItem.plan_id)
         .where(PlanItem.type == "task", alive)
-        .group_by(Plan.project_id)
+        .group_by(PlanItem.plan_id)
     ).all()
-
-    def empty(pid):
-        plan_id, title = default_plans[pid]
-        return {"total": 0, "done": 0, "inwork": 0, "blocked": 0, "overdue": 0, "progress": 0,
-                "start": None, "end": None, "planId": plan_id, "planTitle": title}
-
-    stats = {}
+    stats = {pid: {"total": 0, "done": 0, "inwork": 0, "blocked": 0, "overdue": 0, "progress": 0, "start": None,
+                   "end": None} for pid in plan_ids}
     for pid, total, done, inwork, blocked, overdue, progress_sum, start, end in rows:
-        entry = empty(pid)
         total = int(total or 0)
-        entry.update({"total": total, "done": int(done or 0), "inwork": int(inwork or 0), "blocked": int(blocked or 0),
-                      "overdue": int(overdue or 0),
-                      "progress": round(float(progress_sum or 0) / total) if total else 0,
-                      "start": _day(start), "end": _day(end)})
-        stats[pid] = entry
+        stats[pid].update({"total": total, "done": int(done or 0), "inwork": int(inwork or 0),
+                           "blocked": int(blocked or 0), "overdue": int(overdue or 0),
+                           "progress": round(float(progress_sum or 0) / total) if total else 0,
+                           "start": _day(start), "end": _day(end)})
     milestones = db.session.execute(
-        select(Plan.project_id, PlanItem.name, PlanItem.start_date)
-        .join(Plan, Plan.id == PlanItem.plan_id)
+        select(PlanItem.plan_id, PlanItem.name, PlanItem.start_date)
         .where(PlanItem.type == "milestone", alive, PlanItem.start_date >= func.current_date())
         .order_by(PlanItem.start_date)
     ).all()
     for pid, name, day in milestones:
-        entry = stats.setdefault(pid, empty(pid))
-        entry.setdefault("nextMilestone", {"name": name, "date": day.isoformat()})
+        stats[pid].setdefault("nextMilestone", {"name": name, "date": day.isoformat()})
+    return stats
+
+
+def _task_stats(project_ids, open_plans=None, plan_stats=None):
+    """Сводка основного плана проекта для карточек на главной и API интеграций: {project_id: {..., planId,
+    planTitle}}. open_plans и plan_stats — уже посчитанные (список проектов считает их один раз для всех планов)."""
+    if not project_ids:
+        return {}
+    open_plans = open_plans if open_plans is not None else _open_plans(project_ids)
+    if not open_plans:
+        return {}
+    if plan_stats is None:
+        plan_stats = _plan_stats([pid for plans in open_plans.values() for pid, _t in plans])
+    counts = {pid: s["total"] for pid, s in plan_stats.items()}
+    stats = {}
+    for project_id, (plan_id, title) in _default_plans(project_ids, open_plans, counts).items():
+        entry = plan_stats.get(plan_id) or {}
+        # Проект без задач и вех — без сводки, как раньше: карточка показывает «—», API — пустые показатели
+        if entry.get("total") or entry.get("nextMilestone"):
+            stats[project_id] = {**entry, "planId": plan_id, "planTitle": title}
     return stats
 
 
@@ -169,15 +195,12 @@ def list_projects():
     levels = project_levels(user, projects)
     projects = [p for p in projects if p.id in levels]
     ids = [p.id for p in projects]
-    plan_rows = db.session.execute(
-        select(Plan.project_id, Plan.id, Plan.title, Plan.is_archived)
-        .where(Plan.project_id.in_(ids), Plan.deleted_at.is_(None)).order_by(Plan.position, Plan.id)
-    ).all() if ids else []
-    plans = {}
-    for project_id, plan_id, title, archived in plan_rows:
-        if not archived:
-            plans.setdefault(project_id, []).append({"id": plan_id, "title": title})
-    stats = _task_stats(ids)
+    # Открытые планы с их сводкой — карточка проекта показывает до нескольких планов, а не только основной (0.6.1)
+    open_plans = _open_plans(ids) if ids else {}
+    plan_stats = _plan_stats([pid for plans in open_plans.values() for pid, _t in plans])
+    plans = {project_id: [{"id": plan_id, "title": title, "stats": plan_stats.get(plan_id)} for plan_id, title in items]
+             for project_id, items in open_plans.items()}
+    stats = _task_stats(ids, open_plans, plan_stats)
     creators = {u.id: u for u in db.session.execute(
         select(User).where(User.id.in_({p.created_by_id for p in projects if p.created_by_id}))).scalars()} if ids else {}
     return jsonify([
