@@ -146,7 +146,8 @@ function saver(kind) {
 
 async function openProject(page, title, planTitle) {
   await page.goto(BASE + '/')
-  await page.click(`a.card-link[aria-label="${title}"]`)
+  // Щелчок по заголовку карточки: середина карточки с несколькими планами — строка плана (ведёт в этот план)
+  await page.click(`a.card-link[aria-label="${title}"]`, { position: { x: 40, y: 22 } })
   await page.waitForSelector('.gantt .grid-row')
   if (planTitle) {
     await page.locator('.plan-tab', { hasText: planTitle }).first().click()

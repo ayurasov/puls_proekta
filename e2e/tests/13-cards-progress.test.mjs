@@ -58,10 +58,14 @@ test('карточка: каждый план своей строкой, пус�
   // Ближайшая веха — с названием плана, в котором она стоит
   assert.match(await card.locator('.milestone').textContent(), /Приёмка этапа 2 · Этап 2/)
   await shot(page, '13-card-plans')
-  // Название плана в строке открывает этот план
-  await rows.nth(2).locator('.plan-name').click()
+  // Щелчок по строке плана (не только по названию) открывает этот план, по заголовку карточки — проект
+  const box = await rows.nth(2).boundingBox()
+  await rows.nth(2).click({ position: { x: box.width / 2, y: box.height - 8 } })
   await page.waitForURL(new RegExp(`/projects/${projectId}/${stage3}$`))
   await page.locator('.grid-row .name', { hasText: 'Интеграция с ERP' }).waitFor()
+  await page.goto(BASE + '/')
+  await card.locator('.card-link').click({ position: { x: 40, y: 22 } })
+  await page.waitForURL(new RegExp(`/projects/${projectId}(/\\d+)?$`))
 })
 
 test('статистика с карточки: по умолчанию — первый план с задачами, переключается между планами', async () => {

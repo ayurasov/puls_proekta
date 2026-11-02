@@ -367,8 +367,8 @@ function onDragEnd() {
           </template>
           <ul v-else class="plan-rows" :data-testid="`card-plans-${project.id}`">
             <li v-for="plan in cardPlans(project).shown" :key="plan.id" class="plan-row" :class="{ empty: !plan.stats.total }">
-              <router-link :to="`/projects/${project.id}/${plan.id}`" class="plan-name ellipsis" :title="`Открыть план «${plan.title}»`" draggable="false">{{ plan.title }}</router-link>
-              <div class="plan-bar" :title="planTitle(plan)">
+              <router-link :to="`/projects/${project.id}/${plan.id}`" class="plan-name ellipsis" :title="`Открыть план «${plan.title}» · ${planTitle(plan)}`" draggable="false">{{ plan.title }}</router-link>
+              <div class="plan-bar">
                 <div class="progress-bar"><span :style="{ width: planProgress(plan.stats) + '%' }" /></div>
                 <span class="progress-value">{{ plan.stats.total ? planProgress(plan.stats) + '%' : '—' }}</span>
               </div>
@@ -492,12 +492,18 @@ function onDragEnd() {
 .plan-row { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, 1fr) 118px; grid-template-areas: "name bar" "stats stats"; gap: 2px 10px; padding: 7px 9px; border-radius: 9px; background: var(--color-surface-2); border: 1px solid #edf0f6; }
 .plan-row.empty { background: transparent; border-style: dashed; }
 .plan-name { grid-area: name; font-size: 12.5px; font-weight: 600; color: var(--color-text); text-decoration: none; }
-.plan-name:hover { color: var(--color-primary-dark); text-decoration: underline; }
+/* Вся строка плана — ссылка на план (растянутая ссылка поверх строки); кнопка статистики — над ней.
+   Щелчок по остальной карточке открывает проект, как раньше. */
+.plan-name::after { content: ''; position: absolute; inset: 0; border-radius: inherit; }
+.plan-row:hover { border-color: #c9d6ff; background: #f3f6ff; }
+.plan-row:hover .plan-name { color: var(--color-primary-dark); }
+.plan-name:focus-visible { outline: none; }
+.plan-row:has(.plan-name:focus-visible) { box-shadow: var(--focus-ring); }
 .plan-bar { grid-area: bar; display: flex; align-items: center; gap: 6px; }
 .plan-bar .progress-bar { height: 5px; }
 .plan-bar .progress-value { min-width: 28px; font-size: 11.5px; }
 .plan-stats { grid-area: stats; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 11.5px; color: var(--color-text-secondary); }
-.plan-stats-btn { margin-left: auto; border: 0; background: none; padding: 2px; border-radius: 5px; color: var(--color-text-muted); display: inline-flex; }
+.plan-stats-btn { position: relative; z-index: 1; margin-left: auto; border: 0; background: none; padding: 2px; border-radius: 5px; color: var(--color-text-muted); display: inline-flex; }
 .plan-stats-btn:hover { color: var(--color-primary-dark); background: #eef1f7; }
 .plan-more { padding-left: 9px; }
 .card-footer { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 2px; }
