@@ -298,6 +298,25 @@ class PlanEditor:
             # Предшественник может идти в пакете позже строки (документ, скрипт) — связь создаётся в конце пакета
             self.legacy_links.append((key, legacy))
 
+    def _update_msp(self, item, extra):
+        """Идентификаторы строки в MS Project (`extra.msp`: UID, GUID, WBS) — обновляются только из файла MS Project;
+        остальное содержимое `extra` (служебные поля переноса 1.0) не трогается."""
+        if not isinstance(extra, dict) or not isinstance(extra.get("msp"), dict):
+            return False
+        raw = extra["msp"]
+        msp = {}
+        if isinstance(raw.get("uid"), int) and not isinstance(raw.get("uid"), bool):
+            msp["uid"] = raw["uid"]
+        for name in ("guid", "wbs", "outlineNumber"):
+            if isinstance(raw.get(name), str) and raw[name].strip():
+                msp[name] = raw[name].strip()[:64]
+        current = dict(item.extra or {})
+        if current.get("msp") == msp:
+            return False
+        current["msp"] = msp
+        item.extra = current
+        return True
+
     def op_item_update(self, op):
         key = op.get("key")
         item = self._alive(self.items, key)
@@ -311,7 +330,12 @@ class PlanEditor:
             self._legacy_dependency(item, legacy)
         self._conflict(item, "item")
         before_name = self._label(item)
+        extra_changed = self._update_msp(item, fields.pop("extra", None))
         changes = self._set_item_fields(item, fields)
+        if extra_changed and not changes:
+            # Изменились только идентификаторы строки в MS Project (обновление из файла) — без записи в истории
+            self._touch(item, self.result.items)
+            return
         if not changes:
             return
         self._touch(item, self.result.items)
@@ -815,10 +839,11 @@ class PlanEditor:
                 self._touch(note, self.result.notes)
 
     # ---------- применение ----------
-    def apply(self, ops):
+    def apply(self, ops, max_ops=MAX_OPS):
+        """max_ops=None — без ограничения: пакет собирает сервер (копия плана, импорт MS Project), а не браузер."""
         if not isinstance(ops, list) or not ops:
             raise ApiError(400, "validation_error", "Нет операций")
-        if len(ops) > MAX_OPS:
+        if max_ops is not None and len(ops) > max_ops:
             raise ApiError(400, "validation_error", "Слишком много операций в одном пакете")
         handlers = {
             "item.create": self.op_item_create, "item.update": self.op_item_update,

@@ -65,7 +65,8 @@ def fill_plan_from_document(plan, user, doc, event_summary):
     editor = PlanEditor(plan, user)
     editor.skip_invalid_links = True
     if ops:
-        editor.apply(ops)
+        # Пакет собирает сервер: копия большого плана не упирается в ограничение пакета из браузера
+        editor.apply(ops, max_ops=None)
     plan.revision = editor.revision
     plan.updated_at = editor.now
     db.session.add(PlanEvent(plan_id=plan.id, revision=plan.revision, entity="plan", action="create",

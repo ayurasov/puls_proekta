@@ -132,6 +132,8 @@ def _snapshot(plan, user, label):
 
 def _apply_ops(plan, user, ops, summary):
     editor = PlanEditor(plan, user)
+    # Связь, которую нельзя создать (строку пропустили), не останавливает загрузку — она попадает в исправления
+    editor.skip_invalid_links = True
     if ops:
         editor.apply(ops, max_ops=None)
     plan.revision = editor.revision
