@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeDependencyShifts, dependentKeys } from '../dependencies'
+import { computeDependencyShifts, dependentKeys, linksFromItems } from '../dependencies'
 import { inverseOf } from '../ops'
 
 const task = (key, start, end, extra = {}) => ({ key, type: 'task', start, end, ...extra })
@@ -39,7 +39,7 @@ describe('автосдвиг по связям: ревизия 0.2.0', () => {
   it('зависящие задачи не предлагаются в предшественники', () => {
     const items = [task('a', '2026-01-01', '2026-01-02'), task('b', '2026-01-03', '2026-01-04', { dependencyKey: 'a' }),
       task('c', '2026-01-05', '2026-01-06', { dependencyKey: 'b' })]
-    expect([...dependentKeys(items, 'a')].sort()).toEqual(['b', 'c'])
+    expect([...dependentKeys(linksFromItems(items), 'a')].sort()).toEqual(['b', 'c'])
   })
 })
 

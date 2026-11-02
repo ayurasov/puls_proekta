@@ -19,6 +19,7 @@ export const HELP_TOPICS = {
   jira: { guide: 'user', id: 'задачи-jira', title: 'Задачи Jira' },
   'jira-sync': { guide: 'user', id: 'сверка-с-jira', title: 'Сверка с Jira' },
   'jira-import': { guide: 'user', id: 'задачи-из-jira', title: 'Задачи из Jira' },
+  msproject: { guide: 'user', id: 'импорт-из-ms-project', title: 'Импорт из MS Project' },
   'jira-auto': { guide: 'user', id: 'автоперенос-из-jira', title: 'Автоперенос из Jira' },
   'jira-source': { guide: 'user', id: 'источник-задач-плана', title: 'Источник задач плана' },
   'podelu-tasks': { guide: 'user', id: 'задачи-по-делу-в-проекте', title: 'Задачи «По Делу» в проекте' },

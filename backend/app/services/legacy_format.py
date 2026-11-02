@@ -11,6 +11,12 @@
 потом задачи, потом вехи, внутри типа — по порядку массива; родитель строки —
 `parentId`, а если его нет — `groupId`.
 
+У задачи 1.0.x один предшественник (`dependencyId`, `dependencyType`, `depLag`); в «Пульсе» с 0.7.0 связи —
+отдельный список документа (`links`), предшественников может быть несколько, последующей может быть веха.
+Выгрузка в формат 1.0 пишет первого предшественника в поля 1.0, а все связи строки — в дополнительное поле
+`predecessors` ([{id, type, lag, lagKind}]): 1.0.x его не читает, а импорт «Пульса» переносит связи без потерь.
+Так же — крайний срок и ограничение даты строки (`deadline`, `constraintType`, `constraintDate`).
+
 Модуль используется:
 
 * переносом базы 1.0.x (`scripts/import_legacy.py`);
@@ -22,6 +28,8 @@ from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
 from app.services.plan_schema import (
+    CONSTRAINT_LABELS,
+    CONSTRAINTS_WITHOUT_DATE,
     DEFAULT_CATEGORIES,
     PALETTE,
     PROGRESS_STYLES,
@@ -35,10 +43,11 @@ LEGACY_TZ = ZoneInfo("Europe/Moscow")
 TASK_KEYS = {
     "id", "type", "name", "start", "end", "endMode", "duration", "durationType", "progress", "offset", "barText",
     "category", "color", "parentId", "groupId", "assigneeId", "dependencyId", "dependencyType", "depLag", "status",
-    "comments", "changeHistory", "jiraUrl", "completedDate",
+    "comments", "changeHistory", "jiraUrl", "completedDate", "predecessors", "deadline", "constraintType", "constraintDate",
 }
 MILESTONE_KEYS = {"id", "type", "name", "date", "color", "parentId", "groupId", "assigneeId", "comment", "lineStyle",
-                  "lineColor"}
+                  "lineColor", "predecessors", "deadline", "constraintType", "constraintDate"}
+LINK_TYPES = ("FS", "SS", "FF", "SF")
 GROUP_KEYS = {"id", "type", "name", "color", "groupId", "parentId"}
 TYPE_ORDER = {"group": 0, "task": 1, "milestone": 2}
 
@@ -224,6 +233,7 @@ def legacy_state_to_document(state, title=None, report=None):
         })
 
     items = []
+    links = []
     comments = []
     events = []
     for position, (row_id, parent_id) in enumerate(order, start=1):
@@ -249,10 +259,6 @@ def legacy_state_to_document(state, title=None, report=None):
             if end < start:
                 report.add(f"Задача «{name}»: окончание раньше начала — даты переставлены")
                 start, end = end, start
-            dep = row.get("dependencyId") or None
-            if dep and (dep not in by_id or dep == row_id or by_id[dep].get("type") == "group"):
-                report.add(f"Задача «{name}»: связь с отсутствующей строкой {dep} снята")
-                dep = None
             assignee = row.get("assigneeId") or None
             if assignee and assignee not in assignee_keys:
                 report.add(f"Задача «{name}»: исполнитель {assignee} не найден в справочнике — снят")
@@ -265,9 +271,6 @@ def legacy_state_to_document(state, title=None, report=None):
                 "progress": max(0, min(100, _int(row.get("progress")))),
                 "offset": _int(row.get("offset")),
                 "completedDate": _iso(row.get("completedDate")),
-                "dependencyKey": dep,
-                "dependencyType": row.get("dependencyType") if row.get("dependencyType") in ("FS", "SS", "FF", "SF") else "FS",
-                "dependencyLag": _int(row.get("depLag")),
                 "assigneeKey": assignee,
                 "status": row.get("status") if row.get("status") in ("new", "inwork", "blocked", "done") else "new",
                 "category": (row.get("category") or "").strip() or None,
@@ -320,9 +323,13 @@ def legacy_state_to_document(state, title=None, report=None):
             })
         else:
             item["color"] = _color(row.get("color"), "slate", report, f"Группа «{name}»")
+        if rtype != "group":
+            item.update(_schedule_fields(row))
         if extra:
             item["extra"] = extra
         items.append(item)
+        if rtype != "group":
+            links.extend(_row_links(row, rtype, name, by_id, report, len(links)))
 
     notes = []
     note_keys = set()
@@ -356,9 +363,48 @@ def legacy_state_to_document(state, title=None, report=None):
         },
         "assignees": assignees,
         "items": items,
+        "links": links,
         "notes": notes,
     }
     return doc, comments, events, report
+
+
+def _schedule_fields(row):
+    """Крайний срок и ограничение даты строки из выгрузки «Пульса» 0.7.0+ (в файлах 1.0.x их нет)."""
+    out = {}
+    if _iso(row.get("deadline")):
+        out["deadline"] = _iso(row["deadline"])
+    kind = row.get("constraintType")
+    day = _iso(row.get("constraintDate"))
+    if kind in CONSTRAINT_LABELS and (day or kind in CONSTRAINTS_WITHOUT_DATE):
+        out.update({"constraintType": kind, "constraintDate": day})
+    return out
+
+
+def _row_links(row, rtype, name, by_id, report, numbered):
+    """Связи строки 1.0.x: все предшественники из `predecessors` (выгрузка «Пульса» 0.7.0+) или единственный
+    `dependencyId` задачи. Ссылки на отсутствующие строки, группы и саму строку снимаются с записью в отчёт."""
+    row_id = row["id"]
+    entries = row.get("predecessors")
+    if not isinstance(entries, list):
+        entries = [{"id": row.get("dependencyId"), "type": row.get("dependencyType"), "lag": row.get("depLag")}] \
+            if rtype == "task" and row.get("dependencyId") else []
+    out = []
+    seen = set()
+    for entry in entries:
+        dep = entry.get("id") if isinstance(entry, dict) else None
+        if not dep or dep in seen:
+            continue
+        if dep not in by_id or dep == row_id or by_id[dep].get("type") == "group":
+            report.add(f"Строка «{name}»: связь с отсутствующей строкой {dep} снята")
+            continue
+        seen.add(dep)
+        out.append({
+            "key": f"ll{numbered + len(out) + 1}", "from": dep, "to": row_id,
+            "type": entry.get("type") if entry.get("type") in LINK_TYPES else "FS", "lag": _int(entry.get("lag")),
+            "lagKind": "working" if entry.get("lagKind") == "working" else "calendar",
+        })
+    return out
 
 
 def document_from_any(payload):
@@ -395,13 +441,18 @@ def _legacy_action(event):
             "comment": "Комментарий"}.get(event.action, "Изменение")
 
 
-def plan_to_legacy_state(plan, items, notes, assignees, comments_by_item=None, events_by_item=None):
+def plan_to_legacy_state(plan, items, notes, assignees, comments_by_item=None, events_by_item=None, links=()):
     """План 0.2 -> state 1.0.x (с дополнительными полями, которые 1.0.x просто игнорирует)."""
     comments_by_item = comments_by_item or {}
     events_by_item = events_by_item or {}
     settings = normalize_settings(plan.settings)
     alive = [i for i in items if i.deleted_at is None]
     by_key = {i.key: i for i in alive}
+    # Предшественники строк в порядке создания связей: первый — в поля 1.0, все — в predecessors
+    incoming = {}
+    for link in sorted((link for link in links if link.deleted_at is None), key=lambda link: link.id or 0):
+        if link.from_key in by_key and link.to_key in by_key:
+            incoming.setdefault(link.to_key, []).append(link)
     children = {}
     for item in alive:
         children.setdefault(item.parent_key if item.parent_key in by_key else None, []).append(item)
@@ -430,6 +481,8 @@ def plan_to_legacy_state(plan, items, notes, assignees, comments_by_item=None, e
                 if legacy_group and legacy_group in by_key:
                     group_id = legacy_group
         row = {"id": item.key, "type": item.type, "name": item.name}
+        preds = incoming.get(item.key, [])
+        first = preds[0] if preds else None
         if item.type == "task":
             history = []
             for ev in events_by_item.get(item.key, []):
@@ -447,8 +500,8 @@ def plan_to_legacy_state(plan, items, notes, assignees, comments_by_item=None, e
                 "durationType": item.duration_type or "calendar", "progress": item.progress or 0,
                 "offset": item.offset_days or 0, "barText": item.bar_text or "", "category": item.category or "",
                 "color": item.color or "blue", "parentId": parent_id, "groupId": group_id,
-                "assigneeId": item.assignee_key or "", "dependencyId": item.dependency_key or "",
-                "dependencyType": item.dependency_type or "FS", "depLag": item.dependency_lag or 0,
+                "assigneeId": item.assignee_key or "", "dependencyId": first.from_key if first else "",
+                "dependencyType": first.type if first else "FS", "depLag": first.lag if first else 0,
                 "status": item.status or "new",
                 "comments": [
                     {k: v for k, v in {
@@ -476,6 +529,14 @@ def plan_to_legacy_state(plan, items, notes, assignees, comments_by_item=None, e
             row["color"] = item.color or "slate"
             if parent is not None:
                 row["groupId"] = parent.key
+        if preds and item.type in ("task", "milestone"):
+            row["predecessors"] = [{"id": link.from_key, "type": link.type, "lag": link.lag, "lagKind": link.lag_kind}
+                                   for link in preds]
+        if item.deadline:
+            row["deadline"] = item.deadline.isoformat()
+        if item.constraint_type:
+            row["constraintType"] = item.constraint_type
+            row["constraintDate"] = item.constraint_date.isoformat() if item.constraint_date else None
         row.update({k: v for k, v in extra.items() if k not in row})
         row["sortIndex"] = index
         rows.append(row)

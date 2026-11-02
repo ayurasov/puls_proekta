@@ -12,9 +12,9 @@
 import { computed, reactive, toRaw } from 'vue'
 import { api, AuthRequiredError, NetworkError } from '../api/client'
 import { applyBatch, touchedKeys } from './domain/ops'
-import { buildIndex, descendantKeys, flattenTree, parentOf } from './domain/tree'
+import { buildIndex, descendantKeys, flattenTree, parentOf, rowNumbers } from './domain/tree'
 import { hasActiveFilters, myAssigneeKeys, visibilityPredicate } from './domain/filters'
-import { computeDependencyShifts } from './domain/dependencies'
+import { computeDependencyShifts, dependentKeys, effectiveEnd, linkProblem } from './domain/dependencies'
 import { createCalendar } from './domain/calendar'
 import { STEP, insertPosition } from './domain/positions'
 import { addDays, diffDays, todayLocal } from './domain/dates'
@@ -24,9 +24,19 @@ import { countLabel } from '../utils/format'
 const POLL_VISIBLE_MS = 4000
 const POLL_HIDDEN_MS = 30000
 const RETRY_STEPS_MS = [1000, 2000, 5000, 10000, 20000, 30000]
-// Поля, от которых зависят сроки по связям: только их изменение запускает автосдвиг
-const SCHEDULE_FIELDS = new Set(['start', 'end', 'date', 'dependencyKey', 'dependencyType', 'dependencyLag', 'offset',
-  'status', 'completedDate', 'parentKey', 'duration', 'endMode', 'durationType'])
+// Пакет на сервер — не больше стольких операций (сервер принимает до 2000): большая правка уходит частями
+export const MAX_BATCH_OPS = 1500
+
+/**
+ * То в строке, от чего зависят сроки по связям: её сроки, окончание для последующих (у завершённой — дата
+ * завершения, иначе со сдвигом), родитель (рамка подзадачи) и «Начало не ранее». Автосдвиг запускает только правка,
+ * которая это меняет: смена статуса без смены дат не трогает последующие (и не переставляет давно несогласованные).
+ */
+function scheduleSignature(item) {
+  if (!item) return ''
+  return [item.start, item.end, item.date, effectiveEnd(item), item.parentKey || '', item.constraintType || '',
+    item.constraintDate || ''].join('|')
+}
 
 export const DEFAULT_DISPLAY = {
   useRuCalendar: true, showWeekends: true, showHolidays: true, showProgress: true, progressStyle: 'fill', showNotes: true,
@@ -86,9 +96,11 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     plan: null,
     access: 'view',
     items: {},
+    // Связи «предшественник → последующая» (ADR-0012): { key, from, to, type, lag, lagKind }
+    links: {},
     notes: {},
     assignees: {},
-    graveyard: { items: {}, notes: {}, assignees: {} },
+    graveyard: { items: {}, links: {}, notes: {}, assignees: {} },
     users: {},
     revision: 0,
     queue: [],
@@ -126,6 +138,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   const canEdit = computed(() => !state.previewSnapshot && ['edit', 'manage'].includes(state.access) && !state.plan?.isArchived)
   const source = computed(() => state.previewSnapshot || state)
   const itemList = computed(() => Object.values(source.value.items))
+  const linkList = computed(() => Object.values(source.value.links || {}))
   const index = computed(() => buildIndex(itemList.value))
   const calendar = computed(() => createCalendar({
     holidays: state.calendarDays.holidays,
@@ -145,6 +158,9 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         category: (item) => jira.issueFor(item)?.statusCategory || null,
       } : null,
       mine: myAssigneeKeys(assigneeList.value, filterEnv.user),
+      links: linkList.value,
+      // Номера строк — только при поиске: поиск «2.3» находит строку по номеру
+      numbers: (state.view.search || '').trim() ? rowNumbers(index.value, settings.value) : null,
     }
   })
   const filtersActive = computed(() => hasActiveFilters(state.view, filterContext.value))
@@ -199,6 +215,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     state.revision = doc.plan.revision
     state.users = doc.users || {}
     replaceCollection('items', doc.items)
+    replaceCollection('links', doc.links || [])
     replaceCollection('notes', doc.notes)
     replaceCollection('assignees', doc.assignees)
   }
@@ -276,10 +293,21 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   function takeBatch() {
+    const first = state.queue[0]
+    if (first && first.ops.length > MAX_BATCH_OPS) {
+      // Большая правка (автосдвиг длинной цепочки, «Выровнять по связям») уходит частями по порядку, по одной за
+      // запрос; отмена у неё одна. Если часть отклонена, оставшиеся части не отправляются, а план перечитывается.
+      const origin = toRaw(first.origin || first)
+      const head = { ...first, ops: first.ops.slice(0, MAX_BATCH_OPS), origin }
+      const rest = { ...first, ops: first.ops.slice(MAX_BATCH_OPS), origin }
+      head.tags = touchedKeys(head.ops)
+      rest.tags = touchedKeys(rest.ops)
+      state.queue.splice(0, 1, head, rest)
+    }
     const entries = []
     let count = 0
     for (const entry of state.queue) {
-      if (entries.length && (isolate || count + entry.ops.length > 1500)) break
+      if (entries.length && (isolate || count + entry.ops.length > MAX_BATCH_OPS)) break
       entries.push(entry)
       count += entry.ops.length
     }
@@ -326,6 +354,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       state.inFlight = null
       const skip = pendingTags()
       mergeEntities('items', 'item', res.items, skip)
+      mergeEntities('links', 'link', res.links, skip)
       mergeEntities('notes', 'note', res.notes, skip)
       mergeEntities('assignees', 'assignee', res.assignees, skip)
       if (res.plan && !skip.has('plan')) {
@@ -337,7 +366,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       retryStep = 0
       if (res.conflicts?.length && !stopped) {
         const names = [...new Set(res.conflicts.map((c) => c.byName).filter(Boolean))]
-        const rows = res.conflicts.map((c) => state.items[c.key]?.name).filter(Boolean)
+        // Связь — по её последующей строке
+        const rows = res.conflicts.map((c) => state.items[c.entity === 'link' ? state.links[c.key]?.to : c.key]?.name).filter(Boolean)
         ui.toast({
           title: 'Одновременная правка',
           body: `${names.join(', ') || 'Коллега'} только что менял(а) ${rows.length > 1 ? 'строки' : 'строку'} «${rows.slice(0, 2).join('», «')}». Ваши изменения сохранены поверх, прежние значения — в истории.`,
@@ -383,6 +413,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       }
       const [entry] = batch.entries
       dropUndo(entry.undoRef)
+      // Отклонена часть большой правки — её остальные части тоже не отправляются
+      if (entry.origin) state.queue = state.queue.filter((e) => toRaw(e.origin) !== toRaw(entry.origin))
       ui.error(`Не сохранено: ${entry.label || 'изменение'}`, err.message || 'Сервер отклонил изменение')
       resyncNeeded = !stopped
     }
@@ -427,6 +459,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       const openName = openKey ? state.items[openKey]?.name : null
       const changed = [
         ...mergeEntities('items', 'item', res.items, skip),
+        ...mergeEntities('links', 'link', res.links, skip).map((k) => `link:${k}`),
         ...mergeEntities('notes', 'note', res.notes, skip).map((k) => `note:${k}`),
         ...mergeEntities('assignees', 'assignee', res.assignees, skip).map((k) => `assignee:${k}`),
       ]
@@ -551,34 +584,46 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   /**
-   * Сдвиги по связям после правок (если включён автосдвиг) — только для изменённых задач и тех, что от
+   * Сдвиги по связям после правок (если включён автосдвиг) — только для изменённых строк и тех, что от
    * них зависят (по связи или как подзадачи). Несогласованные сроки в других местах плана не трогаются:
    * их выравнивает сотрудник кнопкой «Выровнять по связям».
+   * links — связи после правки (по умолчанию — текущие), seeds — строки, чьи связи меняет правка.
    */
-  function cascadeOps(changes, { all = false, fixed = null } = {}) {
+  function cascadeOps(changes, { all = false, fixed = null, links = null, seeds = [] } = {}) {
     if (!settings.value.display.autoShift) return []
     const hypothetical = itemList.value.map((item) => (changes.has(item.key) ? { ...item, ...changes.get(item.key) } : item))
     for (const [key, fields] of changes) {
       if (!state.items[key] && fields.type) hypothetical.push(fields)
     }
+    const allLinks = links || linkList.value
     let only = null
     if (!all) {
-      only = new Set([...changes].filter(([key, fields]) => !state.items[key] || Object.keys(fields).some((f) => SCHEDULE_FIELDS.has(f))).map(([key]) => key))
+      only = new Set([...changes]
+        .filter(([key, fields]) => !state.items[key] || scheduleSignature(state.items[key]) !== scheduleSignature({ ...state.items[key], ...fields }))
+        .map(([key]) => key))
+      for (const key of seeds) only.add(key)
       if (!only.size) return []
-      let grew = true
-      while (grew) {
-        grew = false
-        for (const item of hypothetical) {
-          if (!only.has(item.key) && (only.has(item.dependencyKey) || only.has(item.parentKey))) { only.add(item.key); grew = true }
+      // Зависящие строки — один обход: последующие по связям и вложенные (рамка родительской задачи)
+      const next = new Map()
+      const add = (from, to) => {
+        if (!next.has(from)) next.set(from, [])
+        next.get(from).push(to)
+      }
+      for (const link of allLinks) add(link.from, link.to)
+      for (const item of hypothetical) if (item.parentKey) add(item.parentKey, item.key)
+      const queue = [...only]
+      while (queue.length) {
+        for (const key of next.get(queue.pop()) || []) {
+          if (!only.has(key)) { only.add(key); queue.push(key) }
         }
       }
     }
-    const shifts = computeDependencyShifts(hypothetical, { only, fixed })
+    const shifts = computeDependencyShifts(hypothetical, { links: allLinks, calendar: calendar.value, only, fixed })
     return [...shifts].map(([key, dates]) => {
       const item = state.items[key]
       const fields = { ...dates }
       // Растянутая задача с окончанием «по длительности»: длительность — по новым срокам
-      if (fixed?.has(key) && item?.endMode === 'duration') {
+      if (fixed?.has(key) && item?.endMode === 'duration' && dates.start) {
         fields.duration = item.durationType === 'working' ? calendar.value.countWorkingDays(dates.start, dates.end) : diffDays(dates.start, dates.end) + 1
       }
       return { op: 'item.update', key, fields }
@@ -648,8 +693,8 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     const item = { key, type, parentKey: parent || null, position, ...data }
     if (type === 'task') {
       Object.assign(item, {
-        status: 'new', endMode: 'date', durationType: 'calendar', progress: 0, offset: 0, dependencyType: 'FS',
-        dependencyLag: 0, color: 'blue', ...defaultDates(data.start), ...data,
+        status: 'new', endMode: 'date', durationType: 'calendar', progress: 0, offset: 0, color: 'blue',
+        ...defaultDates(data.start), ...data,
       })
       item.duration = diffDays(item.start, item.end) + 1
     } else if (type === 'milestone') {
@@ -662,8 +707,16 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     return item
   }
 
-  /** Создать строку; возвращает её ключ. Вставляется после afterKey (среди тех же братьев). */
-  function createItem(type, data = {}, { afterKey = null, parentKey = undefined, label } = {}) {
+  /** Новая связь для операции link.create (проверяют вызывающие). */
+  function newLink({ from, to, type = 'FS', lag = 0, lagKind = 'calendar' }) {
+    return { key: randomKey('l'), from, to, type: type || 'FS', lag: Number(lag) || 0, lagKind: lagKind === 'working' ? 'working' : 'calendar' }
+  }
+
+  /**
+   * Создать строку; возвращает её ключ. Вставляется после afterKey (среди тех же братьев). predecessors —
+   * [{ from, type?, lag?, lagKind? }]: связи от строк плана к новой строке (контекстное меню «Последующая задача»).
+   */
+  function createItem(type, data = {}, { afterKey = null, parentKey = undefined, label, predecessors = [] } = {}) {
     let parent = parentKey
     if (parent === undefined) {
       const after = afterKey ? state.items[afterKey] : null
@@ -674,17 +727,20 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     const ops = renumber.map((r) => ({ op: 'item.update', key: r.key, fields: { position: r.position } }))
     const item = newItem(type, data, key, parent, position)
     ops.push({ op: 'item.create', item })
+    const links = type === 'group' ? [] : predecessors.filter((p) => state.items[p.from]).map((p) => newLink({ ...p, to: key }))
+    for (const link of links) ops.push({ op: 'link.create', link })
     const changes = new Map([[key, item]])
-    commit([...ops, ...(type === 'task' && item.dependencyKey ? cascadeOps(changes) : [])], label || { task: 'Новая задача', milestone: 'Новая веха', group: 'Новая группа' }[type])
+    const cascade = links.length ? cascadeOps(changes, { links: [...linkList.value, ...links] }) : []
+    commit([...ops, ...cascade], label || { task: 'Новая задача', milestone: 'Новая веха', group: 'Новая группа' }[type])
     return key
   }
 
   /**
    * Несколько строк одной правкой (отменяется целиком); возвращает их ключи: [{ type, data, children?, parentKey?,
-   * ref? }]. children — вложенные строки новой группы; parentKey у строки — положить её в другую (уже существующую)
-   * группу. Новые строки — в конец уровня. ref — метка строки внутри списка: data.dependencyRef другой строки
-   * делает её предшественником (связи «блокирует» из Jira); data.dependencyKey — предшественник среди строк плана.
-   * Сроки последующих строк сдвигает автосдвиг — в той же правке.
+   * ref?, predecessors? }]. children — вложенные строки новой группы; parentKey у строки — положить её в другую (уже
+   * существующую) группу. Новые строки — в конец уровня. ref — метка строки внутри списка; predecessors —
+   * [{ ref } | { key }, type?, lag?]: предшественники среди добавляемых строк (по метке; связи «блокирует» из Jira)
+   * или строк плана (по ключу). Сроки последующих строк сдвигает автосдвиг — в той же правке.
    */
   function createItems(list, { parentKey = null, label = 'Новые строки' } = {}) {
     const last = new Map()
@@ -699,30 +755,31 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     const keys = []
     const ops = []
     const refs = new Map()
+    const wanted = []
     const add = (entries, parent) => {
       for (const entry of entries) {
         const target = entry.parentKey !== undefined ? entry.parentKey : parent
         const key = randomKey('i')
         keys.push(key)
         if (entry.ref) refs.set(entry.ref, key)
-        const { dependencyRef, ...data } = entry.data || {}
-        const op = { op: 'item.create', item: newItem(entry.type, data, key, target, nextPositionIn(target)), dependencyRef }
-        ops.push(op)
+        ops.push({ op: 'item.create', item: newItem(entry.type, entry.data || {}, key, target, nextPositionIn(target)) })
+        if (entry.type !== 'group') for (const p of entry.predecessors || []) wanted.push({ ...p, to: key })
         if (entry.children?.length) add(entry.children, key)
       }
     }
     add(list, parentKey)
-    const changes = new Map()
-    for (const op of ops) {
-      if (op.dependencyRef && refs.has(op.dependencyRef) && op.item.type === 'task') op.item.dependencyKey = refs.get(op.dependencyRef)
-      delete op.dependencyRef
-      if (op.item.type === 'task' && op.item.dependencyKey && !state.items[op.item.dependencyKey] && !keys.includes(op.item.dependencyKey)) {
-        delete op.item.dependencyKey
-      }
-      changes.set(op.item.key, op.item)
+    const changes = new Map(ops.map((op) => [op.item.key, op.item]))
+    const rowsByKey = new Map([...index.value.byKey, ...changes])
+    const links = []
+    for (const p of wanted) {
+      const from = p.ref ? refs.get(p.ref) : p.key
+      // Предшественника нет ни в плане, ни среди добавляемых строк, или связь повторила бы другую либо замкнула цикл —
+      // связь пропускается
+      if (!from || linkProblem([...linkList.value, ...links], rowsByKey, from, p.to)) continue
+      links.push(newLink({ ...p, from }))
     }
-    const linked = ops.some((op) => op.item.dependencyKey)
-    return commit([...ops, ...(linked ? cascadeOps(changes) : [])], label) ? keys : []
+    for (const link of links) ops.push({ op: 'link.create', link })
+    return commit([...ops, ...(links.length ? cascadeOps(changes, { links: [...linkList.value, ...links] }) : [])], label) ? keys : []
   }
 
   function duplicateItem(key, { shiftDays = 0 } = {}) {
@@ -730,12 +787,19 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
     if (!item) return null
     const copyKey = randomKey('i')
     const { position, renumber } = nextPosition(item.parentKey && state.items[item.parentKey] ? item.parentKey : null, key)
+    // Копия — без связей: связи исходной строки к копии не относятся
     const copy = { ...item, key: copyKey, name: `${item.name} (копия)`, position, commentCount: 0 }
     delete copy.updatedAt; delete copy.updatedById; delete copy.updatedRev; delete copy.deleted
+    // Идентификаторы строки в MS Project (extra.msp) — только у исходной: иначе обновление из файла приняло бы копию
+    // за строку файла (сервер их из браузера и не примет)
+    if (copy.extra?.msp) {
+      const { msp: _msp, ...rest } = copy.extra
+      if (Object.keys(rest).length) copy.extra = rest
+      else delete copy.extra
+    }
     if (item.type === 'task') {
       copy.start = addDays(item.start, shiftDays)
       copy.end = addDays(item.end, shiftDays)
-      copy.dependencyKey = null
     }
     if (item.type === 'milestone') copy.date = addDays(item.date, shiftDays)
     const ops = renumber.map((r) => ({ op: 'item.update', key: r.key, fields: { position: r.position } }))
@@ -746,7 +810,7 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
 
   /**
    * Удалить строки. withChildren — вместе с вложенными; иначе вложенные строки поднимаются
-   * на уровень удалённой. Связи на удалённые строки снимаются, их пометки удаляются.
+   * на уровень удалённой. Связи удалённых строк и их пометки удаляются (отмена возвращает и их).
    */
   function deleteItems(keys, { withChildren = false, label = 'Удаление' } = {}) {
     const idx = index.value
@@ -767,16 +831,24 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
         ops.push({ op: 'item.update', key: child.key, fields: { parentKey: newParent || null } })
       }
     }
-    for (const item of itemList.value) {
-      if (!toDelete.has(item.key) && item.dependencyKey && toDelete.has(item.dependencyKey)) {
-        ops.push({ op: 'item.update', key: item.key, fields: { dependencyKey: null } })
+    const removed = new Set()
+    for (const link of linkList.value) {
+      if (toDelete.has(link.from) || toDelete.has(link.to)) {
+        ops.push({ op: 'link.delete', key: link.key })
+        removed.add(link.key)
       }
     }
     for (const note of noteList.value) {
       if (note.rowKey && toDelete.has(note.rowKey)) ops.push({ op: 'note.delete', key: note.key })
     }
     for (const key of toDelete) ops.push({ op: 'item.delete', key })
-    const entry = commit(ops, label)
+    // Последующие удалённых строк встают по оставшимся связям, поднятые вложенные — по рамке нового родителя (как
+    // при удалении связи)
+    const moved = new Map(ops.filter((op) => op.op === 'item.update').map((op) => [op.key, op.fields]))
+    const seeds = linkList.value.filter((l) => removed.has(l.key) && !toDelete.has(l.to)).map((l) => l.to)
+    const cascade = cascadeOps(moved, { links: linkList.value.filter((l) => !removed.has(l.key)), seeds })
+      .filter((op) => !toDelete.has(op.key))
+    const entry = commit([...ops, ...cascade], label)
     if (toDelete.has(state.view.panelKey)) state.view.panelKey = null
     if (toDelete.has(state.view.selectedKey)) state.view.selectedKey = null
     return entry
@@ -822,6 +894,57 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       fields.offset = 0
     }
     updateItem(key, fields, 'Статус')
+  }
+
+  // ---------- связи ----------
+  /** Проверить связь так же, как сервер; при ошибке — сообщение сотруднику и false. */
+  function checkLink(from, to, ignoreKey = null) {
+    const problem = linkProblem(linkList.value, index.value.byKey, from, to, ignoreKey)
+    if (problem) ui.error(problem)
+    return !problem
+  }
+
+  /** Новая связь from → to; возвращает её ключ или null. Последующая строка сдвигается автосдвигом. */
+  function createLink({ from, to, type = 'FS', lag = 0, lagKind = 'calendar' }, label = 'Новая связь') {
+    if (canEdit.value && !checkLink(from, to)) return null
+    const link = newLink({ from, to, type, lag, lagKind })
+    const after = [...linkList.value, link]
+    return commit([{ op: 'link.create', link }, ...cascadeOps(new Map(), { links: after, seeds: [to] })], label) ? link.key : null
+  }
+
+  /** Изменить связь (тип, лаг, вид лага или концы); последующие строки сдвигаются автосдвигом. */
+  function updateLink(key, fields, label = 'Правка связи') {
+    const link = state.links[key]
+    if (!link) return
+    const diff = {}
+    for (const [field, value] of Object.entries(fields)) if (link[field] !== value) diff[field] = value
+    if (!Object.keys(diff).length) return
+    const next = { ...link, ...diff }
+    if ((diff.from || diff.to) && canEdit.value && !checkLink(next.from, next.to, key)) return
+    const after = linkList.value.map((l) => (l.key === key ? next : l))
+    commit([{ op: 'link.update', key, fields: diff }, ...cascadeOps(new Map(), { links: after, seeds: [link.to, next.to] })], label)
+  }
+
+  /** Удалить связь; последующая строка встаёт по оставшимся связям. */
+  function deleteLink(key, label = 'Удаление связи') {
+    const link = state.links[key]
+    if (!link) return
+    const after = linkList.value.filter((l) => l.key !== key)
+    commit([{ op: 'link.delete', key }, ...cascadeOps(new Map(), { links: after, seeds: [link.to] })], label)
+  }
+
+  /** Связи строки: { predecessors, successors } — только со строками, которые есть в плане. */
+  function linksOf(key) {
+    const items = source.value.items
+    return {
+      predecessors: linkList.value.filter((l) => l.to === key && items[l.from]),
+      successors: linkList.value.filter((l) => l.from === key && items[l.to]),
+    }
+  }
+
+  /** Строки, зависящие от key (прямо или по цепочке): связь от них к key замкнула бы цикл. */
+  function dependentsOf(key) {
+    return dependentKeys(linkList.value, key)
   }
 
   // ---------- пометки, исполнители, план ----------
@@ -889,10 +1012,11 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
   }
 
   return reactive({
-    state, settings, range, canEdit, itemList, index, calendar, visibleRows, filtersActive, filterContext, assigneeList, noteList,
-    todayMarker, pendingCount, categories, source,
+    state, settings, range, canEdit, itemList, linkList, index, calendar, visibleRows, filtersActive, filterContext, assigneeList,
+    noteList, todayMarker, pendingCount, categories, source,
     load, start, stop, flushNow, poll, saveView, setFilterEnv,
     commit, undo, redo, updateItem, updateItems, createItem, createItems, duplicateItem, deleteItems, moveItem, setStatus,
+    createLink, updateLink, deleteLink, linksOf, dependentsOf,
     createNote, updateNote, deleteNote, createAssignee, updateAssignee, deleteAssignee, updatePlan,
     select, toggleCollapse, collapseAll, revealItem, cascadeOps,
   })

@@ -11,7 +11,7 @@ from app.security import ApiError
 from app.services.legacy_format import document_from_any
 from app.services.plan_doc import snapshot_document
 from app.services.plan_ops import PlanEditor
-from app.services.plan_schema import default_settings, normalize_settings
+from app.services.plan_schema import default_settings, document_links, normalize_settings, without_legacy_fields
 
 
 def new_plan_key():
@@ -48,17 +48,26 @@ def create_plan(project, user, title, settings=None, subtitle=""):
 
 
 def fill_plan_from_document(plan, user, doc, event_summary):
-    """Заполнить пустой план содержимым документа одной ревизией."""
+    """Заполнить пустой план содержимым документа одной ревизией.
+
+    Связи — после всех строк (с теми же ключами: копия плана и снимок их сохраняют); у документа до 0.7.0
+    предшественник строки становится связью. Связь, которую нельзя создать (строки нет, цикл), пропускается.
+    """
     ops = []
     for assignee in doc.get("assignees", []):
         ops.append({"op": "assignee.create", "assignee": assignee})
     for item in doc.get("items", []):
-        ops.append({"op": "item.create", "item": item})
+        ops.append({"op": "item.create", "item": without_legacy_fields(item) if isinstance(item, dict) else item})
+    for link in document_links(doc):
+        ops.append({"op": "link.create", "link": link})
     for note in doc.get("notes", []):
         ops.append({"op": "note.create", "note": note})
-    editor = PlanEditor(plan, user)
+    # Пакет собирает сервер: идентификаторы строк в MS Project (extra.msp) копия плана сохраняет
+    editor = PlanEditor(plan, user, trusted=True)
+    editor.skip_invalid_links = True
     if ops:
-        editor.apply(ops)
+        # Пакет собирает сервер: копия большого плана не упирается в ограничение пакета из браузера
+        editor.apply(ops, max_ops=None)
     plan.revision = editor.revision
     plan.updated_at = editor.now
     db.session.add(PlanEvent(plan_id=plan.id, revision=plan.revision, entity="plan", action="create",

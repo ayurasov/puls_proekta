@@ -3,22 +3,24 @@
  * ответа сервера) и вычисление обратных операций для «Отменить» / «Повторить».
  * Формат операций совпадает с API POST /api/plans/{id}/ops.
  *
- * Состояние: { items, notes, assignees } — объекты «ключ → сущность» и graveyard —
+ * Состояние: { items, links, notes, assignees } — объекты «ключ → сущность» и graveyard —
  * удалённые сущности (для восстановления при отмене удаления).
  */
 
-const COLLECTIONS = { item: 'items', note: 'notes', assignee: 'assignees' }
+const COLLECTIONS = { item: 'items', link: 'links', note: 'notes', assignee: 'assignees' }
 
 export function entityOf(op) {
   return op.op.split('.')[0]
 }
 
 function collection(state, entity) {
+  if (!state[COLLECTIONS[entity]]) state[COLLECTIONS[entity]] = {}
   return state[COLLECTIONS[entity]]
 }
 
 function graveyard(state, entity) {
-  if (!state.graveyard) state.graveyard = { items: {}, notes: {}, assignees: {} }
+  if (!state.graveyard) state.graveyard = { items: {}, links: {}, notes: {}, assignees: {} }
+  if (!state.graveyard[COLLECTIONS[entity]]) state.graveyard[COLLECTIONS[entity]] = {}
   return state.graveyard[COLLECTIONS[entity]]
 }
 
@@ -97,7 +99,7 @@ export function applyBatch(state, ops) {
   return inverse
 }
 
-/** Ключи сущностей, которые затрагивает пакет: 'item:r12', 'note:n1', 'plan'. */
+/** Ключи сущностей, которые затрагивает пакет: 'item:r12', 'link:l1', 'note:n1', 'plan'. */
 export function touchedKeys(ops) {
   const keys = new Set()
   for (const op of ops) {

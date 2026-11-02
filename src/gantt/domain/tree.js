@@ -17,6 +17,40 @@ export function buildIndex(items) {
   return { byKey, children, roots: children.get(null) || [] }
 }
 
+/**
+ * Номера строк по структуре плана (1, 1.2, 1.2.3 — как WBS в MS Project): Map(key → номер). Считается по всему
+ * дереву, а не по видимым строкам: номер строки не меняется от фильтров и свёрнутых групп. Цикл в данных
+ * (родитель — собственный потомок) номеров не зацикливает: такие строки без номера.
+ */
+export function outlineNumbers(index) {
+  const out = new Map()
+  const walk = (parentKey, prefix) => {
+    const list = index.children.get(parentKey) || []
+    list.forEach((item, i) => {
+      if (out.has(item.key)) return
+      const number = prefix ? `${prefix}.${i + 1}` : String(i + 1)
+      out.set(item.key, number)
+      walk(item.key, number)
+    })
+  }
+  walk(null, '')
+  return out
+}
+
+/**
+ * Номера строк плана: Map(key → номер). У мастер-копии MS Project — коды WBS из файла (у строк, добавленных в
+ * «Пульсе», номера нет: вычисленный мог бы совпасть с кодом из файла), иначе — номер по структуре.
+ */
+export function rowNumbers(index, settings) {
+  const source = settings?.source
+  if (source?.kind === 'msproject' && source.master) {
+    const out = new Map()
+    for (const item of index.byKey.values()) if (item.extra?.msp?.wbs) out.set(item.key, item.extra.msp.wbs)
+    return out
+  }
+  return outlineNumbers(index)
+}
+
 export function comparePosition(a, b) {
   return (a.position - b.position) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
 }
@@ -79,6 +113,15 @@ export function shiftedEnd(task) {
   if (!task || task.type !== 'task') return task?.date || task?.end || ''
   const offset = Number(task.offset || 0)
   return offset ? addDays(task.end, offset) : task.end
+}
+
+/**
+ * Крайний срок сорван (ADR-0012, 5.4): окончание задачи со сдвигом (у вехи — её дата) позже крайнего срока.
+ */
+export function deadlineMissed(item) {
+  if (!item?.deadline) return false
+  const end = item.type === 'milestone' ? item.date : item.type === 'task' ? shiftedEnd(item) : null
+  return Boolean(end) && end > item.deadline
 }
 
 /**

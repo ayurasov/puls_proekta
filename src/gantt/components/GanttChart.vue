@@ -2,11 +2,13 @@
 import { computed, inject, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import AppIcon from '../../components/common/AppIcon.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
-import { createChartContext, dependencyPaths, legendEntries, rowModel } from '../chartModel'
+import { DEADLINE_COLORS, createChartContext, deadlinePath, dependencyPaths, legendEntries, rowModel } from '../chartModel'
 import { addDays, diffDays, formatDay, formatDayNoYear } from '../domain/dates'
 import { dayX, fitZoom, nextZoom } from '../domain/layout'
-import { EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, resolveColor, textColorOnWhite } from '../domain/colors'
-import { descendantKeys, parentOf } from '../domain/tree'
+import {
+  CONSTRAINT_TYPES, EARLY_TEXT, LATE_TEXT, STATUSES, STATUS_BY_KEY, linkShortLabel, resolveColor, textColorOnWhite,
+} from '../domain/colors'
+import { deadlineMissed, descendantKeys, parentOf, rowNumbers } from '../domain/tree'
 import { resolveEnd } from '../domain/calendar'
 import { countLabel } from '../../utils/format'
 
@@ -26,6 +28,8 @@ const quickName = ref('')
 const menu = ref(null)
 const tooltip = ref(null)
 const drag = ref(null)
+// Связь перетаскиванием от кружка у конца полосы к другой строке (как в MS Project): { from, x1, y1, x2, y2, target }
+const linkDrag = ref(null)
 const preview = ref(null)
 const rowDrag = ref(null)
 const resizing = ref(false)
@@ -33,6 +37,11 @@ const resizing = ref(false)
 const COLUMN_WIDTHS = { start: 74, end: 74, duration: 54, assignee: 120, progress: 52, jira: 150 }
 const columns = computed(() => Object.entries(COLUMN_WIDTHS)
   .filter(([key]) => view.columns[key] && (key !== 'jira' || jira.state.connected)).map(([key, width]) => ({ key, width })))
+// Номер строки по структуре (1.2.3); в плане, который ведётся в MS Project, — код WBS из файла
+const numbers = computed(() => (view.columns.wbs ? rowNumbers(editor.index, editor.settings) : null))
+function numberFor(item) {
+  return numbers.value?.get(item.key) || ''
+}
 const MIN_NAME_WIDTH = 140
 const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
 const gridWidth = computed(() => nameWidth.value + columns.value.reduce((s, c) => s + c.width, 0))
@@ -61,7 +70,7 @@ const arrows = computed(() => {
   if (!display.value.showDependencies) return []
   // Связи считаются по всем видимым строкам, рисуются только пересекающие окно
   const all = rows.value.map((row, i) => (i >= windowRange.value.start - 60 && i < windowRange.value.end + 60 ? rowModel(row, i, ctx.value, preview.value) : null)).filter(Boolean)
-  return dependencyPaths(all, ctx.value)
+  return dependencyPaths(all, ctx.value, editor.linkList)
 })
 const legend = computed(() => (display.value.legendEnabled ? legendEntries(editor.itemList, display.value, editor.settings.categories || []) : []))
 // Легенда — в одну строку: что не помещается, открывается кнопкой «+N»
@@ -213,7 +222,6 @@ function metaLine(item) {
     if (item.assigneeKey) parts.push({ text: assigneeName(item.assigneeKey) })
     if (item.category) parts.push({ text: item.category })
     if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? LATE_TEXT : EARLY_TEXT })
-    if (item.dependencyLag) parts.push({ text: `лаг ${item.dependencyLag > 0 ? '+' : ''}${item.dependencyLag} д` })
     if (item.commentCount) parts.push({ text: `💬 ${item.commentCount}` })
     const issue = jira.issueFor(item)
     if (issue) parts.push({ text: `${issue.key}: ${issue.status}`, color: JIRA_COLORS[issue.statusCategory] })
@@ -343,6 +351,10 @@ function onBarDown(event) {
   const item = state.items[key] || editor.source.items[key]
   if (!item) return
   event.preventDefault()
+  if (handle === 'link') {
+    startLinkDrag(event, key)
+    return
+  }
   drag.value = {
     key, kind, handle, startX: event.clientX, moved: false,
     copy: kind === 'task' && handle === 'move' && (event.ctrlKey || event.metaKey || event.altKey),
@@ -370,7 +382,44 @@ function clampToParent(item, start, end, keepDuration) {
 }
 const maxDay = (a, b) => (a > b ? a : b)
 
+// ---------- связь перетаскиванием ----------
+function svgPoint(event) {
+  const rect = event.currentTarget.getBoundingClientRect()
+  return { x: event.clientX - rect.left, y: event.clientY - rect.top }
+}
+function startLinkDrag(event, key) {
+  const m = models.value.find((model) => model.key === key)
+  if (!m?.bar || !editor.canEdit) return
+  const x1 = m.bar.endX + 9
+  const y1 = m.bar.y + m.bar.h / 2
+  linkDrag.value = { from: key, x1, y1, x2: x1, y2: y1, target: null }
+  tooltip.value = null
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+}
+function moveLinkDrag(event) {
+  const d = linkDrag.value
+  const p = svgPoint(event)
+  d.x2 = p.x
+  d.y2 = p.y
+  const over = document.elementFromPoint(event.clientX, event.clientY)?.closest('[data-key]')
+  const key = over?.dataset.kind === 'task' || over?.dataset.kind === 'milestone' ? over.dataset.key : null
+  d.target = key && key !== d.from ? key : null
+}
+function endLinkDrag(event) {
+  const d = linkDrag.value
+  linkDrag.value = null
+  event.currentTarget.releasePointerCapture?.(event.pointerId)
+  if (!d?.target) return
+  const from = state.items[d.from]
+  const to = state.items[d.target]
+  if (editor.createLink({ from: d.from, to: d.target, type: 'FS' }, `Связь «${from?.name}» → «${to?.name}»`)) editor.select(d.target)
+}
+
 function onBarMove(event) {
+  if (linkDrag.value) {
+    moveLinkDrag(event)
+    return
+  }
   const d = drag.value
   if (!d) {
     updateTooltip(event)
@@ -416,6 +465,10 @@ function onBarMove(event) {
 }
 
 function onBarUp(event) {
+  if (linkDrag.value) {
+    endLinkDrag(event)
+    return
+  }
   const d = drag.value
   drag.value = null
   const finalPreview = preview.value
@@ -484,11 +537,10 @@ const tooltipData = computed(() => {
       rowsOut.push(['Срок', `${formatDay(item.start)} — ${formatDay(item.end)} (${diffDays(item.start, item.end) + 1} дн.)`])
       if (item.offset) rowsOut.push(['Сдвиг', `${item.offset > 0 ? '+' : ''}${item.offset} дн., до ${formatDay(addDays(item.end, item.offset))}`])
       if (item.completedDate) rowsOut.push(['Завершена', formatDay(item.completedDate)])
+      rowsOut.push(...scheduleRows(item))
     }
     if (fields.includes('progress') && item.progress) rowsOut.push(['Прогресс', `${item.progress}%`])
-    if (fields.includes('dependency') && item.dependencyKey && editor.source.items[item.dependencyKey]) {
-      rowsOut.push(['Зависит от', editor.source.items[item.dependencyKey].name])
-    }
+    if (fields.includes('dependency') && predecessorNames(item.key)) rowsOut.push(['Зависит от', predecessorNames(item.key)])
     if (fields.includes('assignee') && item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
     if (item.category) rowsOut.push(['Категория', item.category])
     const issue = jira.issueFor(item)
@@ -498,6 +550,8 @@ const tooltipData = computed(() => {
     } else if (issue === null) rowsOut.push(['Jira', `${jira.keyFor(item)} — нет доступа или задача удалена`])
   } else if (item.type === 'milestone') {
     rowsOut.push(['Дата', formatDay(item.date)])
+    rowsOut.push(...scheduleRows(item))
+    if (fields.includes('dependency') && predecessorNames(item.key)) rowsOut.push(['Зависит от', predecessorNames(item.key)])
     if (item.comment) rowsOut.push(['Комментарий', item.comment])
     if (item.assigneeKey) rowsOut.push(['Исполнитель', assigneeName(item.assigneeKey)])
   } else {
@@ -512,8 +566,30 @@ const tooltipData = computed(() => {
     const who = item.updatedById && state.users[String(item.updatedById)]?.name
     rowsOut.push(['Изменено', new Date(item.updatedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) + (who ? ` · ${who}` : '')])
   }
-  return { title: item.name, type: item.type, rows: rowsOut }
+  // Номер строки (1.2.3 или код WBS из MS Project) — в заголовке подсказки, если колонка номеров включена
+  const number = numberFor(item)
+  return { title: number ? `${number} ${item.name}` : item.name, type: item.type, rows: rowsOut }
 })
+
+/** Предшественники строки для подсказки: «Анализ; Дизайн (НН +2 дн.)». */
+function predecessorNames(key) {
+  return editor.linksOf(key).predecessors.map((link) => {
+    const short = linkShortLabel(link)
+    return `${editor.source.items[link.from].name}${short ? ` (${short})` : ''}`
+  }).join('; ')
+}
+/** Крайний срок и ограничение даты строки — строки подсказки. */
+function scheduleRows(item) {
+  const out = []
+  if (item.deadline) {
+    const missed = deadlineMissed(item)
+    out.push(['Крайний срок', `${formatDay(item.deadline)}${missed ? ' — сорван' : ''}`, missed ? DEADLINE_COLORS.missed : null])
+  }
+  if (item.constraintType && CONSTRAINT_TYPES[item.constraintType]) {
+    out.push(['Ограничение', `${CONSTRAINT_TYPES[item.constraintType]}${item.constraintDate ? ` ${formatDay(item.constraintDate)}` : ''}`])
+  }
+  return out
+}
 
 // ---------- контекстное меню ----------
 function dateAtClientX(clientX) {
@@ -550,8 +626,10 @@ function menuAction(action) {
     case 'note': actions.openNoteEditor({ date, rowKey: item?.key || null }); break
     case 'child': if (can) select(editor.createItem('task', { start: date }, { parentKey: item.key })); break
     case 'next': if (can) {
-      const start = addDays(item.end, 1)
-      select(editor.createItem('task', { start, end: addDays(start, 4), dependencyKey: item.key, dependencyType: 'FS', name: 'Новая задача' }, { afterKey: item.key }))
+      const start = addDays(item.type === 'milestone' ? item.date : item.end, 1)
+      select(editor.createItem('task', { start, end: addDays(start, 4), name: 'Новая задача' }, {
+        afterKey: item.key, predecessors: [{ from: item.key, type: 'FS' }], label: 'Последующая задача',
+      }))
     } break
     case 'duplicate': if (can) select(editor.duplicateItem(item.key)); break
     case 'delete': if (can) actions.deleteRows([item.key]); break
@@ -665,7 +743,7 @@ function noteLabel(note) {
                     @click.stop @dblclick.stop @keydown.enter.prevent="finishRename()" @keydown.esc.prevent="finishRename(false)" @blur="finishRename()"
                   />
                   <template v-else>
-                    <div class="name" :title="row.item.name">{{ row.item.name }}</div>
+                    <div class="name" :title="numberFor(row.item) ? `${numberFor(row.item)} ${row.item.name}` : row.item.name"><span v-if="numberFor(row.item)" class="wbs" data-testid="row-number">{{ numberFor(row.item) }}</span>{{ row.item.name }}</div>
                     <div v-if="rowHeight >= 36 && metaLine(row.item).length" class="meta">
                       <template v-for="(part, i) in metaLine(row.item)" :key="i">
                         <span v-if="i" class="sep">·</span><span :style="part.color ? { color: part.color } : null">{{ part.text }}</span>
@@ -736,6 +814,9 @@ function noteLabel(note) {
                   <template v-if="editor.canEdit">
                     <rect class="handle-zone" data-handle="left" :x="m.bar.x - 2" :y="m.bar.y" width="8" :height="m.bar.h" />
                     <rect class="handle-zone" data-handle="right" :x="m.bar.x + m.bar.w - 6" :y="m.bar.y" width="8" :height="m.bar.h" />
+                    <circle class="link-handle" data-handle="link" data-testid="link-handle" :cx="m.bar.endX + 9" :cy="m.bar.y + m.bar.h / 2" r="4.5">
+                      <title>Перетащите на другую строку — связь «окончание → начало»</title>
+                    </circle>
                   </template>
                 </g>
                 <g v-if="m.group" class="group-bar" :class="{ selected: m.key === selectedKey, editable: editor.canEdit }" :data-key="m.key" data-kind="group" :data-tip="m.key">
@@ -748,6 +829,8 @@ function noteLabel(note) {
                   <path :d="`M${m.milestone.x} ${m.milestone.y - 9} l9 9 l-9 9 l-9 -9 Z`" :fill="m.milestone.fill" class="diamond" />
                   <text class="milestone-text" :x="m.milestone.x + 13" :y="m.milestone.y + 4">{{ m.milestone.label }}</text>
                 </g>
+                <path v-if="m.deadline" class="deadline" :class="{ missed: m.deadline.missed }" :d="deadlinePath(m.deadline)" :fill="m.deadline.color" :data-tip="m.key" :data-deadline="m.key" data-testid="deadline-marker" />
+                <rect v-if="linkDrag && linkDrag.target === m.key" class="link-target" x="0" :y="m.y + 1" :width="ctx.width" :height="rowHeight - 2" />
                 <g v-for="note in m.notes" :key="note.key" class="note" :data-tip="note.key" data-tip-kind="note" @click.stop="actions.openNoteEditor({ noteKey: note.key })" @pointerdown.stop>
                   <path :d="`M${note.x - 5} ${note.y + 5} a5 5 0 1 1 10 0 c0 3 -5 9 -5 9 c0 0 -5 -6 -5 -9 Z`" :fill="note.color" />
                   <circle :cx="note.x" :cy="note.y + 5" r="1.8" fill="#fff" />
@@ -759,8 +842,9 @@ function noteLabel(note) {
               <line v-for="line in ctx.milestoneLines" :key="'ml' + line.key" :x1="line.x" :x2="line.x" y1="0" :y2="bodyHeight" :stroke="line.color" :stroke-dasharray="dash(line.style)" />
             </g>
             <g class="arrows">
-              <path v-for="a in arrows" :key="a.key" :d="a.d" :class="{ active: a.from === selectedKey || a.to === selectedKey }"
+              <path v-for="a in arrows" :key="a.key" :d="a.d" :class="{ active: a.from === selectedKey || a.to === selectedKey }" :data-link="a.key"
                     :marker-end="a.from === selectedKey || a.to === selectedKey ? 'url(#arrow-active)' : 'url(#arrow)'" />
+              <line v-if="linkDrag" class="link-ghost" :x1="linkDrag.x1" :y1="linkDrag.y1" :x2="linkDrag.x2" :y2="linkDrag.y2" marker-end="url(#arrow-active)" />
             </g>
             <g v-if="preview?.__copyShift !== undefined && drag?.key" class="copy-ghost">
               <template v-for="m in models" :key="'ghost' + m.key">
@@ -809,7 +893,11 @@ function noteLabel(note) {
             </button>
             <div class="menu-separator" />
             <button class="menu-item" type="button" @click="menuAction('child')"><AppIcon name="child" /> Подзадача</button>
-            <button class="menu-item" type="button" @click="menuAction('next')"><AppIcon name="arrowRight" /> Следующая задача (связь)</button>
+            <button class="menu-item" type="button" @click="menuAction('next')"><AppIcon name="arrowRight" /> Последующая задача</button>
+          </template>
+          <template v-if="menu.item.type === 'milestone'">
+            <div class="menu-separator" />
+            <button class="menu-item" type="button" @click="menuAction('next')"><AppIcon name="arrowRight" /> Последующая задача</button>
           </template>
           <template v-if="menu.item.type === 'group'">
             <div class="menu-separator" />
@@ -889,6 +977,7 @@ function noteLabel(note) {
 .type-milestone .mark { color: #0f766e; }
 .name-block { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; }
 .name { font-size: 13px; line-height: 1.3; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wbs { margin-right: 6px; color: var(--color-text-muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .type-group .name { font-weight: 700; }
 .meta { font-size: 11.5px; color: var(--color-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.35; }
 .meta .sep { margin: 0 4px; opacity: 0.6; }
@@ -955,6 +1044,12 @@ function noteLabel(note) {
 .note-text { font-size: 10.5px; font-weight: 650; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
 .arrows path { fill: none; stroke: #a7b0c2; stroke-width: 1.3; pointer-events: none; }
 .arrows path.active { stroke: var(--color-primary); stroke-width: 1.8; }
+/* Связь перетаскиванием: кружок у конца полосы виден при наведении и у выбранной строки */
+.link-handle { fill: #fff; stroke: var(--color-primary); stroke-width: 1.6; opacity: 0; cursor: crosshair; transition: opacity 0.12s; }
+.task:hover .link-handle, .task.selected .link-handle { opacity: 1; }
+.link-ghost { stroke: var(--color-primary); stroke-width: 1.6; stroke-dasharray: 5 4; pointer-events: none; }
+.link-target { fill: rgba(79, 124, 255, 0.1); stroke: var(--color-primary); stroke-dasharray: 4 3; pointer-events: none; }
+.deadline { stroke: #fff; stroke-width: 1; }
 .copy-ghost rect { fill: rgba(79, 124, 255, 0.25); stroke: var(--color-primary); stroke-dasharray: 4 3; pointer-events: none; }
 .flash .bar { animation: flash-bar 2.4s ease; }
 @keyframes flash-bar { 0%, 30% { filter: drop-shadow(0 0 6px #facc15); } 100% { filter: none; } }

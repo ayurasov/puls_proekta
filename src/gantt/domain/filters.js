@@ -1,6 +1,7 @@
 import { addDays, endOfMonth, formatDay, isValidDay, startOfMonth, startOfWeek } from './dates'
 import { STATUS_BY_KEY } from './colors'
-import { ancestorKeys, parentOf, shiftedEnd } from './tree'
+import { ancestorKeys, deadlineMissed, parentOf, shiftedEnd } from './tree'
+import { linksFromItems } from './dependencies'
 
 /**
  * Поиск и фильтры строк — логика 1.0.1 (ADR-0006), расширенная в 0.4:
@@ -16,7 +17,8 @@ import { ancestorKeys, parentOf, shiftedEnd } from './tree'
  * * ctx.today — 'YYYY-MM-DD', от него считаются «Эта неделя», «Просрочены» и т. п.;
  * * ctx.jira — { linked(item), differs(item), category(item) } или null, если Jira не подключена
  *   (тогда отметки группы Jira не действуют);
- * * ctx.mine — ключи исполнителей плана, которые относятся к текущему сотруднику (myAssigneeKeys).
+ * * ctx.mine — ключи исполнителей плана, которые относятся к текущему сотруднику (myAssigneeKeys);
+ * * ctx.links — связи плана (для «Со связями»; без них — поля строк до 0.7.0).
  */
 export const NONE = '__none__'
 
@@ -31,6 +33,7 @@ export const DATE_OPTIONS = [
   { value: 'overdue', label: 'Просрочены', hint: 'Не завершены, а плановое окончание уже прошло — в том числе со сдвигом срока' },
   { value: 'shifted', label: 'Сроки сдвинуты', hint: 'Задачи со сдвигом: просрочка или ранняя сдача' },
   { value: 'noDates', label: 'Без дат', hint: 'Задачи без начала или окончания' },
+  { value: 'deadline', label: 'Срыв крайнего срока', hint: 'Окончание (со сдвигом) позже крайнего срока задачи' },
 ]
 export const JIRA_OPTIONS = [
   { value: 'linked', label: 'Связаны с Jira', hint: 'Строки со ссылкой на задачу подключённой Jira' },
@@ -46,7 +49,7 @@ export const JIRA_CATEGORY_OPTIONS = [
 export const TRAIT_OPTIONS = [
   { value: 'milestones', label: 'Только вехи', hint: 'Показать вехи (с их группами) вместо задач' },
   { value: 'comments', label: 'С комментариями', hint: 'Строки, у которых есть комментарии' },
-  { value: 'dependencies', label: 'С зависимостями', hint: 'Задачи с предшественником или сами чьи-то предшественники' },
+  { value: 'dependencies', label: 'Со связями', hint: 'Задачи с предшественниками или сами чьи-то предшественники' },
 ]
 
 const OPTION_LABELS = {
@@ -108,6 +111,7 @@ function matchesDate(item, option, env) {
   if (option === 'overdue') return isOverdue(item, env.today)
   if (option === 'shifted') return item.type === 'task' && Number(item.offset || 0) !== 0
   if (option === 'noDates') return !itemSpan(item)
+  if (option === 'deadline') return deadlineMissed(item)
   const range = periodRange(option, env.today, env.filters?.period)
   const span = range && itemSpan(item)
   return Boolean(span) && (!range.to || span.start <= range.to) && (!range.from || span.end >= range.from)
@@ -141,14 +145,14 @@ const TESTS = {
     && Boolean(env.mine?.has(item.assigneeKey)),
 }
 
-/** Задачи со связью «предшественник» — и ведомые, и их предшественники. */
-function dependencyKeys(items) {
+/** Строки со связями — и последующие, и их предшественники. */
+function dependencyKeys(items, links) {
   const keys = new Set(items.map((i) => i.key))
   const out = new Set()
-  for (const item of items) {
-    if (item.dependencyKey && item.dependencyKey !== item.key && keys.has(item.dependencyKey)) {
-      out.add(item.key)
-      out.add(item.dependencyKey)
+  for (const link of links || linksFromItems(items)) {
+    if (link.from !== link.to && keys.has(link.from) && keys.has(link.to)) {
+      out.add(link.from)
+      out.add(link.to)
     }
   }
   return out
@@ -175,16 +179,18 @@ function compile(filters, ctx, items) {
   const conditions = activeConditions(filters, ctx)
   if (!conditions.length) return null
   const wantsLinks = conditions.some((c) => c.group === 'traits' && c.values.includes('dependencies'))
-  const env = { ...ctx, filters, linked: wantsLinks ? dependencyKeys(items) : null }
+  const env = { ...ctx, filters, linked: wantsLinks ? dependencyKeys(items, ctx.links) : null }
   // «Только вехи» — ограничение «и», а не одно из «или» группы «Тип и прочее»: отбираются только вехи, и к ним
   // применяются остальные условия (вехи с комментариями, вехи исполнителя)
   const milestones = conditions.some((c) => c.group === 'traits' && c.values.includes('milestones'))
   const rest = milestones
     ? conditions.map((c) => (c.group === 'traits' ? { ...c, values: c.values.filter((v) => v !== 'milestones') } : c)).filter((c) => c.values.length)
     : conditions
+  // Крайний срок бывает и у вехи: «Срыв крайнего срока» отбирает и вехи (как метка на диаграмме и статистика)
+  const deadlines = conditions.some((c) => c.group === 'dates' && c.values.includes('deadline'))
   return {
     milestones,
-    test: (item) => item.type === (milestones ? 'milestone' : 'task')
+    test: (item) => (item.type === (milestones ? 'milestone' : 'task') || (deadlines && item.type === 'milestone'))
       && rest.every(({ group, values }) => values.some((value) => TESTS[group](item, value, env))),
   }
 }
@@ -209,8 +215,11 @@ export function visibilityPredicate(index, filters, ctx = {}) {
   let searchVisible = null
   if (search) {
     searchVisible = new Set()
+    // «2.3» — строка с этим номером и всё, что в ней (номера — ctx.numbers, Map(key → номер))
+    const number = /^\d+(\.\d+)*\.?$/.test(search) && ctx.numbers ? search.replace(/\.$/, '') : null
     for (const item of items) {
-      if ((item.name || '').toLowerCase().includes(search)) {
+      const own = number ? ctx.numbers.get(item.key) : null
+      if ((item.name || '').toLowerCase().includes(search) || (own && (own === number || own.startsWith(`${number}.`)))) {
         searchVisible.add(item.key)
         for (const a of ancestorKeys(index, item.key)) searchVisible.add(a)
       }
@@ -243,11 +252,12 @@ export function visibilityPredicate(index, filters, ctx = {}) {
  */
 export function filterCounts(items, filters = {}, ctx = {}) {
   const counts = { statuses: {}, assignees: {}, categories: {}, dates: {}, jira: {}, traits: {}, mine: 0 }
-  const env = { ...ctx, filters, linked: dependencyKeys(items) }
+  const env = { ...ctx, filters, linked: dependencyKeys(items, ctx.links) }
   const bump = (group, value) => { counts[group][value] = (counts[group][value] || 0) + 1 }
   const jiraValues = [...JIRA_OPTIONS, ...JIRA_CATEGORY_OPTIONS].map((o) => o.value)
   for (const item of items) {
     if (item.type === 'milestone') bump('traits', 'milestones')
+    if (item.type === 'milestone' && matchesDate(item, 'deadline', env)) bump('dates', 'deadline')
     if (item.type !== 'task') continue
     bump('statuses', item.status || 'new')
     bump('assignees', item.assigneeKey || NONE)

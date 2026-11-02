@@ -95,13 +95,22 @@ export async function downloadFrom(path, params, fallbackName) {
   for (const [key, value] of Object.entries(params || {})) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value)
   }
-  const res = await fetch(url.toString(), { credentials: 'same-origin' })
+  let res
+  try {
+    res = await fetch(url.toString(), { credentials: 'same-origin' })
+  } catch {
+    throw new NetworkError('Нет связи с сервером', 0, null)
+  }
   if (!res.ok) {
     const data = await parse(res)
     throw new ApiError(data?.message || `Ошибка ${res.status}`, res.status, data)
   }
   const disposition = res.headers.get('Content-Disposition') || ''
-  const name = /filename="?([^";]+)"?/i.exec(disposition)?.[1] || fallbackName || 'download'
+  // Имя файла: filename*=UTF-8''… (кириллица), затем filename="…"
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  let name = null
+  try { name = encoded ? decodeURIComponent(encoded) : null } catch { name = null }
+  name = name || /filename="?([^";]+)"?/i.exec(disposition)?.[1] || fallbackName || 'download'
   saveBlob(await res.blob(), name)
 }
 

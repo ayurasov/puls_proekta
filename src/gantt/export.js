@@ -4,9 +4,9 @@
  * интернета не работали, а длинные планы обрезались.
  */
 import { api, saveBlob } from '../api/client'
-import { createChartContext, dependencyPaths, legendEntries, rowModel } from './chartModel'
+import { createChartContext, deadlinePath, dependencyPaths, legendEntries, rowModel } from './chartModel'
 import { diffDays, formatDay, formatDayNoYear } from './domain/dates'
-import { STATUS_BY_KEY, DEPENDENCY_TYPES, resolveColor } from './domain/colors'
+import { STATUS_BY_KEY, resolveColor } from './domain/colors'
 import { filterChips } from './domain/filters'
 import { formatDateTime } from '../utils/format'
 
@@ -132,7 +132,7 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
     out.push(`<line x1="${ctx.todayX}" x2="${ctx.todayX}" y1="${-ctx.headerHeight + 22}" y2="${bodyH}" stroke="${color}" stroke-width="2"${dash(editor.settings.today?.style)}/>`)
   }
   if (display.showDependencies) {
-    for (const a of dependencyPaths(models, ctx)) out.push(`<path d="${a.d}" fill="none" stroke="#a7b0c2" stroke-width="1.3" marker-end="url(#ar)"/>`)
+    for (const a of dependencyPaths(models, ctx, editor.linkList)) out.push(`<path d="${a.d}" fill="none" stroke="#a7b0c2" stroke-width="1.3" marker-end="url(#ar)"/>`)
   }
   for (const m of models) {
     if (m.bar) {
@@ -160,6 +160,7 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
       out.push(`<path d="M${ms.x} ${ms.y - 9} l9 9 l-9 9 l-9 -9 Z" fill="${ms.fill}" stroke="#fff" stroke-width="1.5"/>`)
       out.push(`<text x="${ms.x + 13}" y="${ms.y + 4}" font-size="11.5" font-weight="600" fill="#1c2331" paint-order="stroke" stroke="#fff" stroke-width="3">${esc(ms.label)}</text>`)
     }
+    if (m.deadline) out.push(`<path d="${deadlinePath(m.deadline)}" fill="${m.deadline.color}" stroke="#fff" stroke-width="1"/>`)
     for (const n of m.notes) {
       out.push(`<path d="M${n.x - 5} ${n.y + 5} a5 5 0 1 1 10 0 c0 3 -5 9 -5 9 c0 0 -5 -6 -5 -9 Z" fill="${n.color}"/>`)
       out.push(`<text x="${n.x + 8}" y="${n.y + 9}" font-size="10.5" font-weight="650" fill="${n.textColor || n.color}" paint-order="stroke" stroke="#fff" stroke-width="3">${esc((n.showDate ? `${formatDayNoYear(n.date)} · ` : '') + n.text.slice(0, 60))}</text>`)
@@ -212,26 +213,47 @@ function csvCell(value) {
   return /[;"\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
 }
 
+/**
+ * Предшественники строки как в MS Project: номер строки в выгрузке, тип и лаг — «3FS+2д;5SS» (д — календарные дни,
+ * рд — рабочие). Предшественник, которого в выгрузке нет (отфильтрован, свёрнут), — названием в кавычках.
+ */
+export function predecessorsText(links, numbers, items) {
+  return links.map((link) => {
+    const ref = numbers.get(link.from) || `«${items[link.from]?.name || link.from}»`
+    const lag = Number(link.lag || 0)
+    const unit = link.lagKind === 'working' ? 'рд' : 'д'
+    return `${ref}${link.type || 'FS'}${lag ? `${lag > 0 ? '+' : ''}${lag}${unit}` : ''}`
+  }).join(';')
+}
+
 export function buildCsv(editor) {
   const assignee = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
-  const header = ['Уровень', 'Тип', 'Название', 'Статус', 'Начало', 'Окончание', 'Длительность, дн.', 'Прогресс, %', 'Сдвиг, дн.',
-    'Дата завершения', 'Исполнитель', 'Категория', 'Предшественник', 'Тип связи', 'Лаг, дн.', 'Jira', 'Комментариев']
+  const header = ['№', 'Уровень', 'Тип', 'Название', 'Статус', 'Начало', 'Окончание', 'Длительность, дн.', 'Прогресс, %', 'Сдвиг, дн.',
+    'Дата завершения', 'Крайний срок', 'Исполнитель', 'Категория', 'Предшественники', 'Jira', 'Комментариев']
   const lines = [header.map(csvCell).join(';')]
   const types = { task: 'Задача', milestone: 'Веха', group: 'Группа' }
-  for (const { item, depth } of editor.visibleRows) {
+  const rows = editor.visibleRows
+  const numbers = new Map(rows.map(({ item }, i) => [item.key, i + 1]))
+  const incoming = new Map()
+  for (const link of editor.linkList) {
+    if (!editor.state.items[link.from]) continue
+    if (!incoming.has(link.to)) incoming.set(link.to, [])
+    incoming.get(link.to).push(link)
+  }
+  for (const [i, { item, depth }] of rows.entries()) {
     const task = item.type === 'task'
     lines.push([
-      depth + 1, types[item.type], '  '.repeat(depth) + item.name,
+      i + 1, depth + 1, types[item.type], '  '.repeat(depth) + item.name,
       task ? STATUS_BY_KEY[item.status || 'new'].label : '',
       task ? formatDay(item.start) : item.type === 'milestone' ? formatDay(item.date) : '',
       task ? formatDay(item.end) : '',
       task ? diffDays(item.start, item.end) + 1 : '',
       task ? item.progress || 0 : '', task ? item.offset || 0 : '',
       task && item.completedDate ? formatDay(item.completedDate) : '',
+      item.deadline ? formatDay(item.deadline) : '',
       assignee(item.assigneeKey), item.category || '',
-      item.dependencyKey ? editor.state.items[item.dependencyKey]?.name || '' : '',
-      item.dependencyKey ? DEPENDENCY_TYPES.find((t) => t.key === item.dependencyType)?.label || '' : '',
-      item.dependencyKey ? item.dependencyLag || 0 : '', item.jiraUrl || '', item.commentCount || 0,
+      predecessorsText(incoming.get(item.key) || [], numbers, editor.state.items),
+      item.jiraUrl || '', item.commentCount || 0,
     ].map(csvCell).join(';'))
   }
   return '﻿' + lines.join('\r\n')

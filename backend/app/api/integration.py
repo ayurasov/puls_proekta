@@ -12,7 +12,8 @@
 * GET /api/integration/v1/projects?q=&ids=&limit=&userId=&login=&email= — projects.read; с projects.stats ещё
   ``inwork``, ``blocked``, ``directionInfo {id, name}``, ``updatedAt``, ``planWindow {start, end}``
 * GET /api/integration/v1/projects/<id> — projects.read (с projects.stats — те же поля)
-* GET /api/integration/v1/projects/<id>/items?plan=&q=&key=&limit= — projects.read
+* GET /api/integration/v1/projects/<id>/items?plan=&q=&key=&limit= — projects.read; с 0.7.0 у строк ещё
+  ``predecessors`` [{key, type, lag, lagKind}] (связи плана, ADR-0012) и ``deadline``
 * GET /api/integration/v1/directions?userId=&login=&email= — projects.read: направления с числом проектов
 """
 
@@ -24,7 +25,7 @@ from sqlalchemy import func, select
 
 from app.api.projects import _default_plans, _task_stats
 from app.extensions import csrf, db, limiter
-from app.models import Direction, Plan, PlanItem, Project, User
+from app.models import Direction, Plan, PlanItem, PlanLink, Project, User
 from app.security import ApiError, accessible_projects_query, project_levels
 from app.services import integration_keys
 from app.version import APP_VERSION
@@ -252,12 +253,20 @@ def items(project_id):
     if key:
         ordered = [r for r in ordered if r.key == key]
     limit = _limit("limit", ITEMS_LIMIT, ITEMS_MAX)
+    # Предшественники строки (ADR-0012): поля добавлены, прежние не менялись
+    predecessors = {}
+    for link in db.session.execute(select(PlanLink).where(PlanLink.plan_id == plan.id, PlanLink.deleted_at.is_(None))
+                                   .order_by(PlanLink.id)).scalars():
+        if link.from_key in by_key:
+            predecessors.setdefault(link.to_key, []).append(
+                {"key": link.from_key, "type": link.type, "lag": link.lag, "lagKind": link.lag_kind})
     out = [{
         "key": r.key, "name": r.name, "type": r.type,
         "start": r.start_date.isoformat() if r.start_date else None,
         "end": (r.end_date or r.start_date).isoformat() if (r.end_date or r.start_date) else None,
         "status": r.status if r.type == "task" else None, "progress": r.progress or 0 if r.type == "task" else 0,
         "group": group_path(r), "path": f"/projects/{p.id}/{plan.id}?item={r.key}",
+        "predecessors": predecessors.get(r.key, []), "deadline": r.deadline.isoformat() if r.deadline else None,
     } for r in ordered[:limit]]
     return jsonify({"plan": {"id": plan.id, "title": plan.title}, "items": out, "truncated": len(ordered) > limit})
 

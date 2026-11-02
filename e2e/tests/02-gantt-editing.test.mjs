@@ -71,11 +71,14 @@ test('связь «предшественник» сдвигает послед�
   const b = items.find((i) => i.name === 'Разработка модуля')
   await page.locator('.grid-row', { hasText: 'Разработка модуля' }).locator('.open-btn').click()
   await page.waitForSelector('.panel')
-  await page.locator('.panel select[aria-label="Предшественник"]').selectOption(a.key)
+  await page.locator('.panel [data-testid=link-add]').selectOption(a.key)
+  await page.click('.panel [data-testid=link-add-submit]')
   await waitSaved(page)
   const shifted = (await planItems()).find((i) => i.key === b.key)
   const expected = new Date(new Date(a.end).getTime() + 86400000).toISOString().slice(0, 10)
   assert.equal(shifted.start, expected)
+  const links = (await api(page, 'GET', `/plans/${planId}`)).body.links
+  assert.deepEqual(links.map((l) => [l.from, l.to, l.type]), [[a.key, b.key, 'FS']])
   await shot(page, '02-dependency')
 })
 

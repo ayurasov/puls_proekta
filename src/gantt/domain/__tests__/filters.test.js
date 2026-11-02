@@ -263,3 +263,22 @@ describe('отметки и сохранённые фильтры', () => {
 function SetsOf(f) {
   return ['statuses', 'assignees', 'categories', 'dates', 'jira', 'traits'].map((g) => f[g])
 }
+
+describe('поиск по номеру строки', () => {
+  it('«1.2» — строка с этим номером, её вложенные и группы над ней', async () => {
+    const { buildIndex: build, outlineNumbers } = await import('../tree')
+    const items = [
+      { key: 'g', type: 'group', name: 'Этап', parentKey: null, position: 1 },
+      { key: 'x', type: 'task', name: 'Первая', parentKey: 'g', position: 1, start: '2026-11-02', end: '2026-11-03', status: 'new' },
+      { key: 'y', type: 'group', name: 'Вторая', parentKey: 'g', position: 2 },
+      { key: 'z', type: 'task', name: 'Внутри', parentKey: 'y', position: 1, start: '2026-11-02', end: '2026-11-03', status: 'new' },
+      { key: 'w', type: 'task', name: 'Другая', parentKey: null, position: 2, start: '2026-11-02', end: '2026-11-03', status: 'new' },
+    ]
+    const index = build(items)
+    const predicate = visibilityPredicate(index, filters({ search: '1.2' }), { today: TODAY, numbers: outlineNumbers(index) })
+    expect(items.filter(predicate).map((i) => i.key)).toEqual(['g', 'y', 'z'])
+    // Без номеров (колонка не нужна для поиска по названию) — ищется по названию
+    const byName = visibilityPredicate(index, filters({ search: 'внутри' }), { today: TODAY })
+    expect(items.filter(byName).map((i) => i.key)).toEqual(['g', 'y', 'z'])
+  })
+})

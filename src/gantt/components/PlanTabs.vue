@@ -5,6 +5,7 @@ import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import AppIcon from '../../components/common/AppIcon.vue'
 import PopupMenu from '../../components/common/PopupMenu.vue'
+import MsProjectImportModal from '../../components/msproject/MsProjectImportModal.vue'
 
 /**
  * Вкладки планов проекта (в 1.0.x — «версии»). Закрытая вкладка уходит в архив — данные
@@ -17,12 +18,39 @@ const props = defineProps({
   activePlanId: { type: Number, default: null },
   canEdit: { type: Boolean, default: false },
   canManage: { type: Boolean, default: false },
+  // Отправить неотправленные правки открытого плана (перед заменой и обновлением на сервере); false — не удалось
+  flushPlan: { type: Function, default: null },
 })
-const emit = defineEmits(['open', 'created', 'changed'])
+const emit = defineEmits(['open', 'created', 'changed', 'reload'])
 const ui = useUiStore()
 const { confirm, prompt } = useDialogs()
 
 const menu = ref(null)
+// Загрузка MS Project: { target: 'plan' | 'replace' | 'update', plan? }
+const msp = ref(null)
+const mspSource = (plan) => (plan?.settings?.source?.kind === 'msproject' ? plan.settings.source : null)
+function mspTitle(plan) {
+  const source = mspSource(plan)
+  if (!source?.master) return ''
+  const when = source.importedAt ? new Date(source.importedAt).toLocaleString('ru-RU', { dateStyle: 'short', timeStyle: 'short' }) : ''
+  return `План ведётся в MS Project${source.fileName ? ` · ${source.fileName}` : ''}${when ? ` · обновлён ${when}` : ''}`
+}
+function openMsp(target, plan = null) {
+  menu.value = null
+  msp.value = { target, plan }
+}
+function mspDone(result) {
+  const { target } = msp.value
+  msp.value = null
+  if (target === 'plan') {
+    ui.success('План загружен из MS Project')
+    emit('created', { id: result.planId })
+  } else {
+    ui.success(target === 'update' ? `План обновлён из MS Project: новых ${result.new}, изменено ${result.changed}` : 'Содержимое плана заменено из MS Project')
+    emit('changed')
+    emit('reload', result.planId)
+  }
+}
 const renamingId = ref(null)
 const renameValue = ref('')
 const fileInput = ref(null)
@@ -211,6 +239,7 @@ async function onDrop() {
         />
         <button v-else class="tab-button" type="button" @click="emit('open', plan.id)" @dblclick="startRename(plan)">
           <span class="ellipsis">{{ plan.title }}</span>
+          <span v-if="mspSource(plan)?.master" class="msp-badge" :title="mspTitle(plan)" data-testid="msp-badge">MS Project</span>
         </button>
         <button v-if="plan.id === activePlanId && renamingId !== plan.id" class="tab-menu" type="button" title="Действия с планом" @click.stop="openMenu('tab', $event, plan)">
           <AppIcon name="chevronDown" :size="13" />
@@ -233,6 +262,7 @@ async function onDrop() {
       <button class="menu-item" type="button" @click="createPlan('blank')"><AppIcon name="plus" /> Новый пустой план</button>
       <button class="menu-item" type="button" @click="createPlan('copy')"><AppIcon name="copy" /> Копия текущего плана</button>
       <button class="menu-item" type="button" @click="createPlan('import')"><AppIcon name="upload" /> Импорт из JSON-файла…</button>
+      <button class="menu-item" type="button" data-testid="plan-add-msp" @click="openMsp('plan')"><AppIcon name="upload" /> Из MS Project…</button>
     </PopupMenu>
 
     <PopupMenu v-if="menu?.type === 'tab'" :x="menu.x" :y="menu.y" :anchor="menu.point ? null : menu.anchor" @close="menu = null">
@@ -240,6 +270,10 @@ async function onDrop() {
       <button v-if="canEdit" class="menu-item" type="button" @click="startRename(menu.plan)"><AppIcon name="edit" /> Переименовать<span class="menu-hint">двойной щелчок</span></button>
       <button v-if="canEdit" class="menu-item" type="button" @click="duplicate(menu.plan)"><AppIcon name="copy" /> Дублировать</button>
       <button class="menu-item" type="button" @click="exportPlan(menu.plan)"><AppIcon name="download" /> Экспорт JSON</button>
+      <template v-if="canEdit">
+        <button v-if="mspSource(menu.plan)" class="menu-item" type="button" data-testid="plan-msp-update" @click="openMsp('update', menu.plan)"><AppIcon name="refresh" /> Обновить из MS Project…</button>
+        <button class="menu-item" type="button" data-testid="plan-msp-replace" @click="openMsp('replace', menu.plan)"><AppIcon name="upload" /> Заменить из MS Project…</button>
+      </template>
       <template v-if="canEdit && openPlans.length > 1">
         <div class="menu-separator" />
         <button class="menu-item" type="button" @click="archive(menu.plan)"><AppIcon name="archive" /> Убрать в архив</button>
@@ -257,6 +291,11 @@ async function onDrop() {
         <button v-if="canManage" class="btn btn-ghost btn-sm btn-text-danger" type="button" title="Удалить" @click="removePlan(plan)"><AppIcon name="trash" :size="14" /></button>
       </div>
     </PopupMenu>
+    <MsProjectImportModal
+      v-if="msp" :target="msp.target" :project-id="project.id" :plan-id="msp.plan?.id ?? null" :plan-title="msp.plan?.title || ''"
+      :master="Boolean(mspSource(msp.plan)?.master)" :before-apply="msp.plan && flushPlan ? () => flushPlan(msp.plan.id) : null"
+      @close="msp = null" @done="mspDone"
+    />
   </div>
 </template>
 
@@ -287,4 +326,5 @@ async function onDrop() {
   .archive-btn { padding: 0 8px; }
 }
 .archived-row .menu-item.is-current { background: var(--color-primary-soft); color: var(--color-primary-dark); font-weight: 600; }
+.msp-badge { margin-left: 6px; padding: 1px 6px; border-radius: 6px; background: #e7eefc; color: #2b4db5; font-size: 10.5px; font-weight: 700; white-space: nowrap; flex-shrink: 0; }
 </style>

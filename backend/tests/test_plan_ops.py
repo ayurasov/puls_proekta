@@ -104,11 +104,13 @@ def test_integrity_fixes_dangling_and_cyclic_references(app, admin):
         task("t1", parentKey="g1"), task("t2", dependencyKey="t1"),
         {"op": "note.create", "note": {"key": "n1", "date": "2026-05-02", "text": "Пометка", "rowKey": "t1"}},
     ])
+    link_key = admin.get(f"/api/plans/{plan_id}").get_json()["links"][0]["key"]
     result = ok_ops(admin, plan_id, [{"op": "item.delete", "key": "t1"}, {"op": "item.delete", "key": "g1"}])
-    fixes = {(f["key"], f["field"]) for f in result["fixes"]}
-    assert ("t2", "dependencyKey") in fixes and ("n1", "rowKey") in fixes
+    fixes = {(f["entity"], f["key"], f["field"]) for f in result["fixes"]}
+    # Связь удалённой строки удаляется вместе с ней (0.7.0: связь — отдельная сущность)
+    assert ("link", link_key, "from") in fixes and ("note", "n1", "rowKey") in fixes
     doc = admin.get(f"/api/plans/{plan_id}").get_json()
-    assert doc["items"][0]["dependencyKey"] is None and doc["notes"] == []
+    assert doc["links"] == [] and doc["notes"] == []
     ok_ops(admin, plan_id, [task("a"), task("b", parentKey="a")])
     result = ok_ops(admin, plan_id, [{"op": "item.update", "key": "a", "fields": {"parentKey": "b"}}])
     assert any(f["field"] == "parentKey" for f in result["fixes"])

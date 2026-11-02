@@ -100,7 +100,7 @@ const CALENDAR_OPTIONS = [
   { key: 'autoShift', label: 'Автосдвиг задач по связям', hint: 'Последующие задачи сдвигаются вслед за предшественником' },
 ]
 
-const TOOLTIP = { status: 'Статус', dates: 'Сроки и сдвиг', progress: 'Прогресс', dependency: 'Предшественник', assignee: 'Исполнитель', lastChange: 'Последнее изменение' }
+const TOOLTIP = { status: 'Статус', dates: 'Сроки и сдвиг', progress: 'Прогресс', dependency: 'Предшественники', assignee: 'Исполнитель', lastChange: 'Последнее изменение' }
 function toggleTooltip(field) {
   const list = [...(d.value.tooltipFields || [])]
   const i = list.indexOf(field)

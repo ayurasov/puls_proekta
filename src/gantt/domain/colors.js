@@ -111,3 +111,17 @@ export const DEPENDENCY_TYPES = [
   { key: 'FF', label: 'Окончание → окончание', short: 'ОО' },
   { key: 'SF', label: 'Начало → окончание', short: 'НО' },
 ]
+
+/** Ограничения дат из MS Project (ADR-0012, 5.4): на расчёт влияет только «Начало не ранее» (snet). */
+export const CONSTRAINT_TYPES = {
+  snet: 'Начало не ранее', snlt: 'Начало не позднее', fnet: 'Окончание не ранее', fnlt: 'Окончание не позднее',
+  mso: 'Фиксированное начало', mfo: 'Фиксированное окончание', alap: 'Как можно позже',
+}
+
+/** Связь коротко для подсказок: «НН +2 дн.» (у FS без лага — пусто). */
+export function linkShortLabel(link) {
+  const lag = Number(link.lag || 0)
+  const type = DEPENDENCY_TYPES.find((t) => t.key === (link.type || 'FS'))
+  const lagText = lag ? `${lag > 0 ? '+' : ''}${lag} ${link.lagKind === 'working' ? 'раб. дн.' : 'дн.'}` : ''
+  return [link.type && link.type !== 'FS' ? type?.short : lag ? type?.short : '', lagText].filter(Boolean).join(' ')
+}
