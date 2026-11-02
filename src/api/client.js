@@ -101,7 +101,11 @@ export async function downloadFrom(path, params, fallbackName) {
     throw new ApiError(data?.message || `Ошибка ${res.status}`, res.status, data)
   }
   const disposition = res.headers.get('Content-Disposition') || ''
-  const name = /filename="?([^";]+)"?/i.exec(disposition)?.[1] || fallbackName || 'download'
+  // Имя файла: filename*=UTF-8''… (кириллица), затем filename="…"
+  const encoded = /filename\*=UTF-8''([^;]+)/i.exec(disposition)?.[1]
+  let name = null
+  try { name = encoded ? decodeURIComponent(encoded) : null } catch { name = null }
+  name = name || /filename="?([^";]+)"?/i.exec(disposition)?.[1] || fallbackName || 'download'
   saveBlob(await res.blob(), name)
 }
 

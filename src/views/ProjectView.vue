@@ -74,6 +74,12 @@ function openPlan(id) {
   router.push({ name: 'project', params: { projectId: projectId.value, planId: id } })
 }
 
+// План обновили или заменили на сервере (MS Project) — открытый план перечитывается целиком
+const reloadSeq = ref(0)
+function reloadPlan(id) {
+  if (id === activePlan.value?.id) reloadSeq.value += 1
+}
+
 async function planCreated(plan) {
   await loadProject()
   openPlan(plan.id)
@@ -149,10 +155,10 @@ onBeforeRouteUpdate(leaveGuard)
       <PlanTabs
         :project="project" :open-plans="openPlans" :archived-plans="archivedPlans" :active-plan-id="activePlanId"
         :can-edit="canEditProject && auth.user?.role !== 'viewer'" :can-manage="canManage"
-        @open="openPlan" @created="planCreated" @changed="loadProject"
+        @open="openPlan" @created="planCreated" @changed="loadProject" @reload="reloadPlan"
       />
       <GanttWorkspace
-        v-if="activePlan" :key="activePlan.id" ref="workspace" :plan-id="activePlan.id" :project="project"
+        v-if="activePlan" :key="`${activePlan.id}:${reloadSeq}`" ref="workspace" :plan-id="activePlan.id" :project="project"
         @plan-meta="loadProject"
       />
       <div v-else class="page"><div class="card empty-state"><h3>В проекте нет планов</h3></div></div>

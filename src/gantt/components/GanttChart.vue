@@ -41,7 +41,8 @@ const columns = computed(() => Object.entries(COLUMN_WIDTHS)
 const numbers = computed(() => (view.columns.wbs ? outlineNumbers(editor.index) : null))
 function numberFor(item) {
   if (!numbers.value) return ''
-  const fromFile = editor.settings.source?.kind === 'msproject' ? item.extra?.msp?.wbs : null
+  const source = editor.settings.source
+  const fromFile = source?.kind === 'msproject' && source.master ? item.extra?.msp?.wbs : null
   return fromFile || numbers.value.get(item.key) || ''
 }
 const MIN_NAME_WIDTH = 140

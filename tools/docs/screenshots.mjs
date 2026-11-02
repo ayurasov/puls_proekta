@@ -316,6 +316,16 @@ async function userGuide() {
   await page.waitForSelector('[data-testid=org-chart]')
   await page.waitForTimeout(600)
   await shot(page, '28-org-chart')
+
+  // Загрузка из MS Project: план загрузки файла-образца (как мастер-копия)
+  await page.goto(BASE + '/')
+  await page.click('[data-testid=new-project-msp]')
+  await page.setInputFiles('[data-testid=msp-file]', join(root, 'backend/tests/fixtures/msproject/vnedrenie_crm.xml'))
+  await page.locator('[data-testid=msp-preview]').waitFor()
+  await page.locator('[data-testid=msp-mode] button', { hasText: 'Мастер-копия' }).click()
+  await page.waitForFunction(() => !document.querySelector('[data-testid=msp-apply]')?.disabled)
+  await shot(page, '29-msproject')
+  await page.keyboard.press('Escape')
 }
 
 async function adminGuide() {

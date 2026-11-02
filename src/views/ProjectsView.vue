@@ -11,6 +11,7 @@ import AppIcon from '../components/common/AppIcon.vue'
 import HelpLink from '../components/common/HelpLink.vue'
 import BaseModal from '../components/common/BaseModal.vue'
 import PopupMenu from '../components/common/PopupMenu.vue'
+import MsProjectImportModal from '../components/msproject/MsProjectImportModal.vue'
 import { countLabel, formatDate, formatDateTime } from '../utils/format'
 import {
   PROJECT_SORTS, PROJECT_STATES, DEFAULT_PROJECT_FILTERS, cardPlans, directionMatches, matchesProjectFilters,
@@ -24,6 +25,14 @@ const projects = useProjectsStore()
 const auth = useAuthStore()
 const ui = useUiStore()
 const router = useRouter()
+// Проект из файла MS Project (ADR-0012)
+const mspOpen = ref(false)
+async function mspDone(result) {
+  mspOpen.value = false
+  ui.success('Проект создан из MS Project')
+  await projects.load()
+  router.push({ name: 'project', params: { projectId: result.projectId, planId: result.planId } })
+}
 const { confirm, prompt } = useDialogs()
 
 const search = ref('')
@@ -262,6 +271,9 @@ function onDragEnd() {
         <AppIcon name="search" :size="15" class="search-icon" />
         <input v-model="search" class="input" type="search" placeholder="Поиск проекта" />
       </label>
+      <button v-if="auth.canCreateProjects" class="btn" type="button" title="Проект из файла MS Project (XML)" data-testid="new-project-msp" @click="mspOpen = true">
+        <AppIcon name="upload" /> Из MS Project
+      </button>
       <button v-if="auth.canCreateProjects" class="btn btn-primary" type="button" data-testid="new-project" @click="openCreate()">
         <AppIcon name="plus" /> Новый проект
       </button>
@@ -419,6 +431,7 @@ function onDragEnd() {
 
     <StatsModal v-if="statsPlanId" :plan-id="statsPlanId" :plans="statsPlans" @close="statsPlanId = null" />
 
+    <MsProjectImportModal v-if="mspOpen" target="project" :directions="projects.directions" @close="mspOpen = false" @done="mspDone" />
     <BaseModal v-if="editor" :title="editor.mode === 'create' ? 'Новый проект' : 'Проект'" @close="editor = null">
       <form class="form-stack" @submit.prevent="saveEditor">
         <label class="field">

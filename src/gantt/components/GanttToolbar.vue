@@ -7,6 +7,7 @@ import GanttFilters from './GanttFilters.vue'
 import { SCALES, nextZoom } from '../domain/layout'
 import { clearFilters, filterChips, toggleFilter } from '../domain/filters'
 import { exportPlan } from '../export'
+import { downloadFrom } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
 
 const emit = defineEmits(['open-modal', 'scroll-today', 'fit'])
@@ -91,7 +92,9 @@ async function runExport(format) {
   menu.value = null
   exporting.value = true
   try {
-    await exportPlan(editor, format)
+    // MS Project XML собирает сервер (ADR-0012): связи, ресурсы, календарь, идентификаторы задач из MS Project
+    if (format === 'msproject') await downloadFrom(`/plans/${editor.state.plan.id}/export/msproject`, null, `${editor.state.plan.title}.xml`)
+    else await exportPlan(editor, format)
   } catch (err) {
     ui.error(err.message || 'Не удалось выгрузить план')
   } finally {
@@ -264,6 +267,7 @@ function toggleColumn(column) {
       <div class="menu-separator" />
       <button class="menu-item" type="button" @click="runExport('csv')"><AppIcon name="table" /> Таблица для Excel (CSV)</button>
       <button class="menu-item" type="button" @click="runExport('json')"><AppIcon name="download" /> JSON (открывается и в 1.0)</button>
+      <button class="menu-item" type="button" data-testid="export-msproject" @click="runExport('msproject')"><AppIcon name="file" /> MS Project (XML)</button>
     </PopupMenu>
   </div>
   <div v-if="activeFilterCount" class="filter-bar" data-testid="filter-bar">
