@@ -231,6 +231,11 @@ async function userGuide() {
   await page.click('button[title="Настройки графика"]')
   await page.waitForSelector('.modal .settings')
   await shot(page, '16-plan-settings')
+  // 0.6.1: вид прогресса на полосах — плитки с образцами в разделе «Отображение»
+  await page.locator('[data-testid=progress-style]').scrollIntoViewIfNeeded()
+  await page.locator('#ps-bars').evaluate((el) => el.closest('section').scrollIntoView({ block: 'start' }))
+  await page.waitForTimeout(200)
+  await shot(page, '16a-progress-styles')
   await closeOverlays(page)
 
   await page.click('button[title="Исполнители"]')
@@ -242,6 +247,15 @@ async function userGuide() {
   await page.waitForSelector('.modal')
   await shot(page, '18-stats')
   await closeOverlays(page)
+
+  // 0.6.1: статистика с главной — переключатель планов проекта
+  await page.goto(BASE + '/')
+  await page.locator('.project-card', { hasText: PORTAL }).locator('[data-testid^=project-stats-]').first().click()
+  await page.waitForSelector('[data-testid=stats-plan-switch]')
+  await page.waitForTimeout(400)
+  await shot(page, '18a-stats-plans')
+  await closeOverlays(page)
+  await openProject(page, PORTAL)
 
   await page.click('button:has-text("Экспорт")')
   await shot(page, '19-export-menu')

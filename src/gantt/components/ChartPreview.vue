@@ -1,8 +1,8 @@
 <script setup>
 import { computed, inject, useId } from 'vue'
 import { addDays, diffDays, formatDay, formatDayNoYear, isWeekend } from '../domain/dates'
-import { BAR_HEIGHT, BAR_HEIGHT_WITH_NOTE, barLabel, fitText, legendEntries } from '../chartModel'
-import { readableText, resolveColor, STATUS_BY_KEY, textColorOnWhite } from '../domain/colors'
+import { BAR_HEIGHT, BAR_HEIGHT_WITH_NOTE, barLabel, barProgress, fitText, legendEntries } from '../chartModel'
+import { resolveColor, STATUS_BY_KEY, textColorOnWhite } from '../domain/colors'
 import { useAuthStore } from '../../stores/auth'
 
 /**
@@ -45,10 +45,12 @@ function barOf(task, row, withNote) {
   const w = (diffDays(task.start, task.end) + 1) * DAY
   const fill = resolveColor(task.color).color
   const tail = task.offset > 0 ? { x: x + w, w: task.offset * DAY } : null
+  const y = room ? top + rowHeight.value - h - 6 : top + rowHeight.value / 2 - h / 2
+  const pr = barProgress({ x, y, w, h, fill, status: task.status, progress: task.progress, display: display.value })
   return {
-    x, w, h, y: room ? top + rowHeight.value - h - 6 : top + rowHeight.value / 2 - h / 2, mid: top + rowHeight.value / 2, top,
-    fill, text: readableText(fill), label: fitText(barLabel(task, display.value), w),
-    progress: display.value.showProgress ? task.progress : 0, tail,
+    x, w, h, y, mid: top + rowHeight.value / 2, top,
+    fill: pr.base, text: pr.text, label: fitText(pr.prefix + barLabel(task, display.value), w),
+    done: pr.done, strip: pr.strip, tail,
     tailLabel: tail && display.value.showOffsetLabels ? `сдвиг +${task.offset} д (до ${formatDayNoYear(addDays(task.end, task.offset))})` : '',
   }
 }
@@ -129,7 +131,8 @@ const tooltipRows = computed(() => {
         <g v-for="(bar, i) in bars" :key="'b' + i">
           <rect v-if="bar.tail" class="tail" :x="bar.tail.x - 3" :y="bar.y + 3" :width="bar.tail.w + 3" :height="bar.h - 6" rx="4" />
           <rect :x="bar.x" :y="bar.y" :width="bar.w" :height="bar.h" rx="6" :fill="bar.fill" />
-          <rect v-if="bar.progress" class="progress" :x="bar.x + 2" :y="bar.y + bar.h - 6" :width="(bar.w - 4) * bar.progress / 100" height="4" rx="2" />
+          <path v-if="bar.done" :d="bar.done.d" :fill="bar.done.fill" />
+          <rect v-if="bar.strip" class="progress" :x="bar.strip.x" :y="bar.strip.y" :width="bar.strip.w" :height="bar.strip.h" rx="2" />
           <rect v-if="bar.tail" :x="bar.tail.x" :y="bar.y + 3" :width="bar.tail.w" :height="bar.h - 6" :fill="`url(#${uid}-hatch)`" />
           <text class="bar-text" :class="bar.text === '#ffffff' ? 'on-dark' : 'on-light'" :x="bar.x + bar.w / 2" :y="bar.y + bar.h / 2 + 4" :fill="bar.text">{{ bar.label }}</text>
           <text v-if="bar.tailLabel" class="tail-text" :x="bar.tail.x + bar.tail.w + (settings.display.showDependencies ? 13 : 5)" :y="bar.y + bar.h / 2 + 3.5">{{ bar.tailLabel }}</text>

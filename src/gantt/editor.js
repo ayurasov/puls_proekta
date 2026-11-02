@@ -29,7 +29,7 @@ const SCHEDULE_FIELDS = new Set(['start', 'end', 'date', 'dependencyKey', 'depen
   'status', 'completedDate', 'parentKey', 'duration', 'endMode', 'durationType'])
 
 export const DEFAULT_DISPLAY = {
-  useRuCalendar: true, showWeekends: true, showHolidays: true, showProgress: true, showNotes: true,
+  useRuCalendar: true, showWeekends: true, showHolidays: true, showProgress: true, progressStyle: 'fill', showNotes: true,
   autoShift: true, legendEnabled: false, legendPosition: 'bottom', legendMode: 'all', showTaskNamesOnBars: false,
   showOffsetLabels: true, showDependencies: true,
   tooltipFields: ['status', 'dates', 'progress', 'dependency', 'assignee', 'lastChange'],

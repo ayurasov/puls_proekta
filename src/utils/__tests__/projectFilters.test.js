@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   directionMatches, isMyProject, matchesProjectFilters, normalizeProjectFilters, projectFiltersActive, projectProgress,
-  projectState, sortProjects,
+  projectState, sortProjects, cardPlans, nearestMilestone, planProgress,
 } from '../projectFilters'
 
 const project = (id, title, stats = null, extra = {}) => ({ id, title, stats, access: 'view', createdById: 1, directionId: null, ...extra })
@@ -76,4 +76,34 @@ describe('сортировка', () => {
   it('по названию — без учёта регистра, числа по значению', () => expect(ids(sortProjects(list, 'title'))).toEqual([3, 4, 2, 1]))
   it('по прогрессу — сначала отстающие, без задач — в конце', () => expect(ids(sortProjects(list, 'progress'))).toEqual([4, 2, 1, 3]))
   it('по сроку окончания — раньше выше, без сроков — в конце', () => expect(ids(sortProjects(list, 'end'))).toEqual([2, 1, 3, 4]))
+})
+
+describe('0.6.1: несколько планов на карточке', () => {
+  const plan = (id, stats, title = `План ${id}`) => ({ id, title, stats: { total: 0, done: 0, inwork: 0, blocked: 0, overdue: 0, progress: 0, ...stats } })
+
+  it('состояние — по всем планам: просрочка в любом, завершён — когда завершены все планы с задачами', () => {
+    const empty = plan(1, {})
+    expect(projectState({ plans: [empty, plan(2, { total: 2, done: 1, progress: 50 })] })).toBe('ontrack')
+    expect(projectState({ plans: [empty, plan(2, { total: 2, done: 2, progress: 100 }), plan(3, { total: 1, overdue: 1 })] })).toBe('overdue')
+    expect(projectState({ plans: [empty, plan(2, { total: 2, done: 2, progress: 100 })] })).toBe('done')
+    expect(projectState({ plans: [empty] })).toBe('empty')
+    // Старый ответ без сводок планов — по project.stats
+    expect(projectState({ plans: [{ id: 1, title: 'X' }], stats: { total: 1, done: 0, overdue: 1 } })).toBe('overdue')
+  })
+
+  it('на карточке — до трёх планов по порядку вкладок, пустые отбрасываются первыми', () => {
+    const plans = [plan(1, {}), plan(2, { total: 3 }), plan(3, {}), plan(4, { total: 1 }), plan(5, { total: 2 })]
+    const { shown, hidden } = cardPlans({ plans })
+    expect(shown.map((p) => p.id)).toEqual([2, 4, 5])
+    expect(hidden).toBe(2)
+    expect(cardPlans({ plans: plans.slice(0, 3) }).shown.map((p) => p.id)).toEqual([1, 2, 3])
+    expect(cardPlans({ plans: [plan(1, {}), plan(2, {}), plan(3, { total: 1 }), plan(4, {})] }).shown.map((p) => p.id)).toEqual([1, 2, 3])
+    expect(planProgress({ total: 4, done: 1, progress: 30 })).toBe(30)
+  })
+
+  it('ближайшая веха — по всем планам, с названием плана, если планов несколько', () => {
+    const project = { plans: [plan(1, { nextMilestone: { name: 'Сдача', date: '2026-12-01' } }, 'Основной'), plan(2, { nextMilestone: { name: 'Старт', date: '2026-11-15' } }, 'Этап 2')] }
+    expect(nearestMilestone(project)).toEqual({ name: 'Старт', date: '2026-11-15', planTitle: 'Этап 2' })
+    expect(nearestMilestone({ plans: [plan(1, {})] })).toBeNull()
+  })
 })

@@ -13,8 +13,8 @@ import BaseModal from '../components/common/BaseModal.vue'
 import PopupMenu from '../components/common/PopupMenu.vue'
 import { countLabel, formatDate, formatDateTime } from '../utils/format'
 import {
-  PROJECT_SORTS, PROJECT_STATES, DEFAULT_PROJECT_FILTERS, directionMatches, matchesProjectFilters, normalizeProjectFilters,
-  projectFiltersActive, projectProgress, projectState, sortProjects,
+  PROJECT_SORTS, PROJECT_STATES, DEFAULT_PROJECT_FILTERS, cardPlans, directionMatches, matchesProjectFilters,
+  nearestMilestone, normalizeProjectFilters, planProgress, projectFiltersActive, projectProgress, projectState, sortProjects,
 } from '../utils/projectFilters'
 
 // Статистика проекта с главной — то же окно, что в проекте; загружается, только когда его открывают
@@ -90,14 +90,21 @@ const canReorder = computed(() => ['admin', 'manager'].includes(auth.user?.role)
 // Тот же показатель, что «Средний прогресс» в окне «Статистика» основного плана (первой вкладки)
 const progress = projectProgress
 
-// ---------- статистика основного плана, не входя в проект ----------
+// ---------- статистика планов проекта, не входя в проект (переключение между планами — в окне) ----------
 const statsPlanId = ref(null)
+const statsPlans = ref([])
 function mainPlanId(project) {
   return project.stats?.planId || project.plans[0]?.id || null
 }
-function openStats(project) {
+function openStats(project, planId = null) {
   menu.value = null
-  statsPlanId.value = mainPlanId(project)
+  statsPlans.value = (project.plans || []).map((p) => ({ id: p.id, title: p.title, total: p.stats?.total ?? null }))
+  statsPlanId.value = planId || mainPlanId(project)
+}
+function planTitle(plan) {
+  const s = plan.stats
+  if (!s?.total) return 'Задач пока нет'
+  return `Средний прогресс задач плана «${plan.title}»: ${planProgress(s)}% · завершено ${s.done} из ${s.total}`
 }
 function progressTitle(project) {
   const s = project.stats
@@ -345,18 +352,47 @@ function onDragEnd() {
             </button>
           </div>
           <p v-if="project.subtitle" class="card-subtitle ellipsis">{{ project.subtitle }}</p>
-          <div class="progress" :title="progressTitle(project)">
-            <div class="progress-bar"><span :style="{ width: progress(project) + '%' }" /></div>
-            <span class="progress-value">{{ project.stats?.total ? progress(project) + '%' : '—' }}</span>
-          </div>
-          <div class="card-stats">
-            <span>{{ countLabel(project.stats?.total || 0, 'задача', 'задачи', 'задач') }}</span>
-            <span v-if="project.stats?.inwork" class="stat stat-inwork">{{ project.stats.inwork }} в работе</span>
-            <span v-if="project.stats?.overdue" class="stat stat-overdue">{{ countLabel(project.stats.overdue, 'просрочена', 'просрочены', 'просрочено') }}</span>
-            <span v-if="project.stats?.blocked" class="stat stat-blocked">{{ countLabel(project.stats.blocked, 'заблокирована', 'заблокированы', 'заблокировано') }}</span>
-          </div>
-          <div v-if="project.stats?.nextMilestone" class="milestone" :title="project.stats.nextMilestone.name">
-            <AppIcon name="diamond" :size="12" /> <span class="ellipsis">{{ formatDate(project.stats.nextMilestone.date) }} · {{ project.stats.nextMilestone.name }}</span>
+          <!-- Один план — общая полоса прогресса; несколько — строка на каждый план (0.6.1) -->
+          <template v-if="cardPlans(project).shown.length <= 1">
+            <div class="progress" :title="progressTitle(project)">
+              <div class="progress-bar"><span :style="{ width: progress(project) + '%' }" /></div>
+              <span class="progress-value">{{ project.stats?.total ? progress(project) + '%' : '—' }}</span>
+            </div>
+            <div class="card-stats">
+              <span>{{ countLabel(project.stats?.total || 0, 'задача', 'задачи', 'задач') }}</span>
+              <span v-if="project.stats?.inwork" class="stat stat-inwork">{{ project.stats.inwork }} в работе</span>
+              <span v-if="project.stats?.overdue" class="stat stat-overdue">{{ countLabel(project.stats.overdue, 'просрочена', 'просрочены', 'просрочено') }}</span>
+              <span v-if="project.stats?.blocked" class="stat stat-blocked">{{ countLabel(project.stats.blocked, 'заблокирована', 'заблокированы', 'заблокировано') }}</span>
+            </div>
+          </template>
+          <ul v-else class="plan-rows" :data-testid="`card-plans-${project.id}`">
+            <li v-for="plan in cardPlans(project).shown" :key="plan.id" class="plan-row" :class="{ empty: !plan.stats.total }">
+              <router-link :to="`/projects/${project.id}/${plan.id}`" class="plan-name ellipsis" :title="`Открыть план «${plan.title}»`" draggable="false">{{ plan.title }}</router-link>
+              <div class="plan-bar" :title="planTitle(plan)">
+                <div class="progress-bar"><span :style="{ width: planProgress(plan.stats) + '%' }" /></div>
+                <span class="progress-value">{{ plan.stats.total ? planProgress(plan.stats) + '%' : '—' }}</span>
+              </div>
+              <div class="plan-stats">
+                <template v-if="plan.stats.total">
+                  <span>{{ countLabel(plan.stats.total, 'задача', 'задачи', 'задач') }}</span>
+                  <span v-if="plan.stats.inwork" class="stat stat-inwork">{{ plan.stats.inwork }} в работе</span>
+                  <span v-if="plan.stats.overdue" class="stat stat-overdue">{{ plan.stats.overdue }} просроч.</span>
+                  <span v-if="plan.stats.blocked" class="stat stat-blocked">{{ plan.stats.blocked }} заблок.</span>
+                </template>
+                <span v-else class="muted">задач пока нет</span>
+                <button
+                  v-if="plan.stats.total" class="plan-stats-btn" type="button" :title="`Статистика плана «${plan.title}»`"
+                  :aria-label="`Статистика плана «${plan.title}»`" @click.stop="openStats(project, plan.id)"
+                ><AppIcon name="chart" :size="12" /></button>
+              </div>
+            </li>
+            <li v-if="cardPlans(project).hidden" class="plan-more muted small">
+              и ещё {{ countLabel(cardPlans(project).hidden, 'план', 'плана', 'планов') }}
+            </li>
+          </ul>
+          <div v-if="nearestMilestone(project)" class="milestone" :title="nearestMilestone(project).name">
+            <AppIcon name="diamond" :size="12" />
+            <span class="ellipsis">{{ formatDate(nearestMilestone(project).date) }} · {{ nearestMilestone(project).name }}<span v-if="nearestMilestone(project).planTitle" class="muted"> · {{ nearestMilestone(project).planTitle }}</span></span>
           </div>
           <footer class="card-footer">
             <span class="badge" :class="project.access === 'view' ? '' : 'badge-primary'">{{ ACCESS_LABELS[project.access] }}</span>
@@ -381,7 +417,7 @@ function onDragEnd() {
       <button v-if="auth.isAdmin" class="menu-item is-danger" type="button" @click="removeProject(menu.project)"><AppIcon name="trash" /> Удалить</button>
     </PopupMenu>
 
-    <StatsModal v-if="statsPlanId" :key="statsPlanId" :plan-id="statsPlanId" @close="statsPlanId = null" />
+    <StatsModal v-if="statsPlanId" :plan-id="statsPlanId" :plans="statsPlans" @close="statsPlanId = null" />
 
     <BaseModal v-if="editor" :title="editor.mode === 'create' ? 'Новый проект' : 'Проект'" @close="editor = null">
       <form class="form-stack" @submit.prevent="saveEditor">
@@ -424,7 +460,7 @@ function onDragEnd() {
 .add-here { opacity: 0; transition: opacity 0.15s; }
 .direction:hover .add-here { opacity: 1; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }
-.project-card { position: relative; padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 8px; transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s; }
+.project-card { position: relative; padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 8px; min-height: 196px; transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s; }
 .project-card:hover { border-color: #c9d6ff; box-shadow: var(--shadow-2); }
 .project-card.is-dragging { opacity: 0.4; }
 .project-card.drop-before { box-shadow: -3px 0 0 0 var(--color-primary); }
@@ -451,7 +487,20 @@ function onDragEnd() {
 .stat-overdue { color: #c62933; font-weight: 600; }
 .stat-blocked { color: #c62933; }
 .milestone { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #0f766e; }
-.card-footer { display: flex; align-items: center; gap: 8px; margin-top: 2px; }
+/* Несколько планов на карточке (0.6.1): название, полоса прогресса и показатели каждого плана */
+.plan-rows { list-style: none; margin: 2px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.plan-row { position: relative; z-index: 1; display: grid; grid-template-columns: minmax(0, 1fr) 118px; grid-template-areas: "name bar" "stats stats"; gap: 2px 10px; padding: 7px 9px; border-radius: 9px; background: var(--color-surface-2); border: 1px solid #edf0f6; }
+.plan-row.empty { background: transparent; border-style: dashed; }
+.plan-name { grid-area: name; font-size: 12.5px; font-weight: 600; color: var(--color-text); text-decoration: none; }
+.plan-name:hover { color: var(--color-primary-dark); text-decoration: underline; }
+.plan-bar { grid-area: bar; display: flex; align-items: center; gap: 6px; }
+.plan-bar .progress-bar { height: 5px; }
+.plan-bar .progress-value { min-width: 28px; font-size: 11.5px; }
+.plan-stats { grid-area: stats; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; font-size: 11.5px; color: var(--color-text-secondary); }
+.plan-stats-btn { margin-left: auto; border: 0; background: none; padding: 2px; border-radius: 5px; color: var(--color-text-muted); display: inline-flex; }
+.plan-stats-btn:hover { color: var(--color-primary-dark); background: #eef1f7; }
+.plan-more { padding-left: 9px; }
+.card-footer { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 2px; }
 .podelu-chip { display: inline-flex; align-items: center; gap: 4px; padding: 1px 8px; border-radius: 999px; background: #dcfff1; color: #216e4e; font-size: 11px; font-weight: 700; }
 .empty-drop { border: 1px dashed var(--color-border-strong); border-radius: var(--radius-md); padding: 22px; text-align: center; }
 .skeleton-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 12px; }

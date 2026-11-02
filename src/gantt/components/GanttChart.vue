@@ -720,7 +720,8 @@ function noteLabel(note) {
                 <g v-if="m.bar" class="task" :class="[`st-${m.bar.status}`, { selected: m.key === selectedKey, editable: editor.canEdit }]" :data-key="m.key" data-kind="task" :data-tip="m.key">
                   <rect v-if="m.bar.tail?.kind === 'late'" class="tail late" :x="m.bar.tail.x - 3" :y="m.bar.y + 3" :width="m.bar.tail.w + 3" :height="m.bar.h - 6" rx="4" />
                   <rect class="bar" :x="m.bar.x" :y="m.bar.y" :width="m.bar.w" :height="m.bar.h" rx="6" :fill="m.bar.fill" />
-                  <rect v-if="m.bar.progress" class="progress" :x="m.bar.x + 2" :y="m.bar.y + m.bar.h - 6" :width="Math.max(0, (m.bar.w - 4) * m.bar.progress / 100)" height="4" rx="2" />
+                  <path v-if="m.bar.done" class="progress-done" :class="`is-${m.bar.done.kind}`" :d="m.bar.done.d" :fill="m.bar.done.fill" />
+                  <rect v-if="m.bar.strip" class="progress" :x="m.bar.strip.x" :y="m.bar.strip.y" :width="m.bar.strip.w" :height="m.bar.strip.h" rx="2" />
                   <rect v-if="m.bar.tail?.kind === 'early'" class="tail early" :x="m.bar.tail.x" :y="m.bar.y" :width="m.bar.tail.w" :height="m.bar.h" rx="6" />
                   <rect v-if="m.bar.tail" class="tail-hatch" :x="m.bar.tail.kind === 'late' ? m.bar.tail.x : m.bar.tail.x" :y="m.bar.tail.kind === 'late' ? m.bar.y + 3 : m.bar.y" :width="m.bar.tail.w" :height="m.bar.tail.kind === 'late' ? m.bar.h - 6 : m.bar.h" fill="url(#hatch-late)" />
                   <text class="bar-text" :class="m.bar.text === '#ffffff' ? 'on-dark' : 'on-light'" :x="m.bar.x + m.bar.w / 2" :y="m.bar.y + m.bar.h / 2 + 4" :fill="m.bar.text">{{ m.bar.label }}</text>
@@ -915,6 +916,9 @@ function noteLabel(note) {
 .bar { transition: filter 0.12s; }
 .task:hover .bar { filter: brightness(1.06) drop-shadow(0 2px 4px rgba(20, 25, 40, 0.18)); }
 .progress { fill: rgba(0, 0, 0, 0.3); pointer-events: none; }
+/* Выполненная часть: затемнение (как в 1.0) или цвет задачи поверх светлого остатка — бледнеет вместе с полосой */
+.progress-done { pointer-events: none; transition: filter 0.12s; }
+.task:hover .progress-done.is-tint { filter: brightness(1.06); }
 .bar-text { font-size: 11.5px; font-weight: 700; text-anchor: middle; pointer-events: none; font-variant-numeric: tabular-nums; letter-spacing: 0.01em; paint-order: stroke; stroke-linejoin: round; }
 /* Обводка подписи: белая на насыщенной полосе — тонкая тёмная, тёмная на светлой — светлая; так подпись читается
    и поверх полоски прогресса, штриховки сдвига и линии «сегодня» */
@@ -924,9 +928,9 @@ function noteLabel(note) {
 .tail.early { fill: #22c55e; opacity: 0.7; }
 .tail-hatch { pointer-events: none; }
 .tail-text { font-size: 10.5px; font-weight: 700; fill: #b91c1c; pointer-events: none; paint-order: stroke; stroke: #fff; stroke-width: 3px; }
-.st-done .bar { opacity: 0.78; }
+.st-done .bar, .st-done .progress-done.is-tint { opacity: 0.78; }
 .st-done .outline { fill: none; stroke: #22c55e; stroke-width: 2.5; }
-.st-blocked .bar { opacity: 0.7; }
+.st-blocked .bar, .st-blocked .progress-done.is-tint { opacity: 0.7; }
 .st-blocked .outline { fill: none; stroke: #e5484d; stroke-width: 2; stroke-dasharray: 4 3; }
 .task.selected .outline { fill: none; stroke: #1c2331; stroke-width: 2; stroke-dasharray: none; }
 .done-check { fill: none; stroke: #fff; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }

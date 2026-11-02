@@ -41,13 +41,51 @@ export function projectProgress(project) {
   return s.progress ?? Math.round((s.done / s.total) * 100)
 }
 
-/** Состояние проекта: 'overdue', 'done', 'ontrack' или 'empty' (задач нет). */
-export function projectState(project) {
-  const s = project.stats
+/** Средний прогресс плана по его сводке (stats плана в списке проектов). */
+export function planProgress(stats) {
+  if (!stats?.total) return 0
+  return stats.progress ?? Math.round((stats.done / stats.total) * 100)
+}
+
+function statsState(s) {
   if (!s?.total) return 'empty'
   if (s.overdue > 0) return 'overdue'
-  if (s.done === s.total || projectProgress(project) >= 100) return 'done'
+  if (s.done === s.total || planProgress(s) >= 100) return 'done'
   return 'ontrack'
+}
+
+/**
+ * Состояние проекта: 'overdue', 'done', 'ontrack' или 'empty' (задач нет). С 0.6.1 — по всем открытым планам:
+ * просрочена задача в любом плане — проект «просрочен»; «завершён» — когда завершены все планы с задачами.
+ */
+export function projectState(project) {
+  const plans = (project.plans || []).filter((p) => p.stats)
+  if (!plans.length) return statsState(project.stats)
+  const states = plans.map((p) => statsState(p.stats)).filter((s) => s !== 'empty')
+  if (!states.length) return 'empty'
+  if (states.includes('overdue')) return 'overdue'
+  if (states.every((s) => s === 'done')) return 'done'
+  return 'ontrack'
+}
+
+/**
+ * Планы для карточки проекта (0.6.1): по порядку вкладок, не больше limit; если планов больше — сначала
+ * отбрасываются пустые. { shown: [{ id, title, stats }], hidden: число непоказанных }.
+ */
+export function cardPlans(project, limit = 3) {
+  const plans = (project.plans || []).filter((p) => p.stats)
+  if (plans.length <= limit) return { shown: plans, hidden: 0 }
+  const withTasks = plans.filter((p) => p.stats.total)
+  const keep = new Set((withTasks.length >= limit ? withTasks : [...withTasks, ...plans.filter((p) => !p.stats.total)]).slice(0, limit).map((p) => p.id))
+  return { shown: plans.filter((p) => keep.has(p.id)), hidden: plans.length - keep.size }
+}
+
+/** Ближайшая веха по всем открытым планам: { name, date, planTitle } или null. */
+export function nearestMilestone(project) {
+  const plans = (project.plans || []).filter((p) => p.stats?.nextMilestone)
+  if (!plans.length) return project.stats?.nextMilestone ? { ...project.stats.nextMilestone, planTitle: null } : null
+  const best = plans.reduce((a, b) => (b.stats.nextMilestone.date < a.stats.nextMilestone.date ? b : a))
+  return { ...best.stats.nextMilestone, planTitle: plans.length > 1 || project.plans.length > 1 ? best.title : null }
 }
 
 /**

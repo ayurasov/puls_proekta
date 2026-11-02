@@ -21,7 +21,14 @@
 from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
-from app.services.plan_schema import DEFAULT_CATEGORIES, PALETTE, default_settings, is_color, normalize_settings
+from app.services.plan_schema import (
+    DEFAULT_CATEGORIES,
+    PALETTE,
+    PROGRESS_STYLES,
+    default_settings,
+    is_color,
+    normalize_settings,
+)
 
 LEGACY_TZ = ZoneInfo("Europe/Moscow")
 
@@ -167,6 +174,8 @@ def legacy_settings(state):
         if isinstance(src.get(key), bool):
             display[key] = src[key]
     display["showOffsetLabels"] = src.get("showOffsetLabels") is not False
+    if src.get("progressStyle") in PROGRESS_STYLES:
+        display["progressStyle"] = src["progressStyle"]
     if src.get("legendPosition") in ("top", "bottom"):
         display["legendPosition"] = src["legendPosition"]
     if src.get("legendMode") in ("all", "main"):
@@ -482,7 +491,8 @@ def plan_to_legacy_state(plan, items, notes, assignees, comments_by_item=None, e
         "settings": {
             **{k: display[k] for k in ("useRuCalendar", "showWeekends", "showHolidays", "showProgress", "showNotes",
                                        "autoShift", "legendEnabled", "legendPosition", "legendMode",
-                                       "showTaskNamesOnBars", "tooltipFields", "showOffsetLabels")},
+                                       "showTaskNamesOnBars", "tooltipFields", "showOffsetLabels",
+                                       "progressStyle") if k in display},
         },
         "scale": settings["scale"],
         "zoom": settings["zoom"],

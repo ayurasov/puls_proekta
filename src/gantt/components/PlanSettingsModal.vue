@@ -9,6 +9,7 @@ import ColorPicker from './ColorPicker.vue'
 import ChartPreview from './ChartPreview.vue'
 import { addDays, diffDays, maxDay, minDay } from '../domain/dates'
 import { SCALES } from '../domain/layout'
+import { barProgress } from '../chartModel'
 import { useUiStore } from '../../stores/ui'
 import { countLabel } from '../../utils/format'
 
@@ -70,12 +71,28 @@ const LINE_STYLES = [
 const LEGEND_POSITIONS = [{ value: 'bottom', label: 'Снизу' }, { value: 'top', label: 'Сверху' }]
 const LEGEND_MODES = [{ value: 'all', label: 'Все строки' }, { value: 'main', label: 'Только верхнего уровня' }]
 const BAR_OPTIONS = [
-  { key: 'showProgress', label: 'Прогресс на полосах', hint: 'Тёмная полоска по нижнему краю полосы' },
   { key: 'showNotes', label: 'Пометки', hint: 'Флажки с текстом на шкале и в строках' },
   { key: 'showTaskNamesOnBars', label: 'Названия задач на полосах', hint: 'Рядом с датами или своим текстом полосы' },
   { key: 'showOffsetLabels', label: 'Подписи временных сдвигов', hint: '«сдвиг +3 д» справа от полосы' },
   { key: 'showDependencies', label: 'Связи между задачами (стрелки)', hint: '' },
 ]
+/** Вид прогресса на полосах (0.6.1): образец каждого варианта рисует тот же код, что и диаграмма (barProgress). */
+const PROGRESS_OPTIONS = [
+  { value: 'fill', label: 'Заливка', hint: 'Выполненная часть затемнена во всю высоту полосы — как в версиях 1.0' },
+  { value: 'strip', label: 'Полоска', hint: 'Тонкая тёмная полоска по нижнему краю полосы' },
+  { value: 'tint', label: 'Светлый остаток', hint: 'Сделанное — цветом задачи, оставшееся — светлым тоном того же цвета' },
+  { value: 'percent', label: 'С процентом', hint: 'Заливка и процент выполнения в начале подписи полосы' },
+  { value: 'none', label: 'Не показывать', hint: 'Полосы без прогресса; процент остаётся в подсказке и колонке «%»' },
+].map((o) => {
+  const display = { showProgress: o.value !== 'none', progressStyle: o.value }
+  return { ...o, sample: barProgress({ x: 1, y: 3, w: 62, h: 16, fill: '#3b82f6', status: 'inwork', progress: 60, display }) }
+})
+const progressValue = computed(() => (d.value.showProgress ? d.value.progressStyle || 'fill' : 'none'))
+const progressHint = computed(() => PROGRESS_OPTIONS.find((o) => o.value === progressValue.value)?.hint || '')
+function setProgressStyle(value) {
+  if (value === progressValue.value) return
+  patch({ display: value === 'none' ? { showProgress: false } : { showProgress: true, progressStyle: value } }, 'Прогресс на полосах')
+}
 const CALENDAR_OPTIONS = [
   { key: 'useRuCalendar', label: 'Производственный календарь РФ', hint: 'Праздники и переносы — по календарю администратора (Администрирование → Календарь)' },
   { key: 'showWeekends', label: 'Выделять выходные', hint: '' },
@@ -165,6 +182,25 @@ function saveDefaultView() {
             <span class="block-icon is-violet"><AppIcon name="gantt" :size="15" /></span>
             <div class="block-titles"><h3 id="ps-bars">Отображение</h3><p>Что рисовать на полосах задач</p></div>
           </header>
+          <div class="field">
+            <span id="ps-progress" class="field-label">Прогресс на полосах</span>
+            <div class="progress-styles" role="radiogroup" aria-labelledby="ps-progress" data-testid="progress-style">
+              <button
+                v-for="o in PROGRESS_OPTIONS" :key="o.value" type="button" role="radio" class="progress-tile"
+                :class="{ 'is-active': progressValue === o.value }" :aria-checked="progressValue === o.value" :title="o.hint"
+                :data-value="o.value" :disabled="readonly" @click="setProgressStyle(o.value)"
+              >
+                <svg class="progress-sample" viewBox="0 0 64 22" width="64" height="22" aria-hidden="true">
+                  <rect x="1" y="3" width="62" height="16" rx="6" :fill="o.sample.base" />
+                  <path v-if="o.sample.done" :d="o.sample.done.d" :fill="o.sample.done.fill" />
+                  <rect v-if="o.sample.strip" :x="o.sample.strip.x" :y="o.sample.strip.y" :width="o.sample.strip.w" :height="o.sample.strip.h" rx="2" fill="rgba(0,0,0,0.3)" />
+                  <text v-if="o.sample.prefix" x="32" y="14.5" :fill="o.sample.text" class="progress-sample-text">60%</text>
+                </svg>
+                <span class="progress-tile-label">{{ o.label }}</span>
+              </button>
+            </div>
+            <span class="field-hint">{{ progressHint }}</span>
+          </div>
           <div class="rows">
             <ToggleSwitch v-for="o in BAR_OPTIONS" :key="o.key" :model-value="Boolean(d[o.key])" :label="o.label" :hint="o.hint" :disabled="readonly" @update:model-value="(v) => setDisplay(o.key, v)" />
             <label class="setting-row">
@@ -318,6 +354,23 @@ function saveDefaultView() {
 .category:not(:has(button)) { padding-right: 11px; }
 .add-category { display: flex; gap: 8px; }
 .add-category .input { flex: 1; min-width: 0; }
+
+/* Вид прогресса — плитки с образцом полосы */
+.progress-styles { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; }
+.progress-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-start; gap: 6px; min-width: 0; padding: 10px 6px 9px;
+  border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); color: var(--color-text-secondary);
+  font-size: 12px; font-weight: 500; line-height: 1.25; text-align: center; transition: border-color 0.15s, box-shadow 0.15s, color 0.15s;
+}
+.progress-tile:hover:not(:disabled):not(.is-active) { border-color: var(--color-border-strong); color: var(--color-text); }
+.progress-tile.is-active { border-color: var(--color-primary); color: var(--color-text); font-weight: 600; box-shadow: 0 0 0 3px var(--color-primary-soft); }
+.progress-tile:focus-visible { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.progress-tile:disabled { cursor: not-allowed; opacity: 0.7; }
+.progress-tile[data-value='none'] .progress-sample { opacity: 0.85; }
+.progress-sample { display: block; max-width: 100%; }
+.progress-sample-text { font-size: 10px; font-weight: 700; text-anchor: middle; font-variant-numeric: tabular-nums; }
+.progress-tile-label { overflow-wrap: anywhere; }
+@media (max-width: 640px) { .progress-styles { grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); } }
 
 .view-pills { display: flex; flex-wrap: wrap; gap: 6px; }
 .view-pills + .field-hint { margin: 0; line-height: 1.45; }

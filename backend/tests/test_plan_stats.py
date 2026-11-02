@@ -73,3 +73,29 @@ def test_dashboard_stats_include_plan_dates(app, admin):
     assert stats["start"] == "2026-03-02" and stats["end"] == "2026-06-30"
     # Проект без задач — без сроков (и без stats, как раньше)
     assert projects["Пустой"].get("stats") is None
+
+
+def test_v061_card_shows_every_open_plan_and_skips_an_empty_first_tab(app, admin):
+    """0.6.1: пустая первая вкладка не оставляет карточку без данных; у каждого открытого плана — своя сводка."""
+    project_id, first_plan = create_project(admin, "Этапы")
+    second = admin.post(f"/api/projects/{project_id}/plans", json={"title": "Этап 2"}).get_json()["id"]
+    third = admin.post(f"/api/projects/{project_id}/plans", json={"title": "Этап 3"}).get_json()["id"]
+    ok_ops(admin, second, [task("a", status="inwork", progress=50, start="2026-03-02", end="2026-03-20"),
+                           task("b", status="done", progress=100, start="2026-03-01", end="2026-03-05")])
+    ok_ops(admin, third, [task("c", status="blocked", start="2026-05-01", end="2026-05-10")])
+    archived = admin.post(f"/api/projects/{project_id}/plans", json={"title": "Старый"}).get_json()["id"]
+    ok_ops(admin, archived, [task("x", start="2026-01-01", end="2026-01-02")])
+    admin.post(f"/api/plans/{archived}/archive")
+
+    project = next(p for p in admin.get("/api/projects").get_json() if p["title"] == "Этапы")
+    # Сводка — по первой вкладке с задачами («Этап 2»), а не по пустой первой
+    assert project["stats"]["planId"] == second and project["stats"]["planTitle"] == "Этап 2"
+    assert (project["stats"]["total"], project["stats"]["done"], project["stats"]["inwork"]) == (2, 1, 1)
+    # Все открытые планы по порядку вкладок, у каждого — своя сводка; архивный не показывается
+    plans = project["plans"]
+    assert [p["id"] for p in plans] == [first_plan, second, third]
+    assert plans[0]["stats"]["total"] == 0
+    assert (plans[1]["stats"]["total"], plans[1]["stats"]["progress"]) == (2, 75)
+    assert (plans[2]["stats"]["total"], plans[2]["stats"]["blocked"], plans[2]["stats"]["end"]) == (1, 1, "2026-05-10")
+    # Статистика основного плана с главной — та же вкладка
+    assert admin.get(f"/api/plans/{second}/stats").status_code == 200

@@ -138,8 +138,10 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
     if (m.bar) {
       const b = m.bar
       if (b.tail?.kind === 'late') out.push(`<rect x="${b.tail.x - 3}" y="${b.y + 3}" width="${b.tail.w + 3}" height="${b.h - 6}" rx="4" fill="#ef4444" opacity="0.6"/><rect x="${b.tail.x}" y="${b.y + 3}" width="${b.tail.w}" height="${b.h - 6}" fill="url(#hl)"/>`)
-      out.push(`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6" fill="${b.fill}"${b.status === 'done' ? ' opacity="0.78"' : b.status === 'blocked' ? ' opacity="0.7"' : ''}/>`)
-      if (b.progress) out.push(`<rect x="${b.x + 2}" y="${b.y + b.h - 6}" width="${Math.max(0, (b.w - 4) * b.progress / 100)}" height="4" rx="2" fill="rgba(0,0,0,0.3)"/>`)
+      const faded = b.status === 'done' ? ' opacity="0.78"' : b.status === 'blocked' ? ' opacity="0.7"' : ''
+      out.push(`<rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}" rx="6" fill="${b.fill}"${faded}/>`)
+      if (b.done) out.push(`<path d="${b.done.d}" fill="${b.done.fill}"${b.done.kind === 'tint' ? faded : ''}/>`)
+      if (b.strip) out.push(`<rect x="${b.strip.x}" y="${b.strip.y}" width="${b.strip.w}" height="${b.strip.h}" rx="2" fill="rgba(0,0,0,0.3)"/>`)
       if (b.tail?.kind === 'early') out.push(`<rect x="${b.tail.x}" y="${b.y}" width="${b.tail.w}" height="${b.h}" rx="6" fill="#22c55e" opacity="0.7"/>`)
       if (b.status === 'done') out.push(`<rect x="${b.x + 1}" y="${b.y + 1}" width="${b.w - 2}" height="${b.h - 2}" rx="5" fill="none" stroke="#22c55e" stroke-width="2.5"/>`)
       if (b.status === 'blocked') out.push(`<rect x="${b.x + 1}" y="${b.y + 1}" width="${b.w - 2}" height="${b.h - 2}" rx="5" fill="none" stroke="#e5484d" stroke-width="2" stroke-dasharray="4 3"/>`)

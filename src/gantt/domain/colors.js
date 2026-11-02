@@ -14,6 +14,12 @@ export function blendWithWhite(hex, opacity) {
   return '#' + [1, 3, 5].map((i) => Math.round(parseInt(hex.slice(i, i + 2), 16) * opacity + 255 * (1 - opacity))
     .toString(16).padStart(2, '0')).join('')
 }
+/** Цвет, затемнённый полупрозрачным слоем тёмно-синего (#0f172a) — так выглядит выполненная часть в стиле «Заливка». */
+export function shadeColor(hex, alpha) {
+  const dark = [15, 23, 42]
+  return '#' + [1, 3, 5].map((i, n) => Math.round(parseInt(hex.slice(i, i + 2), 16) * (1 - alpha) + dark[n] * alpha)
+    .toString(16).padStart(2, '0')).join('')
+}
 export function contrastRatio(a, b) {
   const [x, y] = [luminance(a), luminance(b)]
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)

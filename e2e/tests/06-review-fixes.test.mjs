@@ -95,12 +95,14 @@ test('удаление плана из меню вкладки — «Отмен�
   assert.equal(project.body.plans.filter((p) => !p.isArchived).length, 2)
 })
 
-test('карточка проекта считает только основной план', async () => {
+test('карточка проекта: основной план и копия — каждый своей строкой, задачи не складываются', async () => {
   await page.goto(BASE + '/')
   const card = page.locator(`[data-testid=project-${projectId}]`)
   await card.waitFor()
-  // Две задачи основного плана, копия с теми же задачами не удваивает
-  assert.match(await card.locator('.card-stats').textContent(), /2 задачи/)
+  // 0.6.1: у каждого плана своя строка; копия с теми же задачами не удваивает их в строке основного плана
+  const rows = card.locator(`[data-testid=card-plans-${projectId}] .plan-row`)
+  assert.equal(await rows.count(), 2)
+  for (const text of await rows.locator('.plan-stats').allTextContents()) assert.match(text, /^\s*2 задачи/)
   assert.match(await card.locator('.card-footer').textContent(), /Изменён/)
 })
 
