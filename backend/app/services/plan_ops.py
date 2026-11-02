@@ -22,6 +22,7 @@ import secrets
 from datetime import date
 
 from flask import current_app
+from sqlalchemy import inspect as sa_inspect
 from sqlalchemy import select
 
 from app import audit
@@ -82,7 +83,15 @@ class OpsResult:
 
 
 class PlanEditor:
-    def __init__(self, plan, user, base_revision=None):
+    """Применение операций к плану.
+
+    trusted — пакет собирает сервер (копия плана, импорт файла, восстановление версии), а не браузер: только такой
+    пакет пишет идентификаторы строк в MS Project (`extra.msp`), по которым обновление из файла находит строки.
+    revive_links — восстановленная строка возвращает свои связи, удалённые вместе с ней (отмена удаления); при
+    восстановлении версии плана связи берутся только из версии.
+    """
+
+    def __init__(self, plan, user, base_revision=None, trusted=False, revive_links=True):
         self.plan = plan
         self.user = user
         self.base_revision = base_revision
@@ -110,6 +119,11 @@ class PlanEditor:
         # Заполнение плана из файла: связь, которую нельзя создать (цикл, повтор, нет строки), пропускается с
         # отметкой в fixes, а не отклоняет весь файл
         self.skip_invalid_links = False
+        self.trusted = trusted
+        self.revive_links = revive_links
+        # Связи, ставшие живыми или сменившие концы в пакете: цикл проверяется один раз, по итоговому графу пакета
+        # (проверка каждой связи обходом графа на больших планах квадратична). id(связи) → [связь, строго, откат]
+        self._cycle_checks = {}
 
     # ---------- общие помощники ----------
     def _alive(self, collection, key):
@@ -120,11 +134,13 @@ class PlanEditor:
         return f"{TYPE_LABELS.get(item.type, 'Строка')} «{(item.name or '').strip() or item.key}»"
 
     def _event(self, entity, key, action, summary, changes=None):
-        self.pending_events.append(PlanEvent(
+        event = PlanEvent(
             plan_id=self.plan.id, revision=self.revision, entity=entity, entity_key=key, action=action,
             user_id=self.user.id if self.user else None, user_name=self.user.name if self.user else "система",
             created_at=self.now, summary=summary, changes=changes,
-        ))
+        )
+        self.pending_events.append(event)
+        return event
 
     def _touch(self, entity, bucket):
         entity.updated_at = self.now
@@ -271,9 +287,14 @@ class PlanEditor:
             if existing.deleted_at is not None:
                 raise ApiError(409, "key_exists", "Строка с таким ключом удалена — используйте восстановление")
             raise ApiError(409, "key_exists", "Строка с таким ключом уже есть")
+        extra = data.get("extra") if isinstance(data.get("extra"), dict) else None
+        if extra and "msp" in extra and not self.trusted:
+            # Идентификаторы MS Project из браузера (копия строки) не принимаются: иначе копия выглядела бы строкой
+            # файла — её нашло бы обновление из MS Project вместо исходной или удалило бы как «нет в файле»
+            extra = {k: v for k, v in extra.items() if k != "msp"} or None
         item = PlanItem(plan_id=self.plan.id, key=key, type=item_type, name="",
                         created_at=self.now, created_by_id=self.user.id if self.user else None,
-                        comment_count=0, extra=data.get("extra") if isinstance(data.get("extra"), dict) else None)
+                        comment_count=0, extra=extra)
         defaults = {"task": TASK_DEFAULTS, "milestone": MILESTONE_DEFAULTS, "group": GROUP_DEFAULTS}[item_type]
         for attr, value in defaults.items():
             setattr(item, attr, value)
@@ -330,7 +351,8 @@ class PlanEditor:
             self._legacy_dependency(item, legacy)
         self._conflict(item, "item")
         before_name = self._label(item)
-        extra_changed = self._update_msp(item, fields.pop("extra", None))
+        extra = fields.pop("extra", None)
+        extra_changed = self._update_msp(item, extra) if self.trusted else False
         changes = self._set_item_fields(item, fields)
         if extra_changed and not changes:
             # Изменились только идентификаторы строки в MS Project (обновление из файла) — без записи в истории
@@ -431,8 +453,14 @@ class PlanEditor:
             text += f" ({', '.join(parts)})"
         return text
 
+    def _cycle_message(self, link):
+        return (f"Нельзя связать {self._row_name(link.from_key)} → {self._row_name(link.to_key)}: "
+                f"{self._row_name(link.to_key)} уже предшествует {self._row_name(link.from_key)} "
+                "(напрямую или через цепочку связей) — получился бы цикл")
+
     def _link_problem(self, link):
-        """Почему связь не может быть живой: (статус, код, сообщение) или None."""
+        """Почему связь не может быть живой: (статус, код, сообщение) или None. Цикл здесь не проверяется — его
+        проверяет конец пакета (_check_cycles), один раз для всех связей пакета."""
         for role, key in (("Предшественник", link.from_key), ("Последующая строка", link.to_key)):
             item = self.items.get(key)
             if item is None:
@@ -443,14 +471,108 @@ class PlanEditor:
                 return 400, "validation_error", "Связь возможна только между задачами и вехами, группы не связываются"
         if link.from_key == link.to_key:
             return 400, "validation_error", "Строка не может быть предшественником самой себя"
+        if self._nested(link.from_key, link.to_key) or self._nested(link.to_key, link.from_key):
+            # Как в MS Project: вложенная задача и так в сроках родительской, связь между ними выталкивала бы её
+            return 400, "validation_error", (f"Нельзя связать {self._row_name(link.from_key)} и "
+                                             f"{self._row_name(link.to_key)}: одна строка вложена в другую")
         existing = self._pairs.get((link.from_key, link.to_key))
         if existing is not None and existing is not link:
             return 400, "validation_error", f"{self._link_label(link, details=False)} уже есть"
-        if self._reaches(link.to_key, link.from_key):
-            return 400, "link_cycle", (f"Нельзя связать {self._row_name(link.from_key)} → {self._row_name(link.to_key)}: "
-                                       f"{self._row_name(link.to_key)} уже предшествует {self._row_name(link.from_key)} "
-                                       "(напрямую или через цепочку связей) — получился бы цикл")
         return None
+
+    def _nested(self, key, ancestor):
+        """Строка key вложена (на любой глубине) в строку ancestor."""
+        seen = {key}
+        node = self.items.get(key)
+        while node is not None and node.parent_key and node.parent_key not in seen:
+            if node.parent_key == ancestor:
+                return True
+            seen.add(node.parent_key)
+            node = self.items.get(node.parent_key)
+        return False
+
+    def _watch_cycle(self, link, strict, undo=None):
+        """Связь стала живой или сменила концы: проверить на цикл в конце пакета. strict — цикл отклоняет пакет
+        (правка сотрудника), иначе undo() отменяет только эту связь (файл, восстановление, отмена удаления)."""
+        entry = self._cycle_checks.get(id(link))
+        if entry is None:
+            self._cycle_checks[id(link)] = [link, strict, undo]
+        else:
+            entry[1] = entry[1] or strict
+
+    def _discard_link(self, link, event):
+        """Убрать созданную в пакете связь совсем (связь из файла, замкнувшая цикл)."""
+        state = sa_inspect(link)
+        if state.persistent:
+            db.session.delete(link)
+        elif state.pending:
+            db.session.expunge(link)
+        self._graph_remove(link)
+        self.links.pop(link.key, None)
+        self.result.links.pop(link.key, None)
+        if event in self.pending_events:
+            self.pending_events.remove(event)
+
+    def _graph_order_ok(self):
+        """Граф живых связей без циклов — алгоритм Кана, один проход."""
+        indegree = {}
+        for source, targets in self._succ.items():
+            indegree.setdefault(source, 0)
+            for target in targets:
+                indegree[target] = indegree.get(target, 0) + 1
+        queue = [node for node, n in indegree.items() if n == 0]
+        done = 0
+        while queue:
+            node = queue.pop()
+            done += 1
+            for target in self._succ.get(node, ()):
+                indegree[target] -= 1
+                if indegree[target] == 0:
+                    queue.append(target)
+        return done == len(indegree)
+
+    def _cycle_core(self):
+        """Строки, которые и достижимы из цикла, и ведут в цикл (Кан с обеих сторон): все циклы — внутри."""
+        preds = {}
+        for source, targets in self._succ.items():
+            for target in targets:
+                preds.setdefault(target, set()).add(source)
+
+        def trim(forward, backward):
+            nodes = set(forward) | set(backward)
+            count = {node: len(backward.get(node, ())) for node in nodes}
+            queue = [node for node, n in count.items() if n == 0]
+            while queue:
+                node = queue.pop()
+                nodes.discard(node)
+                for nxt in forward.get(node, ()):
+                    count[nxt] -= 1
+                    if count[nxt] == 0:
+                        queue.append(nxt)
+            return nodes
+
+        return trim(self._succ, preds) & trim(preds, self._succ)
+
+    def _check_cycles(self):
+        """Цикл связей по итогам пакета. Без цикла — один проход по графу. С циклом связи пакета, лежащие в циклах,
+        добавляются заново по одной в порядке операций: первая, замыкающая цикл, отклоняет пакет (правка сотрудника,
+        сообщение о ней) или только отменяется (файл, восстановление)."""
+        checks = [entry for entry in self._cycle_checks.values()
+                  if entry[0].deleted_at is None and self.links.get(entry[0].key) is entry[0]]
+        self._cycle_checks = {}
+        if not checks or self._graph_order_ok():
+            return
+        core = self._cycle_core()
+        suspects = [entry for entry in checks if entry[0].from_key in core and entry[0].to_key in core]
+        for link, _strict, _undo in suspects:
+            self._graph_remove(link)
+        for link, strict, undo in suspects:
+            if not self._reaches(link.to_key, link.from_key):
+                self._graph_add(link)
+                continue
+            if strict or undo is None:
+                raise ApiError(400, "link_cycle", self._cycle_message(link), details={"key": link.key})
+            undo(self._cycle_message(link))
 
     def _check_link(self, link):
         problem = self._link_problem(link)
@@ -486,6 +608,11 @@ class PlanEditor:
         return changes
 
     def op_link_create(self, op):
+        self._create_link(op, strict=not self.skip_invalid_links)
+
+    def _create_link(self, op, strict, cycle_fix=None):
+        """Создать связь. strict — связь, замкнувшая цикл, отклоняет пакет; иначе связь не создаётся, а в fixes —
+        отметка (cycle_fix — своя отметка вместо стандартной)."""
         data = op.get("link") or {}
         if not isinstance(data, dict):
             raise ApiError(400, "validation_error", "Неверный формат связи")
@@ -510,8 +637,18 @@ class PlanEditor:
         self._graph_add(link)
         self._touch(link, self.result.links)
         # Связь — в истории последующей строки: её сроки задаёт связь
-        self._event("link", link.to_key, "create", f"{self._link_label(link)} добавлена",
-                    {"link": key, "from": link.from_key, "type": link.type, "lag": link.lag, "lagKind": link.lag_kind})
+        event = self._event("link", link.to_key, "create", f"{self._link_label(link)} добавлена",
+                            {"link": key, "from": link.from_key, "type": link.type, "lag": link.lag,
+                             "lagKind": link.lag_kind})
+
+        def undo(message):
+            self._discard_link(link, event)
+            if cycle_fix is not None:
+                cycle_fix()
+            else:
+                self._fix(link, "link", "key", f"связь не перенесена: {message}")
+
+        self._watch_cycle(link, strict=strict, undo=undo)
 
     def op_link_update(self, op):
         link = self._alive(self.links, op.get("key"))
@@ -529,6 +666,8 @@ class PlanEditor:
         self._graph_add(link)
         if not changes:
             return
+        if "from" in changes or "to" in changes:
+            self._watch_cycle(link, strict=True)
         self._touch(link, self.result.links)
         parts = []
         for name, label in (("from", "предшественник"), ("to", "последующая")):
@@ -553,23 +692,35 @@ class PlanEditor:
         self._touch(link, self.result.links)
         self._event("link", link.to_key, "delete", f"{self._link_label(link)} удалена", {"link": link.key})
 
-    def _restore_link(self, link, summary):
-        """Вернуть удалённую связь, если её строки живы и она не даёт повтора или цикла; True — вернули."""
+    def _restore_link(self, link, summary, report=False):
+        """Вернуть удалённую связь, если её строки живы и она не повторяет другую; True — вернули. Если в конце пакета
+        окажется, что она замкнула цикл, связь снова удаляется (report — с отметкой в fixes)."""
         if self._link_problem(link) is not None:
             return False
+        was = (link.deleted_at, link.deleted_by_id)
         link.deleted_at = None
         link.deleted_by_id = None
         self._graph_add(link)
         self._touch(link, self.result.links)
-        self._event("link", link.to_key, "restore", summary, {"link": link.key})
+        event = self._event("link", link.to_key, "restore", summary, {"link": link.key})
+
+        def undo(message):
+            link.deleted_at, link.deleted_by_id = was
+            self._graph_remove(link)
+            if event in self.pending_events:
+                self.pending_events.remove(event)
+            if report:
+                self._fix(link, "link", "key", f"связь не восстановлена: {message}")
+
+        self._watch_cycle(link, strict=False, undo=undo)
         return True
 
     def op_link_restore(self, op):
         link = self.links.get(op.get("key"))
         if link is None or link.deleted_at is None:
             return
-        if not self._restore_link(link, f"{self._link_label(link)} восстановлена"):
-            # Связь, которую уже нельзя вернуть (строку удалили, появилась встречная связь), остаётся удалённой:
+        if not self._restore_link(link, f"{self._link_label(link)} восстановлена", report=True):
+            # Связь, которую уже нельзя вернуть (строку удалили, появилась такая же связь), остаётся удалённой:
             # отмена удаления строк из-за неё не отклоняется целиком, а клиент получает связь удалённой
             self._fix(link, "link", "key", f"связь не восстановлена: {self._link_problem(link)[2]}")
             self._touch(link, self.result.links)
@@ -777,8 +928,10 @@ class PlanEditor:
             if self._link_problem(link) is not None:
                 self._fix(item, "item", "dependencyKey", "предшественник удалён или недопустим")
                 continue
-            self.op_link_create({"link": {"key": link.key, "from": link.from_key, "to": key, "type": link.type,
-                                          "lag": link.lag}})
+            # Как и раньше, цикл через поле строки не отклоняет пакет, а снимает связь
+            self._create_link({"link": {"key": link.key, "from": link.from_key, "to": key, "type": link.type,
+                                        "lag": link.lag}}, strict=False,
+                              cycle_fix=lambda item=item: self._fix(item, "item", "dependencyKey", "циклическая связь"))
         self.legacy_links = []
 
     def check_integrity(self):
@@ -823,14 +976,18 @@ class PlanEditor:
                           "строка связи удалена")
                 self._touch(link, self.result.links)
         # …и возвращается при её восстановлении: связи, удалённые не раньше строки (вместе с ней или вслед за
-        # другой своей строкой), если обе строки живы и связь не даёт повтора или цикла
-        for key, deleted_at in self.restored.items():
-            if key not in alive_items:
-                continue
-            for link in sorted(self.links.values(), key=lambda link: (link.id or 0, link.key)):
-                if link.deleted_at is None or link.deleted_at < deleted_at or key not in (link.from_key, link.to_key):
-                    continue
-                self._restore_link(link, f"{self._link_label(link)} восстановлена вместе со строкой")
+        # другой своей строкой), если обе строки живы и связь не даёт повтора или цикла. Восстановление версии плана
+        # (revive_links=False) берёт связи только из версии
+        if self.restored and self.revive_links:
+            candidates = sorted((link for link in self.links.values() if link.deleted_at is not None
+                                 and (link.from_key in self.restored or link.to_key in self.restored)),
+                                key=lambda link: (link.id or 0, link.key))
+            for link in candidates:
+                for end in (link.from_key, link.to_key):
+                    since = self.restored.get(end)
+                    if since is not None and end in alive_items and link.deleted_at >= since:
+                        self._restore_link(link, f"{self._link_label(link)} восстановлена вместе со строкой")
+                        break
         for note in self.notes.values():
             if note.deleted_at is None and note.row_key is not None and note.row_key not in alive_items:
                 # Пометка строки, которой больше нет, удаляется вместе со строкой (как в 1.0.x)
@@ -862,6 +1019,7 @@ class PlanEditor:
             handlers[op["op"]](op)
         self._apply_legacy_links()
         self.check_integrity()
+        self._check_cycles()
         return self.pending_events
 
 
@@ -900,12 +1058,17 @@ def lock_plan(plan_id, allow_archived=False):
     return plan
 
 
-def apply_ops(plan, user, ops, base_revision=None, snapshot=True, audit_summary=True, project=None):
-    """Применить пакет; вернуть OpsResult. План должен быть заблокирован `lock_plan`."""
+def apply_ops(plan, user, ops, base_revision=None, snapshot=True, audit_summary=True, project=None,
+              restoring=False):
+    """Применить пакет; вернуть OpsResult. План должен быть заблокирован `lock_plan`.
+
+    restoring — пакет восстановления версии плана, его собирает сервер: без ограничения числа операций (версия
+    большого плана после замены содержимого), с идентификаторами MS Project строк и без возврата связей
+    восстановленных строк сверх тех, что есть в версии."""
     if snapshot:
         maybe_auto_snapshot(plan, user, current_app.config.get("SNAPSHOT_INTERVAL_MINUTES", 30))
-    editor = PlanEditor(plan, user, base_revision)
-    events = editor.apply(ops)
+    editor = PlanEditor(plan, user, base_revision, trusted=restoring, revive_links=not restoring)
+    events = editor.apply(ops, max_ops=None if restoring else MAX_OPS)
     result = editor.result
     if not events and not result.fixes and not result.plan_changed:
         result.revision = plan.revision

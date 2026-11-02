@@ -58,10 +58,31 @@ export function computeDependencyShifts(items, { links = null, calendar = null, 
 
 const DEFAULT_CALENDAR = createCalendar({ useRuCalendar: false })
 
-/** Сроки предшественника для связей: начало и окончание (со сдвигом; у завершённой — дата завершения). */
+/** Окончание строки для её последующих: у завершённой задачи — дата завершения, иначе со сдвигом; у вехи — дата. */
+export function effectiveEnd(item) {
+  if (item?.type === 'milestone') return item.date || ''
+  if (item?.type !== 'task') return ''
+  return item.status === 'done' && item.completedDate ? item.completedDate : shiftedEnd(item)
+}
+
+/** Сроки предшественника для связей: начало и окончание (effectiveEnd). */
 function predecessorDates(dep) {
   if (dep.type === 'milestone') return { ds: dep.date, de: dep.date }
-  return { ds: dep.start, de: dep.status === 'done' && dep.completedDate ? dep.completedDate : shiftedEnd(dep) }
+  return { ds: dep.start, de: effectiveEnd(dep) }
+}
+
+/** Начало задачи из n рабочих дней, которая заканчивается в end (end входит в срок, если он рабочий). */
+export function startForWorkingDays(calendar, end, n) {
+  let remaining = Math.max(1, Math.round(Number(n) || 1))
+  let day = end
+  if (calendar.isWorkingDay(day)) remaining -= 1
+  let guard = 0
+  while (remaining > 0 && guard < 20000) {
+    day = addDays(day, -1)
+    if (calendar.isWorkingDay(day)) remaining -= 1
+    guard += 1
+  }
+  return day
 }
 
 /** День, отстоящий от day на lag дней — календарных или рабочих. */
@@ -111,6 +132,11 @@ function shiftTask(task, links, byKey, calendar, pin) {
   const snet = snetDate(task)
   if (bounds.start === null && bounds.end === null && !(snet && task.start < snet)) return null
   const dur = Math.max(1, diffDays(task.start, task.end) + 1)
+  // Задача «по длительности» в рабочих днях сохраняет число рабочих дней, а не календарный размах
+  const working = task.endMode === 'duration' && task.durationType === 'working'
+  const workDays = working ? Math.max(1, Number(task.duration) || calendar.countWorkingDays(task.start, task.end)) : 0
+  const endFrom = (start) => (working ? calendar.addWorkingDays(start, workDays) : addDays(start, dur - 1))
+  const startFrom = (end) => (working ? startForWorkingDays(calendar, end, workDays) : addDays(end, -(dur - 1)))
   // Что задают связи: начало (все FS/SS), окончание (все FF/SF) или и то и другое
   let mode = bounds.end === null ? 'start' : bounds.start === null ? 'end' : 'both'
   let ns = task.start
@@ -118,9 +144,9 @@ function shiftTask(task, links, byKey, calendar, pin) {
   if (bounds.start !== null && mode === 'start') ns = bounds.start
   if (mode === 'end') {
     ne = bounds.end
-    ns = pin?.start && pin.start <= ne ? pin.start : addDays(ne, -(dur - 1))
+    ns = pin?.start && pin.start <= ne ? pin.start : startFrom(ne)
   }
-  if (mode === 'both') ns = maxDay(bounds.start, addDays(bounds.end, -(dur - 1)))
+  if (mode === 'both') ns = maxDay(bounds.start, startFrom(bounds.end))
   if (snet && ns < snet) {
     // «Начало не ранее»: начало упирается в дату ограничения, длительность сохраняется
     ns = snet
@@ -131,10 +157,10 @@ function shiftTask(task, links, byKey, calendar, pin) {
     if (ns < parent.start) ns = parent.start
     if (ne > parent.end) ne = parent.end
   }
-  let end = mode === 'end' ? ne : mode === 'start' && pin?.end && pin.end >= ns ? pin.end : addDays(ns, dur - 1)
+  let end = mode === 'end' ? ne : mode === 'start' && pin?.end && pin.end >= ns ? pin.end : endFrom(ns)
   if (end < ns) {
     // FF/SF-подзадача упёрлась в окончание родителя: начало сдвигается назад, но не раньше родителя
-    const back = addDays(end, -(dur - 1))
+    const back = startFrom(end)
     ns = parent && parent.type === 'task' && back < parent.start ? parent.start : back
     if (end < ns) end = ns
   }
@@ -324,9 +350,22 @@ export function dependentKeys(links, key) {
   return result
 }
 
+/** Строка key вложена (на любой глубине) в строку ancestor. */
+export function isNested(byKey, key, ancestor) {
+  const seen = new Set([key])
+  let node = byKey.get(key)
+  while (node?.parentKey && !seen.has(node.parentKey)) {
+    if (node.parentKey === ancestor) return true
+    seen.add(node.parentKey)
+    node = byKey.get(node.parentKey)
+  }
+  return false
+}
+
 /**
  * Почему связь from → to нельзя добавить (или изменить связь ignoreKey на такую): текст для сотрудника или ''.
- * Те же проверки, что на сервере: строки есть, это задачи или вехи, не сама на себя, без повтора и цикла.
+ * Те же проверки, что на сервере: строки есть, это задачи или вехи, не сама на себя и не вложенная (родительская),
+ * без повтора и цикла.
  */
 export function linkProblem(links, byKey, from, to, ignoreKey = null) {
   const a = byKey.get(from)
@@ -334,6 +373,8 @@ export function linkProblem(links, byKey, from, to, ignoreKey = null) {
   if (!a || !b) return 'Строка связи удалена'
   if (!isLinkable(a) || !isLinkable(b)) return 'Связь возможна только между задачами и вехами'
   if (from === to) return 'Строка не может быть предшественником самой себя'
+  // Как в MS Project: вложенная задача и так в сроках родительской, связь между ними выталкивала бы её из них
+  if (isNested(byKey, from, to) || isNested(byKey, to, from)) return `Нельзя связать «${a.name}» и «${b.name}»: одна строка вложена в другую`
   const others = (links || []).filter((l) => l.key !== ignoreKey)
   if (others.some((l) => l.from === from && l.to === to)) return `Связь «${a.name}» → «${b.name}» уже есть`
   if (dependentKeys(others, to).has(from)) {

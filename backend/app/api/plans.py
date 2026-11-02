@@ -516,7 +516,8 @@ def restore_snapshot(plan_id, snapshot_id):
     ops = diff_ops_to_document(plan, snapshot.data)
     result = None
     if ops:
-        result = apply_ops(plan, user, ops, snapshot=False, audit_summary=False)
+        # Пакет собирает сервер: версия большого плана — больше 2000 операций; связи — только из версии
+        result = apply_ops(plan, user, ops, snapshot=False, audit_summary=False, restoring=True)
     db.session.add(PlanEvent(plan_id=plan.id, revision=plan.revision, entity="plan", action="restore_snapshot",
                              user_id=user.id, user_name=user.name,
                              summary=f"Восстановлено состояние плана (снимок {snapshot.id}, изменений: {len(ops)})"))

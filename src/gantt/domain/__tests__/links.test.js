@@ -222,3 +222,35 @@ describe('рисунок и выгрузка', () => {
     expect(text).toBe('3FS+2д;5SS;3FF-1рд;«Скрытая»FS')
   })
 })
+
+describe('ревью 0.7.0', () => {
+  it('задача в рабочих днях, сдвинутая связью, сохраняет число рабочих дней', () => {
+    const calendar = createCalendar({ useRuCalendar: false })
+    // 5 рабочих дней с понедельника 02.11 по пятницу 06.11; связь ставит начало на среду 04.11
+    const items = [task('A', '2026-10-26', '2026-11-03'),
+      task('B', '2026-11-02', '2026-11-06', { endMode: 'duration', durationType: 'working', duration: 5 })]
+    expect(span(shift(items, [link('A', 'B')], { calendar }).get('B'))).toBe('2026-11-04..2026-11-10')
+    // Окончание по связи FF — начало отсчитывается назад по рабочим дням
+    expect(span(shift(items, [link('A', 'B', 'FF', 7)], { calendar }).get('B'))).toBe('2026-11-04..2026-11-10')
+    // Календарная длительность — как раньше: тот же размах
+    const calendarDays = [items[0], { ...items[1], durationType: 'calendar' }]
+    expect(span(shift(calendarDays, [link('A', 'B')], { calendar }).get('B'))).toBe('2026-11-04..2026-11-08')
+  })
+
+  it('связь строки с её родительской или вложенной недопустима', () => {
+    const items = [task('p', '2026-01-01', '2026-01-10'), task('c', '2026-01-02', '2026-01-03', { parentKey: 'p' }),
+      task('g', '2026-01-02', '2026-01-02', { parentKey: 'c' }), task('x', '2026-01-01', '2026-01-01')]
+    const byKey = new Map(items.map((i) => [i.key, i]))
+    expect(linkProblem([], byKey, 'p', 'c')).toBe('Нельзя связать «p» и «c»: одна строка вложена в другую')
+    expect(linkProblem([], byKey, 'g', 'p')).toMatch(/вложена/)
+    expect(linkProblem([], byKey, 'x', 'g')).toBe('')
+  })
+
+  it('«Срыв крайнего срока» отбирает и вехи — как метка и статистика', () => {
+    const items = [task('a', '2026-05-01', '2026-05-10', { deadline: '2026-05-08' }), milestone('m', '2026-05-12', { deadline: '2026-05-11' }),
+      milestone('ok', '2026-05-12', { deadline: '2026-05-20' }), task('b', '2026-05-01', '2026-05-02')]
+    const filters = { dates: new Set(['deadline']) }
+    expect(items.filter((i) => itemPassesFilters(i, filters, { today: '2026-05-01' }, items)).map((i) => i.key)).toEqual(['a', 'm'])
+    expect(filterCounts(items, {}, { today: '2026-05-01' }).dates.deadline).toBe(2)
+  })
+})

@@ -25,6 +25,7 @@ globalThis.document = { ...listeners, visibilityState: 'visible', createElement:
 
 const { createPlanEditor, hasUnsavedEdits } = await import('../editor')
 const { linksFromItems } = await import('../domain/dependencies')
+const { addDays } = await import('../domain/dates')
 const { ApiError, AuthRequiredError } = await import('../../api/client')
 
 const task = (key, name, rev = 1) => ({
@@ -212,6 +213,9 @@ describe('0.4.0: несколько строк одной правкой', () =>
 })
 
 describe('0.5.0: строки из Jira со связями «блокирует»', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
   it('предшественник по метке из того же списка и автосдвиг — одной правкой', async () => {
     const editor = await openEditor([task('t', 'Старая')])
     const before = editor.state.items.t.end
@@ -393,5 +397,121 @@ describe('0.7.0: связи — отдельные операции', () => {
     expect(editor.state.items.b.start).toBe('2026-11-09')
     editor.updateLink('l1', { lagKind: 'calendar' })
     expect(editor.state.items.b.start).toBe('2026-11-07')
+  })
+})
+
+describe('ревью 0.7.0: автосдвиг больших планов и связи', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = []; ui.error.mockClear() })
+  afterEach(() => vi.useRealTimers())
+
+  const N = 5000
+  // Цепочка FS из N однодневных задач, согласованная со связями; reverse — строки в обратном порядке
+  const chain = ({ reverse = false } = {}) => {
+    const items = Array.from({ length: N }, (_, k) => ({ ...task(`t${k}`, `T${k}`), start: addDays('2026-01-01', k), end: addDays('2026-01-01', k), position: reverse ? N - k : k }))
+    const links = Array.from({ length: N - 1 }, (_, k) => ({ key: `l${k}`, from: `t${k}`, to: `t${k + 1}`, type: 'FS', lag: 0, lagKind: 'calendar' }))
+    return [reverse ? items.reverse() : items, links]
+  }
+
+  it('правка с автосдвигом 5000 строк уходит частями до 1500 операций, по порядку; отмена — одна и тоже частями', async () => {
+    const editor = await openEditor(...chain())
+    await settle()
+    server.posts = []
+    editor.updateItem('t0', { end: '2026-01-02' }, 'Срок первой задачи')
+    expect(editor.state.items[`t${N - 1}`].start).toBe(addDays('2026-01-01', N))
+    await settle(1000)
+    expect(server.posts.map((p) => p.ops.length)).toEqual([1500, 1500, 1500, 500])
+    const sent = server.posts.flatMap((p) => p.ops)
+    expect(sent[0]).toEqual({ op: 'item.update', key: 't0', fields: { end: '2026-01-02' } })
+    expect(sent.at(-1).key).toBe(`t${N - 1}`)
+    expect(editor.state.undo.map((e) => e.label)).toEqual(['Срок первой задачи'])
+    server.posts = []
+    editor.undo()
+    expect(editor.state.items.t1.start).toBe('2026-01-02')
+    await settle(1000)
+    expect(server.posts.map((p) => p.ops.length)).toEqual([1500, 1500, 1500, 500])
+    expect(editor.pendingCount).toBe(0)
+  })
+
+  it('часть большой правки отклонена — остальные части не уходят, отмена снимается, план перечитывается', async () => {
+    const editor = await openEditor(...chain())
+    const base = server.handler
+    let posts = 0
+    server.handler = async (method, url, body) => {
+      if (method === 'POST' && ++posts === 2) throw new ApiError('Строка удалена другим сотрудником', 409, { error: 'gone' })
+      return base(method, url, body)
+    }
+    editor.updateItem('t0', { end: '2026-01-02' }, 'Срок первой задачи')
+    await settle(1000)
+    expect(server.posts.map((p) => p.ops.length)).toEqual([1500, 1500])
+    expect(ui.error).toHaveBeenCalledTimes(1)
+    expect(editor.state.undo).toEqual([])
+    expect(editor.pendingCount).toBe(0)
+  })
+
+  it('«Выровнять по связям» на тысячах строк — тоже частями', async () => {
+    const [items, links] = chain()
+    const editor = await openEditor(items.map((i) => ({ ...i, start: '2026-01-01', end: '2026-01-01' })), links)
+    const ops = editor.cascadeOps(new Map(), { all: true })
+    expect(ops).toHaveLength(N - 1)
+    editor.commit(ops, 'Выравнивание по связям')
+    await settle(1000)
+    expect(server.posts.map((p) => p.ops.length)).toEqual([1500, 1500, 1500, 499])
+  })
+
+  it('автосдвиг цепочки в обратном порядке строк — один обход, без зависания', async () => {
+    const editor = await openEditor(...chain({ reverse: true }))
+    const started = Date.now()
+    const ops = editor.cascadeOps(new Map([['t0', { end: '2026-01-02' }]]))
+    expect(ops).toHaveLength(N - 1)
+    expect(Date.now() - started).toBeLessThan(3000)
+  })
+
+  it('смена статуса без смены дат не переставляет несогласованные последующие', async () => {
+    const editor = await openEditor([
+      { ...task('a', 'A'), start: '2026-11-02', end: '2026-11-06' },
+      { ...task('b', 'B'), start: '2026-12-01', end: '2026-12-02' }, // давно не согласована (например, из MS Project)
+    ], [{ key: 'l1', from: 'a', to: 'b', type: 'FS', lag: 0, lagKind: 'calendar' }])
+    editor.setStatus('a', 'inwork')
+    expect(editor.state.items.b.start).toBe('2026-12-01')
+    // Завершение в плановый срок окончание для последующих не меняет
+    editor.setStatus('a', 'done', '2026-11-06')
+    expect(editor.state.items.b.start).toBe('2026-12-01')
+    // Завершение позже срока — меняет: последующая встаёт после фактической даты
+    editor.setStatus('a', 'inwork')
+    editor.setStatus('a', 'done', '2026-11-10')
+    expect(editor.state.items.b.start).toBe('2026-11-11')
+  })
+
+  it('удаление предшественника: последующая встаёт по оставшимся связям, отмена возвращает всё', async () => {
+    const editor = await openEditor([
+      { ...task('a', 'A'), start: '2026-11-02', end: '2026-11-06' },
+      { ...task('b', 'B'), start: '2026-11-02', end: '2026-11-12' },
+      { ...task('c', 'C'), start: '2026-11-13', end: '2026-11-14' },
+    ], [
+      { key: 'l1', from: 'a', to: 'c', type: 'FS', lag: 0, lagKind: 'calendar' },
+      { key: 'l2', from: 'b', to: 'c', type: 'FS', lag: 0, lagKind: 'calendar' },
+    ])
+    editor.deleteItems(['b'])
+    expect([editor.state.items.c.start, editor.state.items.c.end]).toEqual(['2026-11-07', '2026-11-08'])
+    editor.undo()
+    expect(editor.state.items.c.start).toBe('2026-11-13')
+    expect(Object.keys(editor.state.links).sort()).toEqual(['l1', 'l2'])
+  })
+
+  it('копия строки — без идентификаторов MS Project', async () => {
+    const editor = await openEditor([{ ...task('a', 'A'), extra: { msp: { uid: 7, guid: 'g' }, legacyGroupId: 'x' } },
+      { ...task('b', 'B'), extra: { msp: { uid: 8 } } }])
+    const copyA = editor.duplicateItem('a')
+    const copyB = editor.duplicateItem('b')
+    expect(editor.state.items[copyA].extra).toEqual({ legacyGroupId: 'x' })
+    expect(editor.state.items[copyB].extra).toBeUndefined()
+    expect(editor.state.items.a.extra.msp.uid).toBe(7)
+  })
+
+  it('связь с родительской или вложенной задачей не создаётся', async () => {
+    const editor = await openEditor([task('p', 'Родитель'), { ...task('c', 'Вложенная'), parentKey: 'p' }])
+    expect(editor.createLink({ from: 'p', to: 'c' })).toBeNull()
+    expect(editor.createLink({ from: 'c', to: 'p' })).toBeNull()
+    expect(ui.error).toHaveBeenLastCalledWith('Нельзя связать «Вложенная» и «Родитель»: одна строка вложена в другую')
   })
 })

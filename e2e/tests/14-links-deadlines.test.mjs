@@ -53,9 +53,18 @@ async function setDate(testid, value) {
 
 test('второй предшественник в карточке: две стрелки, задача — после позднего из предшественников', async () => {
   await openCard('Разработка')
+  // Листание списка стрелками связей не создаёт — только «Добавить»
+  await page.locator('.panel [data-testid=link-add]').focus()
+  await page.keyboard.press('ArrowDown')
+  await page.keyboard.press('ArrowDown')
+  await page.waitForTimeout(300)
+  assert.equal((await plan()).links.length, 0)
+  assert.equal(await page.locator('.panel [data-testid=link-pred]').count(), 0)
   await page.locator('.panel [data-testid=link-add]').selectOption('a')
+  await page.click('.panel [data-testid=link-add-submit]')
   await waitSaved(page)
   await page.locator('.panel [data-testid=link-add]').selectOption('b')
+  await page.click('.panel [data-testid=link-add-submit]')
   await waitSaved(page)
   const doc = await plan()
   assert.deepEqual(doc.links.map((l) => [l.from, l.to, l.type]), [['a', 'c', 'FS'], ['b', 'c', 'FS']])
@@ -104,6 +113,7 @@ test('перенос предшественника сдвигает после�
 test('связь в веху: веха встаёт на окончание предшественника, цикл не предлагается', async () => {
   await openCard('Сдача')
   await page.locator('.panel [data-testid=link-add]').selectOption('c')
+  await page.click('.panel [data-testid=link-add-submit]')
   await waitSaved(page)
   const doc = await plan()
   const c = doc.items.find((i) => i.key === 'c')

@@ -72,6 +72,7 @@ test('связь «предшественник» сдвигает послед�
   await page.locator('.grid-row', { hasText: 'Разработка модуля' }).locator('.open-btn').click()
   await page.waitForSelector('.panel')
   await page.locator('.panel [data-testid=link-add]').selectOption(a.key)
+  await page.click('.panel [data-testid=link-add-submit]')
   await waitSaved(page)
   const shifted = (await planItems()).find((i) => i.key === b.key)
   const expected = new Date(new Date(a.end).getTime() + 86400000).toISOString().slice(0, 10)
