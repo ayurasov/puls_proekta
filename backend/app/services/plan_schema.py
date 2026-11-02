@@ -184,9 +184,24 @@ def normalize_settings(raw, base=None):
         project = str(source.get("project") or "").strip().upper()[:50]
         jql = " ".join(str(source.get("jql") or "").split())[:1000]
         result["jiraSource"] = {"project": project if _PROJECT_KEY.match(project) else "", "jql": jql}
+    if "source" in raw:
+        result["source"] = _source(raw["source"])
+        if result["source"] is None:
+            result.pop("source")
     if isinstance(raw.get("legacy"), dict):
         result["legacy"] = raw["legacy"]
     return result
+
+
+def _source(raw):
+    """Откуда план (ADR-0012): {kind: "msproject", master, projectGuid, fileName, importedAt}; None — не задан.
+    master — план ведётся в MS Project и обновляется из файла (мастер-копия); иначе — разовый перенос."""
+    if not isinstance(raw, dict) or raw.get("kind") != "msproject":
+        return None
+    guid = str(raw.get("projectGuid") or "").strip().strip("{}").upper()[:64]
+    imported = str(raw.get("importedAt") or "")[:40]
+    return {"kind": "msproject", "master": raw.get("master") is True, "projectGuid": guid or None,
+            "fileName": str(raw.get("fileName") or "")[:255], "importedAt": imported or None}
 
 
 # Поля строки плана: имя в API -> (атрибут модели, тип)

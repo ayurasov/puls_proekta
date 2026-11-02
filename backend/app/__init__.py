@@ -75,6 +75,7 @@ def _register_blueprints(app):
     from app.api.integration import bp as integration_bp
     from app.api.integration_keys import bp as integration_keys_bp
     from app.api.jira import bp as jira_bp
+    from app.api.msproject import bp as msproject_bp
     from app.api.org import bp as org_bp
     from app.api.org_transfer import bp as org_transfer_bp
     from app.api.plans import bp as plans_bp
@@ -86,7 +87,7 @@ def _register_blueprints(app):
 
     for bp in (health_bp, auth_bp, avatars_bp, users_bp, directions_bp, projects_bp, plans_bp,
                access_bp, audit_bp, settings_bp, calendar_bp, jira_bp, org_bp, org_transfer_bp, podelu_bp, integration_bp,
-               integration_keys_bp):
+               integration_keys_bp, msproject_bp):
         app.register_blueprint(bp)
 
 
