@@ -156,8 +156,10 @@ test('«Задачи из Jira»: проект, фильтры, группы п�
   assert.deepEqual(items.filter((i) => i.parentKey === byName['Спринт 6'].key).map((i) => i.name).sort(), ['Вход по СМС', 'Прототип интерфейса'])
   assert.equal(byName['Профиль поставщика'].parentKey, byName['Спринт 7'].key)
   // «блокирует»: PULS-2 ← PULS-1 (строка плана), PULS-12 ← PULS-11 (добавленная строка); автосдвиг
-  assert.equal(byName['Прототип интерфейса'].dependencyKey, 'r1')
-  assert.equal(byName['Профиль поставщика'].dependencyKey, byName['Вход по СМС'].key)
+  const links = (await api(page, 'GET', `/plans/${planId}`)).body.links
+  const predecessors = (key) => links.filter((l) => l.to === key).map((l) => l.from)
+  assert.deepEqual(predecessors(byName['Прототип интерфейса'].key), ['r1'])
+  assert.deepEqual(predecessors(byName['Профиль поставщика'].key), [byName['Вход по СМС'].key])
   assert.ok(byName['Профиль поставщика'].start > byName['Вход по СМС'].end)
   // Проект стал источником задач плана
   const plan = (await api(page, 'GET', `/plans/${planId}`)).body.plan

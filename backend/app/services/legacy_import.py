@@ -31,8 +31,8 @@ from sqlalchemy import func, select, text
 from app.api.avatars import decode_data_url
 from app.extensions import db
 from app.models import (
-    AccessRule, AppSetting, AuditLog, Direction, ItemComment, Plan, PlanAssignee, PlanEvent, PlanItem, PlanNote,
-    PlanSnapshot, Project, User, UserAvatar, utcnow,
+    AccessRule, AppSetting, AuditLog, Direction, ItemComment, Plan, PlanAssignee, PlanEvent, PlanItem, PlanLink,
+    PlanNote, PlanSnapshot, Project, User, UserAvatar, utcnow,
 )
 from app.services.legacy_format import (
     ImportReport, format_legacy_datetime, legacy_state_to_document, plan_to_legacy_state,
@@ -278,6 +278,10 @@ class LegacyImporter:
                 setattr(item, attr, converted)
             db.session.add(item)
             self.count(f"items_{entry['type']}")
+        for link in doc["links"]:
+            db.session.add(PlanLink(key=link["key"], from_key=link["from"], to_key=link["to"], type=link["type"],
+                                    lag=link["lag"], lag_kind=link["lagKind"], **common))
+            self.count("links")
         for n in doc["notes"]:
             db.session.add(PlanNote(key=n["key"], date=convert_field("date", n["date"])[1], text=n["text"],
                                     row_key=n["rowKey"], color=n["color"], show_date=n["showDate"], **common))
@@ -394,6 +398,7 @@ class LegacyImporter:
         items = db.session.execute(select(PlanItem).where(PlanItem.plan_id == plan.id)).scalars().all()
         notes = db.session.execute(select(PlanNote).where(PlanNote.plan_id == plan.id)).scalars().all()
         assignees = db.session.execute(select(PlanAssignee).where(PlanAssignee.plan_id == plan.id)).scalars().all()
+        links = db.session.execute(select(PlanLink).where(PlanLink.plan_id == plan.id)).scalars().all()
         comments = {}
         for c in db.session.execute(select(ItemComment).where(ItemComment.plan_id == plan.id)
                                     .order_by(ItemComment.id)).scalars():
@@ -402,7 +407,7 @@ class LegacyImporter:
         for e in db.session.execute(select(PlanEvent).where(PlanEvent.plan_id == plan.id, PlanEvent.action == "legacy")
                                     .order_by(PlanEvent.id)).scalars():
             events.setdefault(e.entity_key, []).append(e)
-        exported = plan_to_legacy_state(plan, items, notes, assignees, comments, events)
+        exported = plan_to_legacy_state(plan, items, notes, assignees, comments, events, links=links)
         problems = compare_states(original, exported)
         for problem in problems:
             self.verify_errors.append(f"Проект «{project.title}», план «{title}»: {problem}")
@@ -454,6 +459,9 @@ def compare_states(original, exported):
                 if field in ("progress", "offset", "depLag"):
                     a, b = int(round(float(a or 0))), int(b or 0)
                 if field == "dependencyId" and a and a not in orig_rows:
+                    continue
+                # С 0.7.0 связь — отдельная сущность: тип и лаг без предшественника ничего не значили и не переносятся
+                if field in ("dependencyType", "depLag") and orig.get("dependencyId") not in orig_rows:
                     continue
                 if (a or "") != (b or ""):
                     problems.append(f"задача {key}: {field} «{a}» → «{b}»")

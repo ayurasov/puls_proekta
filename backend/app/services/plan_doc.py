@@ -1,16 +1,21 @@
 """Документ плана: чтение целиком, снимки, восстановление из снимка."""
 
+import secrets
 from datetime import timedelta
 
 from sqlalchemy import delete, select
 
 from app.extensions import db
-from app.models import Plan, PlanAssignee, PlanItem, PlanNote, PlanSnapshot, User, utcnow
+from app.models import Plan, PlanAssignee, PlanItem, PlanLink, PlanNote, PlanSnapshot, User, utcnow
 from app.serializers import iso
-from app.services.plan_schema import assignee_to_api, item_to_api, normalize_settings, note_to_api
+from app.services.plan_schema import (
+    assignee_to_api, document_links, item_to_api, link_to_api, normalize_settings, note_to_api, without_legacy_fields,
+)
 
 DOC_FORMAT = "puls-plan"
-DOC_VERSION = 1
+# Версия 2 (0.7.0): связи — список links, у строк нет dependencyKey/Type/Lag. Документы и снимки версии 1
+# читаются по-прежнему: предшественник строки становится связью (document_links)
+DOC_VERSION = 2
 
 
 def plan_meta(plan, level=None):
@@ -44,11 +49,12 @@ def load_entities(plan, include_deleted=False):
     items = q(PlanItem, (PlanItem.position, PlanItem.id))
     notes = q(PlanNote, (PlanNote.date, PlanNote.id))
     assignees = q(PlanAssignee, (PlanAssignee.position, PlanAssignee.id))
-    return items, notes, assignees
+    links = q(PlanLink, (PlanLink.id,))
+    return items, notes, assignees, links
 
 
 def plan_document(plan, level=None):
-    items, notes, assignees = load_entities(plan)
+    items, notes, assignees, links = load_entities(plan)
     editor_ids = {i.updated_by_id for i in items if i.updated_by_id} | ({plan.updated_by_id} - {None})
     users = {}
     if editor_ids:
@@ -57,6 +63,7 @@ def plan_document(plan, level=None):
     return {
         "plan": plan_meta(plan, level),
         "items": [item_to_api(i) for i in items],
+        "links": [link_to_api(link) for link in links],
         "notes": [note_to_api(n) for n in notes],
         "assignees": [assignee_to_api(a) for a in assignees],
         "users": users,
@@ -68,7 +75,7 @@ def _strip_volatile(entity):
 
 
 def snapshot_document(plan):
-    items, notes, assignees = load_entities(plan)
+    items, notes, assignees, links = load_entities(plan)
     return {
         "format": DOC_FORMAT,
         "version": DOC_VERSION,
@@ -80,6 +87,7 @@ def snapshot_document(plan):
             "revision": plan.revision,
         },
         "items": [_strip_volatile(item_to_api(i)) for i in items],
+        "links": [_strip_volatile(link_to_api(link)) for link in links],
         "notes": [_strip_volatile(note_to_api(n)) for n in notes],
         "assignees": [_strip_volatile(assignee_to_api(a)) for a in assignees],
     }
@@ -136,9 +144,59 @@ def prune_snapshots(plan):
         db.session.execute(delete(PlanSnapshot).where(PlanSnapshot.id.in_(drop)))
 
 
+# Поля строки, появившиеся с 0.7.0: в снимке до 0.7.0 их нет — значит, они были пустыми
+SCHEDULE_DEFAULTS = {"deadline": None, "constraintType": None, "constraintDate": None}
+
+
+def _document_item(item):
+    item = without_legacy_fields(item)
+    if item.get("type") in ("task", "milestone"):
+        item = {**SCHEDULE_DEFAULTS, **item}
+    return item
+
+
+def _link_ops(current, target, target_items):
+    """Связи сверяются по паре строк, а не по ключу: так восстанавливается и снимок до 0.7.0, где связь была полем
+    строки и ключа не имела. Сначала удаляются лишние связи — живые связи всё время остаются частью целевого
+    (без циклов) набора; затем возвращаются удалённые и создаются недостающие, потом меняются тип и лаг."""
+    rows = {i["key"]: i.get("type") for i in target_items if isinstance(i, dict) and i.get("key")}
+    wanted = {}
+    for entry in target:
+        pair = (entry.get("from"), entry.get("to"))
+        if pair[0] == pair[1] or rows.get(pair[0]) not in ("task", "milestone") \
+                or rows.get(pair[1]) not in ("task", "milestone"):
+            continue
+        wanted.setdefault(pair, entry)
+    by_pair = {}
+    for link in current:
+        by_pair.setdefault((link.from_key, link.to_key), []).append(link)
+    used = {link.key for link in current}
+    ops = [{"op": "link.delete", "key": link.key} for link in current
+           if link.deleted_at is None and (link.from_key, link.to_key) not in wanted]
+    updates = []
+    for pair, entry in wanted.items():
+        fields = {"type": entry.get("type") or "FS", "lag": entry.get("lag") or 0,
+                  "lagKind": entry.get("lagKind") or "calendar"}
+        candidates = by_pair.get(pair, [])
+        link = next((c for c in candidates if c.deleted_at is None), None)
+        if link is None and candidates:
+            link = next((c for c in candidates if c.key == entry.get("key")), candidates[-1])
+            ops.append({"op": "link.restore", "key": link.key})
+        if link is None:
+            key = entry.get("key") if entry.get("key") and entry["key"] not in used else f"l{secrets.token_hex(5)}"
+            used.add(key)
+            ops.append({"op": "link.create", "link": {"key": key, "from": pair[0], "to": pair[1], **fields}})
+            continue
+        now = {"type": link.type, "lag": link.lag, "lagKind": link.lag_kind}
+        changed = {k: v for k, v in fields.items() if now[k] != v}
+        if changed:
+            updates.append({"op": "link.update", "key": link.key, "fields": changed})
+    return ops + updates
+
+
 def diff_ops_to_document(plan, doc):
     """Операции, приводящие текущее состояние плана к документу `doc` (для восстановления снимка)."""
-    items, notes, assignees = load_entities(plan, include_deleted=True)
+    items, notes, assignees, links = load_entities(plan, include_deleted=True)
     ops = []
 
     def sync(kind, current, target, to_api):
@@ -165,8 +223,11 @@ def diff_ops_to_document(plan, doc):
             if changed:
                 ops.append({"op": f"{kind}.update", "key": key, "fields": changed})
 
+    target_items = [_document_item(i) for i in doc.get("items", []) if isinstance(i, dict)]
     sync("assignee", assignees, doc.get("assignees", []), assignee_to_api)
-    sync("item", items, doc.get("items", []), item_to_api)
+    sync("item", items, target_items, item_to_api)
+    # Снимок до 0.7.0: предшественник строки — связь
+    ops.extend(_link_ops(links, document_links(doc), target_items))
     sync("note", notes, doc.get("notes", []), note_to_api)
     plan_doc = doc.get("plan") or {}
     fields = {}

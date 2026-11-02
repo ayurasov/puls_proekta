@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createJira, issueKeyFromUrl, jiraChanges, jiraLinkFromInput } from '../jira'
+import { createJira, issueKeyFromUrl, jiraChanges, jiraLinkFromInput, linkedDates } from '../jira'
 
 const BASE = 'https://jira.example.ru'
 const task = (fields = {}) => ({
@@ -74,11 +74,28 @@ describe('ревью 0.3.0: перенос из Jira', () => {
   })
 
   it('сроки задачи со связью: из Jira — только свободная дата', () => {
-    const fs = jiraChanges(task({ dependencyKey: 'p', dependencyType: 'FS' }), issue({ start: '2026-11-03', due: '2026-11-09' }), { linked: true })
+    const fs = jiraChanges(task(), issue({ start: '2026-11-03', due: '2026-11-09' }), { linked: { start: true } })
     expect(fs[0].fields).toEqual({ start: '2026-11-02', end: '2026-11-09' })
     expect(fs[0].note).toBe('начало задаёт связь')
-    const ff = jiraChanges(task({ dependencyKey: 'p', dependencyType: 'FF' }), issue({ start: '2026-11-01', due: '2026-11-09' }), { linked: true })
+    const ff = jiraChanges(task(), issue({ start: '2026-11-01', due: '2026-11-09' }), { linked: { end: true } })
     expect(ff[0].fields).toEqual({ start: '2026-11-01', end: '2026-11-06' })
+    // Связи задают обе даты — сроки из Jira не переносятся
+    expect(jiraChanges(task(), issue({ start: '2026-11-01', due: '2026-11-09' }), { linked: { start: true, end: true } })).toEqual([])
+  })
+
+  it('0.7.0: какие даты задают связи — по всем входящим связям строки', () => {
+    const links = [
+      { key: 'l1', from: 'p1', to: 't', type: 'FS' }, { key: 'l2', from: 'p2', to: 't', type: 'SS' },
+      { key: 'l3', from: 't', to: 'x', type: 'FF' },
+    ]
+    expect(linkedDates({ key: 't' }, links)).toEqual({ start: true, end: false })
+    expect(linkedDates({ key: 't' }, [...links, { key: 'l4', from: 'p3', to: 't', type: 'SF' }])).toEqual({ start: true, end: true })
+    expect(linkedDates({ key: 'x' }, links)).toEqual({ start: false, end: true })
+    expect(linkedDates({ key: 'p1' }, links)).toEqual({ start: false, end: false })
+    // Дату вехи-последующей задаёт связь — срок из Jira не предлагается
+    const milestone = { key: 'm', type: 'milestone', name: 'Сборка', date: '2026-11-05' }
+    expect(jiraChanges(milestone, issue({ due: '2026-11-09' }), { linked: { start: true } })).toEqual([])
+    expect(jiraChanges(milestone, issue({ due: '2026-11-09' }))[0].fields).toEqual({ date: '2026-11-09' })
   })
 })
 

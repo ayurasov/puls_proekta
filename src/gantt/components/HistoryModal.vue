@@ -7,6 +7,7 @@ import HelpLink from '../../components/common/HelpLink.vue'
 import { useUiStore } from '../../stores/ui'
 import { useDialogs } from '../../composables/useDialogs'
 import { countLabel, formatDateTime, formatRelative } from '../../utils/format'
+import { linksFromItems } from '../domain/dependencies'
 
 /**
  * История плана: журнал изменений (кто, когда, что было → стало) и сохранённые версии
@@ -86,6 +87,8 @@ async function preview(snap) {
     editor.state.previewSnapshot = {
       id: snap.id, label: formatDateTime(snap.createdAt), title: snap.label || REASONS[snap.reason] || 'Сохранённая версия',
       items: toMap(res.data.items), notes: toMap(res.data.notes), assignees: toMap(res.data.assignees),
+      // Снимок до 0.7.0: предшественник был полем строки
+      links: toMap(res.data.links || linksFromItems(res.data.items)),
     }
     editor.state.view.panelKey = null
     emit('close')

@@ -10,7 +10,8 @@ from sqlalchemy import delete, func, select
 from app import audit
 from app.extensions import db
 from app.models import (
-    ItemComment, Plan, PlanAssignee, PlanEvent, PlanItem, PlanNote, PlanPresence, PlanSnapshot, Project, User, utcnow,
+    ItemComment, Plan, PlanAssignee, PlanEvent, PlanItem, PlanLink, PlanNote, PlanPresence, PlanSnapshot, Project, User,
+    utcnow,
 )
 from app.security import ApiError, LEVEL_ORDER, current_user, login_required, require_project
 from app.serializers import iso, user_public
@@ -19,7 +20,7 @@ from app.services.plan_doc import (
     create_snapshot, diff_ops_to_document, plan_document, plan_meta, snapshot_document,
 )
 from app.services.plan_ops import apply_ops, lock_plan
-from app.services.plan_schema import assignee_to_api, item_to_api, note_to_api
+from app.services.plan_schema import assignee_to_api, item_to_api, link_to_api, note_to_api
 from app.services.plans import create_plan, duplicate_plan, import_plan, unique_plan_title
 
 bp = Blueprint("plans", __name__, url_prefix="/api")
@@ -102,7 +103,7 @@ def get_plan(plan_id):
 
 # Поля строк, по которым считается окно «Статистика» (src/gantt/domain/stats.js)
 STATS_ITEM_FIELDS = ("key", "type", "name", "parentKey", "position", "assigneeKey", "status", "start", "end", "date",
-                     "progress", "offset")
+                     "progress", "offset", "deadline")
 
 
 @bp.get("/plans/<int:plan_id>/stats")
@@ -311,6 +312,7 @@ def plan_changes(plan_id):
         return db.session.execute(select(model).where(model.plan_id == plan.id, model.updated_rev > since)).scalars().all()
 
     data["items"] = [item_to_api(i) for i in changed(PlanItem)]
+    data["links"] = [link_to_api(link) for link in changed(PlanLink)]
     data["notes"] = [note_to_api(n) for n in changed(PlanNote)]
     data["assignees"] = [assignee_to_api(a) for a in changed(PlanAssignee)]
     if plan.meta_rev > since:
@@ -535,6 +537,7 @@ def export_plan(plan_id):
     items = db.session.execute(select(PlanItem).where(PlanItem.plan_id == plan.id)).scalars().all()
     notes = db.session.execute(select(PlanNote).where(PlanNote.plan_id == plan.id)).scalars().all()
     assignees = db.session.execute(select(PlanAssignee).where(PlanAssignee.plan_id == plan.id)).scalars().all()
+    links = db.session.execute(select(PlanLink).where(PlanLink.plan_id == plan.id)).scalars().all()
     comments = {}
     for c in db.session.execute(select(ItemComment).where(ItemComment.plan_id == plan.id, ItemComment.deleted_at.is_(None))
                                 .order_by(ItemComment.created_at, ItemComment.id)).scalars():
@@ -543,6 +546,6 @@ def export_plan(plan_id):
     for e in db.session.execute(select(PlanEvent).where(PlanEvent.plan_id == plan.id, PlanEvent.entity == "item")
                                 .order_by(PlanEvent.created_at, PlanEvent.id)).scalars():
         events.setdefault(e.entity_key, []).append(e)
-    state = plan_to_legacy_state(plan, items, notes, assignees, comments, events)
+    state = plan_to_legacy_state(plan, items, notes, assignees, comments, events, links=links)
     response = jsonify(state)
     return response

@@ -102,6 +102,15 @@ export function shiftedEnd(task) {
 }
 
 /**
+ * Крайний срок сорван (ADR-0012, 5.4): окончание задачи со сдвигом (у вехи — её дата) позже крайнего срока.
+ */
+export function deadlineMissed(item) {
+  if (!item?.deadline) return false
+  const end = item.type === 'milestone' ? item.date : item.type === 'task' ? shiftedEnd(item) : null
+  return Boolean(end) && end > item.deadline
+}
+
+/**
  * Сроки группы (и задачи с подзадачами) по всем вложенным задачам: начало, окончание без
  * сдвигов, окончание со сдвигами и сдвиг группы. В 1.0.x учитывались только прямые
  * дочерние задачи — группа из подгрупп не показывала полосу.

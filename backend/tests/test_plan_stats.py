@@ -36,7 +36,7 @@ def test_plan_stats_returns_rows_for_statistics(app, admin):
     assert set(items) == {"g1", "t1", "t2", "m1"}
     assert items["t2"] == {"key": "t2", "type": "task", "name": "Разработка", "parentKey": None, "position": items["t2"]["position"],
                            "assigneeKey": None, "status": "inwork", "start": "2026-05-01", "end": "2026-05-20",
-                           "progress": 40, "offset": 3}
+                           "progress": 40, "offset": 3, "deadline": None}
     assert items["t1"]["parentKey"] == "g1" and "jiraUrl" not in items["t1"]
     assert items["m1"]["date"] == "2099-01-01"
     assert data["assignees"] == [{"key": "a1", "name": "Петров Пётр", "position": 1}]

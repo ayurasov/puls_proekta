@@ -110,6 +110,9 @@ function select(key) {
             <dt>Максимальная просрочка</dt><dd>{{ stats.maxOverdue ? '+' + formatNumber(stats.maxOverdue) : 0 }} дн.</dd>
             <dt>Средняя просрочка</dt><dd>{{ stats.avgOverdue ? '+' + formatNumber(stats.avgOverdue) : 0 }} дн.</dd>
             <dt>Среднее опережение</dt><dd>{{ formatNumber(stats.avgEarly) }} дн.</dd>
+            <template v-if="stats.withDeadline">
+              <dt>Срыв крайнего срока</dt><dd :class="{ bad: stats.missedDeadlines.length }" data-testid="stats-deadlines">{{ stats.missedDeadlines.length }} из {{ stats.withDeadline }}</dd>
+            </template>
           </dl>
           <template v-if="stats.topShifted.length">
             <div class="muted small sub">Больше всего сдвинуты</div>

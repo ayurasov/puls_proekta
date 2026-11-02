@@ -8,13 +8,14 @@
 * направления (группы проектов) и проекты;
 * планы — бывшие «вкладки-версии» диаграммы Ганта 1.0.x: у проекта их может быть
   несколько, закрытая вкладка становится архивным планом, а не исчезает;
-* строки плана (задачи, вехи, группы), пометки, исполнители плана, комментарии;
+* строки плана (задачи, вехи, группы), связи «предшественник → последующая» (ADR-0012), пометки,
+  исполнители плана, комментарии;
 * журнал изменений плана (кто, когда, что было и что стало) и снимки плана для отката;
 * правила доступа, реестр изменений (аудит), настройки, производственный календарь;
 * ключи интеграций — доступ других систем к `/api/integration/v1` (ADR-0011).
 
 Все отметки времени — наивный UTC (`utcnow()`), API отдаёт их в ISO 8601 с `Z`.
-Строки, пометки и исполнители удаляются «мягко» (`deleted_at`): удаление можно отменить,
+Строки, связи, пометки и исполнители удаляются «мягко» (`deleted_at`): удаление можно отменить,
 а открытые у коллег планы узнают об удалении при очередной синхронизации.
 """
 
@@ -32,6 +33,10 @@ ACCESS_LEVELS = ("view", "edit", "manage")
 ITEM_TYPES = ("task", "milestone", "group")
 TASK_STATUSES = ("new", "inwork", "blocked", "done")
 DEPENDENCY_TYPES = ("FS", "SS", "FF", "SF")
+LAG_KINDS = ("calendar", "working")
+# Ограничения дат из MS Project (ADR-0012, 5.4): на расчёт влияет только «Начало не ранее» (snet),
+# остальные хранятся как сведения
+CONSTRAINT_TYPES = ("snet", "snlt", "fnet", "fnlt", "mso", "mfo", "alap")
 
 
 class User(db.Model):
@@ -220,9 +225,16 @@ class PlanItem(_PlanEntityMixin, db.Model):
     progress = db.Column(db.Integer, nullable=True)
     offset_days = db.Column(db.Integer, nullable=True)
     completed_date = db.Column(db.Date, nullable=True)
+    # Единственный предшественник строки до 0.7.0. Связи теперь — таблица plan_links (миграция 0007 перенесла
+    # их туда, откат возвращает первую связь строки); приложение столбцы не читает и не пишет, они удаляются
+    # в следующем выпуске
     dependency_key = db.Column(db.String(64), nullable=True)
     dependency_type = db.Column(db.String(2), nullable=True)
     dependency_lag = db.Column(db.Integer, nullable=True)
+    # Крайний срок и ограничение даты (ADR-0012, 5.4); тип ограничения — CONSTRAINT_TYPES
+    deadline = db.Column(db.Date, nullable=True)
+    constraint_type = db.Column(db.String(8), nullable=True)
+    constraint_date = db.Column(db.Date, nullable=True)
     assignee_key = db.Column(db.String(64), nullable=True)
     category = db.Column(db.String(255), nullable=True)
     color = db.Column(db.String(32), nullable=True)
@@ -237,6 +249,28 @@ class PlanItem(_PlanEntityMixin, db.Model):
         db.UniqueConstraint("plan_id", "key", name="uq_plan_items_plan_key"),
         db.CheckConstraint("type in ('task','milestone','group')", name="type"),
         db.Index("ix_plan_items_plan_rev", "plan_id", "updated_rev"),
+    )
+
+
+class PlanLink(_PlanEntityMixin, db.Model):
+    """Связь строк плана «предшественник → последующая» (ADR-0012, 5.1): задача или веха с обеих сторон,
+    тип FS/SS/FF/SF, лаг в днях (отрицательный — опережение) — календарных или рабочих. Живая связь между
+    двумя строками одна, циклы запрещены (проверяет PlanEditor)."""
+
+    __tablename__ = "plan_links"
+
+    plan_id = db.Column(db.Integer, db.ForeignKey("plans.id", ondelete="CASCADE"), nullable=False, index=True)
+    from_key = db.Column(db.String(64), nullable=False)
+    to_key = db.Column(db.String(64), nullable=False)
+    type = db.Column(db.String(2), nullable=False, default="FS")
+    lag = db.Column(db.Integer, nullable=False, default=0)
+    lag_kind = db.Column(db.String(10), nullable=False, default="calendar")
+
+    __table_args__ = (
+        db.UniqueConstraint("plan_id", "key", name="uq_plan_links_plan_key"),
+        db.CheckConstraint("type in ('FS','SS','FF','SF')", name="type"),
+        db.CheckConstraint("lag_kind in ('calendar','working')", name="lag_kind"),
+        db.Index("ix_plan_links_plan_rev", "plan_id", "updated_rev"),
     )
 
 

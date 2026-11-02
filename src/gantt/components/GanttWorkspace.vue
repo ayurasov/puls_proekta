@@ -114,7 +114,7 @@ const saveStatus = computed(() => {
 
 const inconsistent = computed(() => {
   if (!editor.canEdit || !editor.settings.display.autoShift || !state.plan) return 0
-  return computeDependencyShifts(editor.itemList).size
+  return computeDependencyShifts(editor.itemList, { links: editor.linkList, calendar: editor.calendar }).size
 })
 function alignDependencies() {
   const ops = editor.cascadeOps(new Map(), { all: true })
@@ -276,7 +276,7 @@ provide('ganttActions', actions)
       <AppIcon name="wifiOff" /> Нет связи с сервером. Изменения сохраняются на этой странице и будут отправлены, когда связь восстановится — не закрывайте вкладку.
     </div>
     <div v-if="inconsistent && !state.previewSnapshot" class="banner banner-info">
-      <AppIcon name="link" /> Сроки {{ countLabel(inconsistent, 'задачи', 'задач', 'задач') }} не согласованы со связями «предшественник».
+      <AppIcon name="link" /> Сроки {{ countLabel(inconsistent, 'строки', 'строк', 'строк') }} не согласованы со связями.
       <span class="spacer" />
       <button class="btn btn-sm" type="button" @click="alignDependencies">Выровнять по связям</button>
     </div>

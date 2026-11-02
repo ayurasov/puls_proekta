@@ -21,6 +21,8 @@ async function load(more = false) {
 }
 onMounted(() => load())
 watch(() => props.item.updatedRev, () => load())
+// Связи — в истории последующей строки (ADR-0012): их правка не меняет ревизию самой строки
+watch(() => editor.linkList.filter((link) => link.to === props.item.key).map((link) => `${link.key}:${link.updatedRev}`).join(), () => load())
 </script>
 
 <template>
