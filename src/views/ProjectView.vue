@@ -74,8 +74,13 @@ function openPlan(id) {
   router.push({ name: 'project', params: { projectId: projectId.value, planId: id } })
 }
 
-// План обновили или заменили на сервере (MS Project) — открытый план перечитывается целиком
+// План обновили или заменили на сервере (MS Project) — открытый план перечитывается целиком. Перед этим его
+// неотправленные правки уходят на сервер: иначе они пришли бы позже и перезаписали загруженное из файла
 const reloadSeq = ref(0)
+async function flushPlan(id) {
+  if (id !== activePlan.value?.id) return true
+  return (await workspace.value?.editor?.flushNow()) ?? true
+}
 function reloadPlan(id) {
   if (id === activePlan.value?.id) reloadSeq.value += 1
 }
@@ -155,7 +160,7 @@ onBeforeRouteUpdate(leaveGuard)
       <PlanTabs
         :project="project" :open-plans="openPlans" :archived-plans="archivedPlans" :active-plan-id="activePlanId"
         :can-edit="canEditProject && auth.user?.role !== 'viewer'" :can-manage="canManage"
-        @open="openPlan" @created="planCreated" @changed="loadProject" @reload="reloadPlan"
+        :flush-plan="flushPlan" @open="openPlan" @created="planCreated" @changed="loadProject" @reload="reloadPlan"
       />
       <GanttWorkspace
         v-if="activePlan" :key="`${activePlan.id}:${reloadSeq}`" ref="workspace" :plan-id="activePlan.id" :project="project"

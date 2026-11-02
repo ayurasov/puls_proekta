@@ -18,6 +18,8 @@ const props = defineProps({
   activePlanId: { type: Number, default: null },
   canEdit: { type: Boolean, default: false },
   canManage: { type: Boolean, default: false },
+  // Отправить неотправленные правки открытого плана (перед заменой и обновлением на сервере); false — не удалось
+  flushPlan: { type: Function, default: null },
 })
 const emit = defineEmits(['open', 'created', 'changed', 'reload'])
 const ui = useUiStore()
@@ -291,7 +293,8 @@ async function onDrop() {
     </PopupMenu>
     <MsProjectImportModal
       v-if="msp" :target="msp.target" :project-id="project.id" :plan-id="msp.plan?.id ?? null" :plan-title="msp.plan?.title || ''"
-      :master="Boolean(mspSource(msp.plan)?.master)" @close="msp = null" @done="mspDone"
+      :master="Boolean(mspSource(msp.plan)?.master)" :before-apply="msp.plan && flushPlan ? () => flushPlan(msp.plan.id) : null"
+      @close="msp = null" @done="mspDone"
     />
   </div>
 </template>
@@ -323,5 +326,5 @@ async function onDrop() {
   .archive-btn { padding: 0 8px; }
 }
 .archived-row .menu-item.is-current { background: var(--color-primary-soft); color: var(--color-primary-dark); font-weight: 600; }
-.msp-badge { margin-left: 6px; padding: 1px 6px; border-radius: 6px; background: #e7eefc; color: #2b4db5; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+.msp-badge { margin-left: 6px; padding: 1px 6px; border-radius: 6px; background: #e7eefc; color: #2b4db5; font-size: 10.5px; font-weight: 700; white-space: nowrap; flex-shrink: 0; }
 </style>

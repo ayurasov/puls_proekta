@@ -21,7 +21,11 @@ const props = defineProps({
   directions: { type: Array, default: () => [] },
   directionId: { type: Number, default: null },
   master: { type: Boolean, default: false },         // план уже ведётся в MS Project
+  // Перед заменой и обновлением открытого плана — отправить его неотправленные правки; false — не удалось
+  beforeApply: { type: Function, default: null },
 })
+// Как MAX_CONTENT_LENGTH backend и client_max_body_size nginx (руководство по развёртыванию)
+const MAX_BYTES = 25 * 1024 * 1024
 const emit = defineEmits(['close', 'done'])
 
 const TITLES = {
@@ -30,7 +34,7 @@ const TITLES = {
 }
 const MODES = [
   { value: 'once', label: 'Разовый перенос' },
-  { value: 'master', label: 'Мастер-копия в MS Project' },
+  { value: 'master', label: 'Мастер-копия', title: 'График ведётся в MS Project, «Пульс» обновляется из файла' },
 ]
 const DURATIONS = [
   { value: 'dates', label: 'По датам файла' },
@@ -44,7 +48,7 @@ const BASELINES = [
 const file = ref(null)
 const dragOver = ref(false)
 const options = ref({
-  mode: props.target === 'update' || props.master ? 'master' : 'once',
+  mode: props.master ? 'master' : 'once',
   durations: 'dates', baseline: 'current', categoryField: '', deleteMissing: false,
 })
 const title = ref('')
@@ -53,6 +57,11 @@ const preview = ref(null)
 const previewFor = ref('')
 const busy = ref('')
 const error = ref('')
+// Конфликт при применении (план изменился, файл другой) — остаётся на экране, пока не применят свежий план
+const notice = ref('')
+// Настраиваемые поля последнего успешного плана загрузки: выбор категории не пропадает после ошибки проверки
+const customFields = ref([])
+const titleTouched = ref(false)
 const fileInput = ref(null)
 
 const optionsKey = computed(() => JSON.stringify(options.value))
@@ -64,10 +73,18 @@ const linkedUsers = computed(() => (preview.value?.assignees || []).filter((a) =
 function pick(event) {
   const chosen = event.target.files?.[0] || event.dataTransfer?.files?.[0]
   dragOver.value = false
+  // Тот же файл можно выбрать снова (например, пересохранённый в MS Project)
+  if (event.target?.value !== undefined) event.target.value = ''
   if (!chosen) return
   file.value = chosen
   preview.value = null
+  notice.value = ''
   error.value = ''
+  if (!titleTouched.value) title.value = ''
+  if (chosen.size > MAX_BYTES) {
+    error.value = `Файл больше 25 МБ (${(chosen.size / 1024 / 1024).toFixed(1)} МБ) — такой загрузки сервер не примет. Удалите из файла лишнее (базовые планы, неиспользуемые ресурсы) или попросите администратора увеличить предел`
+    return
+  }
   check()
 }
 
@@ -94,6 +111,7 @@ async function check() {
     if (id !== seq) return
     preview.value = res
     previewFor.value = key
+    customFields.value = res.customFields || []
     if (!title.value) title.value = res.project?.title || res.project?.name || ''
   } catch (err) {
     if (id === seq) { error.value = err.message; preview.value = null }
@@ -115,6 +133,12 @@ async function apply() {
   if (!fresh.value) return
   busy.value = 'apply'
   error.value = ''
+  notice.value = ''
+  if (props.beforeApply && !(await props.beforeApply())) {
+    busy.value = ''
+    error.value = 'В открытом плане есть неотправленные изменения — дождитесь их сохранения и повторите'
+    return
+  }
   try {
     const res = await api.upload('/import/msproject/apply', form({
       fingerprint: preview.value.fingerprint, planRevision: preview.value.planRevision,
@@ -123,11 +147,17 @@ async function apply() {
     }), 'POST')
     emit('done', res)
   } catch (err) {
+    if (err.status === 409) {
+      // План изменился или файл другой: прежний план загрузки больше не годится — показать свежий
+      notice.value = `${err.message}. Ниже — новый план загрузки: проверьте его и примените снова.`
+      previewFor.value = ''
+      busy.value = ''
+      check()
+      return
+    }
     error.value = err.message
-    // План изменился или файл другой — показать свежий план загрузки
-    if (err.status === 409) check()
   } finally {
-    busy.value = ''
+    if (busy.value === 'apply') busy.value = ''
   }
 }
 
@@ -162,7 +192,7 @@ const sizeText = computed(() => (file.value ? `${(file.value.size / 1024 / 1024)
       </label>
     </section>
 
-    <section v-if="target !== 'update'" class="sec">
+    <section class="sec">
       <div class="sec-title">Как вести план дальше</div>
       <SegmentedControl v-model="options.mode" block :options="MODES" aria-label="Как вести план" data-testid="msp-mode" />
       <p class="hint">
@@ -183,17 +213,17 @@ const sizeText = computed(() => (file.value ? `${(file.value.size / 1024 / 1024)
         <SegmentedControl v-model="options.baseline" block :options="BASELINES" aria-label="Сроки" />
         <p class="hint">{{ options.baseline === 'current' ? 'Сроки задач — текущие из файла.' : 'Сроки — из базового плана, отставание от него — сдвигом на полосе.' }}</p>
       </div>
-      <label v-if="preview?.customFields?.length" class="field">
+      <label v-if="customFields.length" class="field">
         <span class="field-label">Категории из поля</span>
         <select v-model="options.categoryField" class="select" data-testid="msp-category">
           <option value="">— не переносить —</option>
-          <option v-for="f in preview.customFields" :key="f.fieldId" :value="String(f.fieldId)">{{ f.label || f.alias || f.fieldName }} · {{ f.count }}</option>
+          <option v-for="f in customFields" :key="f.fieldId" :value="String(f.fieldId)">{{ f.label || f.alias || f.fieldName }} · {{ f.count }}</option>
         </select>
       </label>
       <template v-if="target === 'project' || target === 'plan'">
         <label class="field">
           <span class="field-label">{{ target === 'project' ? 'Название проекта' : 'Название плана' }}</span>
-          <input v-model="title" class="input" maxlength="500" data-testid="msp-title" />
+          <input v-model="title" class="input" maxlength="500" data-testid="msp-title" @input="titleTouched = true" />
         </label>
         <label v-if="target === 'project'" class="field">
           <span class="field-label">Направление</span>
@@ -207,7 +237,11 @@ const sizeText = computed(() => (file.value ? `${(file.value.size / 1024 / 1024)
                     hint="Строки, добавленные в «Пульсе», не удаляются никогда; удалённые можно вернуть из корзины плана" />
     </section>
 
-    <p v-if="error" class="error" role="alert"><AppIcon name="warning" :size="14" /> {{ error }}</p>
+    <p v-if="notice" class="notice" role="alert" data-testid="msp-notice"><AppIcon name="warning" :size="14" /> {{ notice }}</p>
+    <p v-if="error" class="error" role="alert">
+      <AppIcon name="warning" :size="14" /> {{ error }}
+      <button v-if="file && file.size <= MAX_BYTES && !busy" class="btn btn-sm" type="button" data-testid="msp-retry" @click="check">Проверить ещё раз</button>
+    </p>
     <p v-if="busy === 'check'" class="muted small">Проверяем файл…</p>
 
     <template v-if="preview">
@@ -295,6 +329,8 @@ const sizeText = computed(() => (file.value ? `${(file.value.size / 1024 / 1024)
 .drop { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 18px; border: 1.5px dashed var(--color-border-strong, #c9cfda); border-radius: var(--radius-md); cursor: pointer; text-align: center; color: var(--color-text-secondary); transition: border-color .15s, background .15s; }
 .drop.over, .drop:hover { border-color: var(--color-primary); background: var(--color-primary-soft); }
 .drop.chosen { border-style: solid; }
+.drop:focus-within { outline: 2px solid var(--color-primary); outline-offset: 2px; }
+.notice { display: flex; align-items: flex-start; gap: 6px; padding: 8px 10px; border-radius: var(--radius-md); background: #fff4e0; color: #8a5300; font-size: 13px; }
 .drop-main { font-size: 14px; color: var(--color-text); }
 .sr-only { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -303,7 +339,7 @@ const sizeText = computed(() => (file.value ? `${(file.value.size / 1024 / 1024)
 .chip.changed { background: #fff4e0; color: #a8670f; }
 .chip.missing { background: #fdecec; color: #c62933; }
 .note { margin: 8px 0 0; font-size: 13px; }
-.error { color: var(--color-danger); display: flex; align-items: center; gap: 6px; }
+.error { color: var(--color-danger); display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .list { max-height: 34vh; overflow: auto; border: 1px solid var(--color-border); border-radius: var(--radius-md); margin-top: 8px; }
 .change-row { display: flex; flex-direction: column; gap: 2px; padding: 6px 10px; border-bottom: 1px solid #f0f2f6; }
 .change-row:last-child { border-bottom: 0; }

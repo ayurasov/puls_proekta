@@ -45,7 +45,7 @@ def _form():
     target = request.form.get("target") or "project"
     if target not in importer.TARGETS:
         raise ApiError(400, "validation_error", "Неизвестное назначение загрузки")
-    return data, importer.clean_options(raw, target), target, (upload.filename or "")[:255]
+    return data, raw, target, (upload.filename or "")[:255]
 
 
 def _int(name):
@@ -77,8 +77,9 @@ def _check_target(target, user):
 @limiter.limit("30 per minute", key_func=_user_key)
 def preview():
     user = current_user()
-    data, options, target, file_name = _form()
+    data, raw, target, file_name = _form()
     _project, plan = _check_target(target, user)
+    options = importer.clean_options(raw, target, plan)
     return jsonify(importer.preview(data, options, target, plan=plan, file_name=file_name, viewer=user))
 
 
@@ -87,8 +88,9 @@ def preview():
 @limiter.limit("10 per minute", key_func=_user_key)
 def apply():
     user = current_user()
-    data, options, target, file_name = _form()
+    data, raw, target, file_name = _form()
     project, plan = _check_target(target, user)
+    options = importer.clean_options(raw, target, plan)
     if request.form.get("fingerprint") != importer.fingerprint(data, options):
         raise ApiError(409, "preview_outdated", "Файл или параметры изменились после проверки — проверьте ещё раз")
     if plan is not None:

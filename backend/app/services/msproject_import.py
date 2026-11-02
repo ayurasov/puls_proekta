@@ -25,12 +25,17 @@ TREE_LIMIT = 300        # строк дерева в плане загрузки
 CHANGES_LIMIT = 500     # строк каждого списка изменений в плане обновления
 
 
-def clean_options(raw, target=None):
-    """Параметры загрузки из интерфейса → проверенные (лишнее отбрасывается). Обновление из файла — всегда
-    мастер-копия: план и дальше ведётся в MS Project."""
+def clean_options(raw, target=None, plan=None):
+    """Параметры загрузки из интерфейса → проверенные (лишнее отбрасывается). Без явного режима обновление
+    сохраняет режим плана: мастер-копия остаётся мастер-копией, разовый перенос — разовым."""
     raw = raw if isinstance(raw, dict) else {}
     category = raw.get("categoryField")
-    mode = "master" if target == "update" else raw.get("mode") if raw.get("mode") in MODES else "once"
+    if raw.get("mode") in MODES:
+        mode = raw["mode"]
+    elif target == "update" and plan is not None:
+        mode = "master" if ((plan.settings or {}).get("source") or {}).get("master") else "once"
+    else:
+        mode = "once"
     return {
         "mode": mode,
         "durations": raw.get("durations") if raw.get("durations") in ("dates", "working") else "dates",

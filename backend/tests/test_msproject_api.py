@@ -228,3 +228,13 @@ def test_review_restoring_before_import_snapshot_clears_master_source(app, admin
     restored = _plan(admin, plan_id)
     assert "source" not in restored["plan"]["settings"]
     assert {i["name"] for i in restored["items"]} == {"Прежняя"}
+
+
+def test_review_update_keeps_one_time_mode_unless_chosen(app, admin):
+    project_id, _ = create_project(admin)
+    res = _apply(admin, CRM.read_bytes(), "plan", {"mode": "once"}, projectId=project_id)
+    plan_id = res.get_json()["planId"]
+    assert _apply(admin, CRM.read_bytes(), "update", {}, planId=plan_id).status_code == 200
+    assert _plan(admin, plan_id)["plan"]["settings"]["source"]["master"] is False
+    assert _apply(admin, CRM.read_bytes(), "update", {"mode": "master"}, planId=plan_id).status_code == 200
+    assert _plan(admin, plan_id)["plan"]["settings"]["source"]["master"] is True

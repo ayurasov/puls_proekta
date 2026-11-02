@@ -95,7 +95,12 @@ export async function downloadFrom(path, params, fallbackName) {
   for (const [key, value] of Object.entries(params || {})) {
     if (value !== undefined && value !== null && value !== '') url.searchParams.set(key, value)
   }
-  const res = await fetch(url.toString(), { credentials: 'same-origin' })
+  let res
+  try {
+    res = await fetch(url.toString(), { credentials: 'same-origin' })
+  } catch {
+    throw new NetworkError('Нет связи с сервером', 0, null)
+  }
   if (!res.ok) {
     const data = await parse(res)
     throw new ApiError(data?.message || `Ошибка ${res.status}`, res.status, data)

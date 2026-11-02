@@ -93,7 +93,11 @@ async function runExport(format) {
   exporting.value = true
   try {
     // MS Project XML собирает сервер (ADR-0012): связи, ресурсы, календарь, идентификаторы задач из MS Project
-    if (format === 'msproject') await downloadFrom(`/plans/${editor.state.plan.id}/export/msproject`, null, `${editor.state.plan.title}.xml`)
+    if (format === 'msproject') {
+      // Файл собирает сервер — сначала отправить свои правки, иначе в файл они не попадут
+      if (!(await editor.flushNow())) ui.toast({ title: 'Не все правки сохранены', text: 'Последние изменения не попадут в файл MS Project — выгрузите план ещё раз после сохранения' })
+      await downloadFrom(`/plans/${editor.state.plan.id}/export/msproject`, null, `${editor.state.plan.title}.xml`)
+    }
     else await exportPlan(editor, format)
   } catch (err) {
     ui.error(err.message || 'Не удалось выгрузить план')

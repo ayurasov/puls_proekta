@@ -42,8 +42,10 @@ const numbers = computed(() => (view.columns.wbs ? outlineNumbers(editor.index) 
 function numberFor(item) {
   if (!numbers.value) return ''
   const source = editor.settings.source
-  const fromFile = source?.kind === 'msproject' && source.master ? item.extra?.msp?.wbs : null
-  return fromFile || numbers.value.get(item.key) || ''
+  // Мастер-копия — коды WBS из файла; у строки, добавленной в «Пульсе», номера нет: вычисленный номер мог бы
+  // совпасть с кодом из файла
+  if (source?.kind === 'msproject' && source.master) return item.extra?.msp?.wbs || ''
+  return numbers.value.get(item.key) || ''
 }
 const MIN_NAME_WIDTH = 140
 const nameWidth = computed(() => Math.max(MIN_NAME_WIDTH, view.gridWidth))
