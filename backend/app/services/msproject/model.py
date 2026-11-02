@@ -98,50 +98,61 @@ class CalendarException:
     month_position: int | None = None  # 0 — первый … 3 — четвёртый, 4 — последний
     occurrences: int | None = None
 
-    def dates(self, limit=3660):
-        """Даты исключения (не больше limit) и признак, что повторение разобрано.
+    def dates(self, limit=3660, low=None, high=None):
+        """Даты исключения в пределах [low, high] (не больше limit) и признак, что повторение разобрано.
 
         Type 1 и 7 — каждый Period-й день отрезка, 6 — дни недели по маске раз в Period недель, 2 и 4 — число
-        месяца ежегодно / раз в Period месяцев, 3 и 5 — «N-й (последний) день недели» месяца.
+        месяца ежегодно / раз в Period месяцев, 3 и 5 — «N-й (последний) день недели» месяца. Отрезок
+        сначала обрезается окном [low, high] (шкала плана ± год): исключение «1900–9000» не перебирается день
+        за днём, а «по 31.12.9999» не выходит за пределы дат.
         """
         kind = self.type or 1
-        period = max(1, self.period or 1)
-        if self.finish < self.start:
-            return [], True
+        period = max(1, min(self.period or 1, 10000))
+        first = max(self.start, low) if low else self.start
+        last = min(self.finish, high) if high else self.finish
+        if last < first or limit <= 0:
+            return [], kind in (1, 2, 3, 4, 5, 6, 7)
         out = []
         if kind in (1, 7):
-            day = self.start
-            while day <= self.finish and len(out) < limit:
+            # шаг Period от начала исключения, первый день — не раньше окна
+            day = self.start + timedelta(days=-(-(first - self.start).days // period) * period)
+            while day <= last and len(out) < limit:
                 out.append(day)
                 day += timedelta(days=period)
             return out, True
         if kind == 6:
-            mask = self.days_of_week or 0
+            mask = (self.days_of_week or 0) & 0x7F
+            if not mask:
+                return [], True
             week0 = self.start - timedelta(days=self.start.isoweekday() % 7)  # воскресенье недели начала
-            day = self.start
-            while day <= self.finish and len(out) < limit:
-                weeks = (day - week0).days // 7
-                if weeks % period == 0 and mask & (1 << (day.isoweekday() % 7)):
-                    out.append(day)
-                day += timedelta(days=1)
+            week = max(0, (first - week0).days // 7)
+            week += -week % period
+            while len(out) < limit:
+                sunday = week0 + timedelta(weeks=week)
+                if sunday > last:
+                    break
+                for offset in range(7):
+                    day = sunday + timedelta(days=offset)
+                    if first <= day <= last and mask & (1 << offset) and len(out) < limit:
+                        out.append(day)
+                week += period
             return out, True
         if kind in (2, 3, 4, 5):
-            year, month = self.start.year, self.start.month
-            step = 12 if kind in (2, 3) else period
-            if kind in (2, 3) and self.month is not None:
-                month = self.month + 1
+            yearly = kind in (2, 3)
+            step = 12 if yearly else period
+            month0 = self.start.year * 12 + ((self.month % 12) if yearly and self.month is not None
+                                               else self.start.month - 1)
+            index = max(0, (first.year * 12 + first.month - 1 - month0) // step - 1)
             guard = 0
             while guard < 2400 and len(out) < limit:
                 guard += 1
-                day = self._month_day(year, month, kind)
-                if day is not None and day > self.finish:
+                year, month = divmod(month0 + index * step, 12)
+                index += 1
+                if date(year, month + 1, 1) > last:
                     break
-                if day is not None and day >= self.start:
+                day = self._month_day(year, month + 1, kind)
+                if day is not None and first <= day <= last and day >= self.start:
                     out.append(day)
-                month += step
-                year, month = year + (month - 1) // 12, (month - 1) % 12 + 1
-                if date(year, month, 1) > self.finish:
-                    break
             return out, True
         return [], False
 

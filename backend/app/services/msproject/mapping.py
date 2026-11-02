@@ -10,10 +10,12 @@
   длительность 0) — вехи с датой начала, остальное — задачи;
 * даты — дни без часов: окончание в начале рабочего дня (08:00 и раньше) — предыдущий день;
 * неактивные задачи, пустые строки и внешние задачи пропускаются, связи с ними — тоже; связи суммарных задач
-  переносятся на вложенные задачи; лаг — в рабочие или календарные дни;
+  переносятся на вложенные задачи; лаг — в рабочие или календарные дни, затем подбирается так, чтобы расчёт
+  сроков «Пульса» дал ровно даты файла (schedule.py: «даты в файле — главные»);
 * ресурсы-работники — исполнители плана (связь с сотрудником по email, затем по ФИО), из нескольких назначений
   строки — исполнитель с наибольшими трудозатратами, остальные — в заметке;
-* всё, что не перенесено или перенесено иначе, — в предупреждениях: код, текст, число и до пяти примеров.
+* всё, что не перенесено или перенесено иначе, — в предупреждениях: код, текст, число и до пяти примеров;
+  неожиданные значения файла (даты, длительности) — `MsProjectError`, а не ошибка сервера.
 
 Ключи строк, связей и исполнителей выводятся из UID файла (`i12`, `l12-15`, `a3`): повторная проверка того же
 файла даёт те же ключи. Если ключ уже занят в плане, сервер переназначает его при применении.
@@ -36,12 +38,16 @@ from app.services.msproject.model import (
     base_format,
     is_task_field,
 )
-from app.services.msproject.text import norm_email, norm_name, plain_text
+from app.services.msproject.schedule import MAX_LAG, RuCalendar, align_links, clamp_snet
+from app.services.msproject.text import clean, norm_email, norm_name, plain_text
 
 MS_NOTE_PREFIX = "Заметка из MS Project: "
 ITEM_LIMIT = 5000
 DEFAULT_DAY_START = time(8, 0)
 TEXT_LIMIT = 5000
+RANGE_LIMIT = 366 * 15          # шкала плана — не длиннее 15 лет (plan_schema.normalize_settings)
+MAX_DURATION = 36600            # длительность в днях больше 100 лет — не длительность, а ошибка файла
+EXCEPTION_BUDGET = 50_000       # дат исключений календаря на файл — дальше не разворачиваются
 NO_NAME = "Без названия"
 # Цвета категорий — ключи палитры «Пульса» (plan_schema.PALETTE) без серого групп и бирюзового вех
 CATEGORY_COLORS = ("blue", "green", "orange", "purple", "red", "amber", "pink", "indigo", "cyan", "lime")
@@ -78,9 +84,14 @@ WARNINGS = {
     "summary_links_skipped": "Связи суммарных задач без вложенных задач не перенесены",
     "duplicate_links": "Повторяющиеся связи объединены",
     "cyclic_links": "Связи, замыкающие цикл, не перенесены",
+    "lags_adjusted": "Лаги связей подобраны так, чтобы сроки совпали с файлом: MS Project считает связи в часах, "
+                     "«Пульс» — в днях",
+    "lags_clamped": f"Лаги длиннее {MAX_LAG} дней ограничены",
     "constraints_info": "Ограничения, кроме «Как можно раньше» и «Начало не ранее», перенесены как сведения: "
                         "на расчёт сроков не влияют",
     "group_constraints": "Крайние сроки и ограничения суммарных задач не перенесены",
+    "constraints_without_date": "Ограничения без даты не перенесены",
+    "constraints_adjusted": "Дата «Начало не ранее» позже начала задачи в файле — взята дата начала",
     "multiple_assignments": "Несколько назначений: исполнитель строки — с наибольшими трудозатратами, остальные — "
                             "в заметке",
     "group_assignments": "Назначения суммарных задач не перенесены",
@@ -92,6 +103,8 @@ WARNINGS = {
     "costs_not_transferred": "Затраты задач не переносятся",
     "task_calendars_not_transferred": "Календари задач не переносятся: сроки — по датам из файла",
     "calendar_exceptions_unsupported": "Исключения календаря с нераспознанным повторением не перенесены",
+    "calendar_exceptions_truncated": "Исключений календаря слишком много — перенесены не все",
+    "range_too_long": "Сроки строк дальше 15 лет друг от друга: шкала плана ограничена 15 годами",
     "no_baseline": "У задач нет базового плана 0 — взяты текущие сроки",
     "working_dates_differ": "По производственному календарю «Пульса» окончание задач в рабочих днях разойдётся "
                             "с файлом",
@@ -163,41 +176,6 @@ def normalize_options(options=None):
     return result
 
 
-class RuCalendar:
-    """Рабочие дни производственного календаря «Пульса» (как createCalendar в src/gantt/domain/calendar.js)."""
-
-    def __init__(self, holidays=None, workdays=None):
-        if holidays is None and workdays is None:
-            from app.calendar_data import OFFICIAL_DAYS
-
-            holidays = [d for year in OFFICIAL_DAYS.values() for d in year["holiday"]]
-            workdays = [d for year in OFFICIAL_DAYS.values() for d in year["workday"]]
-        self.holidays = {str(d)[:10] for d in holidays or ()}
-        self.workdays = {str(d)[:10] for d in workdays or ()}
-
-    def is_working(self, day):
-        text = day.isoformat()
-        if text in self.holidays:
-            return False
-        if text in self.workdays:
-            return True
-        return day.isoweekday() < 6
-
-    def add_working_days(self, start, count):
-        """Окончание задачи длиной count рабочих дней от start (start входит в срок, если рабочий)."""
-        remaining = max(1, count)
-        day = start
-        if self.is_working(day):
-            remaining -= 1
-        guard = 0
-        while remaining > 0 and guard < 20000:
-            day += timedelta(days=1)
-            if self.is_working(day):
-                remaining -= 1
-            guard += 1
-        return day
-
-
 def jira_url(address, bases):
     """Гиперссылка на задачу подключённой Jira → '<адрес>/browse/KEY'; иначе None."""
     if not address or not bases:
@@ -236,22 +214,53 @@ class _Context:
         return moment.date() if moment is not None else None
 
     def lag(self, link, predecessor):
-        """Лаг связи → (дни, вид дней). Рабочие единицы — в рабочие дни (минуты / минут в дне), прошедшие — в
-        календарные (минуты / 1440), проценты — доля длительности предшественника в рабочих днях."""
-        fmt = base_format(link.lag_format) or FORMAT_DAYS
-        if fmt in PERCENT_FORMATS:
-            days = (predecessor.duration or 0) / self.minutes_per_day if predecessor is not None else 0
-            return round_half(link.lag_tenths / 100 * days), "working"
-        minutes = link.lag_tenths / 10
-        if fmt in ELAPSED_FORMATS:
-            return round_half(minutes / 1440), "calendar"
-        return round_half(minutes / self.minutes_per_day), "working"
+        return convert_lag(link, predecessor.duration if predecessor is not None else None, self.minutes_per_day)
+
+
+def convert_lag(link, predecessor_minutes, minutes_per_day):
+    """Лаг связи MS Project → (дни, вид дней) по правилам «Пульса» (окончание предшественника — конец дня).
+
+    Рабочие единицы — рабочие дни (минуты / минут в дне), прошедшие — календарные (минуты / 1440), проценты —
+    доля длительности предшественника в рабочих днях. Дробная часть — как в MS Project при днях целиком:
+    FS и SS — вниз (+4ч после окончания в 17:00 — это следующее утро, лаг 0; −4ч — тот же день, лаг −1),
+    FF — вверх (окончание +4ч — следующий день), SF — вверх и на день раньше: в «Пульсе» SF кончает задачу в день
+    начала предшественника, в MS Project — к его началу, то есть в конце предыдущего рабочего дня."""
+    fmt = base_format(link.lag_format) or FORMAT_DAYS
+    if fmt in PERCENT_FORMATS:
+        minutes, unit, kind = (predecessor_minutes or 0) * link.lag_tenths / 100, minutes_per_day, "working"
+    elif fmt in ELAPSED_FORMATS:
+        minutes, unit, kind = link.lag_tenths / 10, 1440, "calendar"
+    else:
+        minutes, unit, kind = link.lag_tenths / 10, minutes_per_day, "working"
+    value = minutes / unit
+    if link.type_code in ("FS", "SS"):
+        days = math.floor(value + 1e-9)
+    elif kind == "working":
+        days = math.ceil(value - 1e-9)
+    else:
+        days = round_half(value)
+    if link.type_code == "SF":
+        days -= 1
+    return days, kind
 
 
 # ---------------------------------------------------------------- сопоставление
 def map_project(project, options=None):
-    """Модель MS Project + параметры загрузки → документ загрузки плана «Пульса» (JSON-совместимый словарь)."""
+    """Модель MS Project + параметры загрузки → документ загрузки плана «Пульса» (JSON-совместимый словарь).
+
+    Неожиданное значение в файле (дата за пределами календаря, длительность в миллионы дней) — MsProjectError
+    с текстом для сотрудника, а не ошибка сервера."""
     opts = normalize_options(options)
+    try:
+        return _map(project, opts)
+    except MsProjectError:
+        raise
+    except (OverflowError, ValueError, ArithmeticError) as error:
+        raise MsProjectError("В файле MS Project недопустимые значения (даты или длительности) — проверьте "
+                             f"файл в MS Project и сохраните его заново ({type(error).__name__})") from None
+
+
+def _map(project, opts):
     ctx = _Context(project, opts)
     warn = _Warnings()
     by_uid = {}
@@ -279,15 +288,14 @@ def map_project(project, options=None):
     rows = final
 
     category = _CategoryField(project, opts["categoryField"])
-    ru_calendar = None
-    if opts["durations"] == "working":
-        custom = opts["calendar"]
-        ru_calendar = RuCalendar(custom.get("holidays"), custom.get("workdays")) if custom else RuCalendar()
+    custom = opts["calendar"]
+    ru_calendar = RuCalendar(custom.get("holidays"), custom.get("workdays")) if custom else RuCalendar()
+    working = ru_calendar if opts["durations"] == "working" else None
 
     items, notes_extra, baseline_items = [], {}, {}
     keys = {task.uid: f"i{task.uid}" for task in rows}
     for index, task in enumerate(rows):
-        item = _item(task, kinds[task.uid], keys, parent_of, index, ctx, warn, category, ru_calendar, notes_extra)
+        item = _item(task, kinds[task.uid], keys, parent_of, index, ctx, warn, category, working, notes_extra)
         items.append(item)
         if 0 in task.baselines and kinds[task.uid] != "group":
             base = task.baselines[0]
@@ -299,6 +307,14 @@ def map_project(project, options=None):
     item_by_key = {item["key"]: item for item in items}
 
     links = _links(project, by_uid, kinds, keys, children, item_by_key, rows, ctx, warn)
+    for item in clamp_snet(items):
+        warn.add("constraints_adjusted", item["name"])
+    if opts["baseline"] == "current":
+        # Даты файла — главные: лаги подбираются так, чтобы автосдвиг «Пульса» их не трогал. По базовому плану
+        # сроки строк — плановые, а предшественники — со сдвигом: там расчёт и должен показать отставание.
+        names = {item["key"]: item["name"] for item in items}
+        for link, _ in align_links(items, links, ru_calendar):
+            warn.add("lags_adjusted", f"{names[link['from']]} → {names[link['to']]}")
     assignees, assignee_of, also = _assignees(project, rows, kinds, keys, opts, warn)
     for item in items:
         uid = item["extra"]["msp"]["uid"]
@@ -323,7 +339,7 @@ def map_project(project, options=None):
         warn.add("no_tasks")
     if len(items) > ITEM_LIMIT:
         warn.add("too_many_items")
-    project_start, project_finish, plan_range = _range(project, items, ctx)
+    project_start, project_finish, plan_range = _range(project, items, ctx, warn)
     calendar = _calendar_info(ctx, plan_range, warn)
 
     stats = {
@@ -343,9 +359,9 @@ def map_project(project, options=None):
             "materialResources": warn.count("material_resources"),
         },
     }
-    name = project.title or _summary_name(project) or _stem(project.name) or "Проект из MS Project"
+    name = clean(project.title or _summary_name(project) or _stem(project.name) or "").strip() or "Проект из MS Project"
     return {
-        "project": {"name": name[:500], "title": project.title, "guid": project.guid,
+        "project": {"name": name[:500], "title": clean(project.title) or None, "guid": project.guid,
                     "start": _iso(project_start), "finish": _iso(project_finish)},
         "settings": {
             "range": plan_range,
@@ -357,6 +373,8 @@ def map_project(project, options=None):
         "assignees": assignees,
         "comments": comments,
         "calendar": calendar,
+        # Календарь «Пульса», по которому подобраны лаги в рабочих днях (тот же, что у плана — calendar_days)
+        "pulsCalendar": ru_calendar.export(),
         "baseline": {"number": 0, "items": baseline_items} if baseline_items else None,
         "customFields": _custom_fields(project, rows),
         "options": {key: opts[key] for key in ("durations", "baseline", "categoryField", "skipInactive")},
@@ -453,7 +471,7 @@ class _CategoryField:
 
 def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, notes_extra):
     opts = ctx.options
-    name = " ".join(task.name.split()) if task.name else ""
+    name = " ".join(clean(task.name).split()) if task.name else ""
     if not name:
         name = NO_NAME
         warn.add("empty_names", f"№ {task.id}" if task.id is not None else None)
@@ -475,9 +493,9 @@ def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, 
 
     jira = jira_url(task.hyperlink_address, opts["jiraBaseUrls"])
     if task.hyperlink_address and not jira:
-        label = task.hyperlink if task.hyperlink and task.hyperlink != task.hyperlink_address else None
-        notes_extra.setdefault(task.uid, []).append(
-            f"Ссылка: {label} — {task.hyperlink_address}" if label else f"Ссылка: {task.hyperlink_address}")
+        label = clean(task.hyperlink) if task.hyperlink and task.hyperlink != task.hyperlink_address else None
+        address = clean(task.hyperlink_address)
+        notes_extra.setdefault(task.uid, []).append(f"Ссылка: {label} — {address}" if label else f"Ссылка: {address}")
         warn.add("hyperlinks_in_notes", name)
 
     constraint = task.constraint
@@ -486,9 +504,13 @@ def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, 
             warn.add("group_constraints", name)
         item.update({"color": GROUP_COLOR, "jiraUrl": jira})
     else:
+        if constraint and constraint != "alap" and task.constraint_date is None:
+            # «Начало не ранее» без даты сервер не примет (а в MS Project такого не бывает) — ограничения нет
+            warn.add("constraints_without_date", name)
+            constraint = None
         if constraint not in (None, "snet"):
             warn.add("constraints_info", name)
-        if constraint and task.constraint_date is not None and constraint != "alap":
+        if constraint and constraint != "alap":
             constraint_date = (ctx.finish_day(task.constraint_date) if constraint in FINISH_CONSTRAINTS
                                else task.constraint_date.date())
         else:
@@ -519,7 +541,7 @@ def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, 
             completed = None
             if status == "done":
                 completed = ctx.finish_day(task.actual_finish or finish_moment)
-            value = category.value(task)
+            value = clean(category.value(task)) or None
             item.update({
                 "status": status, "start": _iso(start), "end": _iso(end), "endMode": "date", "duration": None,
                 "durationType": "calendar", "progress": progress, "offset": offset, "completedDate": _iso(completed),
@@ -534,12 +556,16 @@ def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, 
 def _working_duration(item, task, minutes, start, end, ctx, ru_calendar, warn):
     """Параметр «Длительности в рабочих днях»: задача — «по длительности»; прошедшая длительность («5ед») —
     в календарных днях. Если по календарю «Пульса» окончание выйдет другим — предупреждение."""
-    if base_format(task.duration_format) in ELAPSED_FORMATS:
-        days = max(1, round_half(minutes / 1440))
+    elapsed = base_format(task.duration_format) in ELAPSED_FORMATS
+    days = max(1, round_half(minutes / (1440 if elapsed else ctx.minutes_per_day)))
+    if days > MAX_DURATION:
+        # Длительность не сходится с датами на столетия — задача остаётся «по дате»
+        warn.add("working_dates_differ", item["name"])
+        return
+    if elapsed:
         item.update({"endMode": "duration", "duration": days, "durationType": "calendar"})
         expected = start + timedelta(days=days - 1)
     else:
-        days = max(1, round_half(minutes / ctx.minutes_per_day))
         item.update({"endMode": "duration", "duration": days, "durationType": "working"})
         expected = ru_calendar.add_working_days(start, days)
     if expected != end:
@@ -570,15 +596,22 @@ def _links(project, by_uid, kinds, keys, children, item_by_key, rows, ctx, warn)
             return item["date"], item["date"]
         return item["start"], item["end"]
 
+    picked = {}
+
     def pick(group_uid, use_finish):
         """Вложенная задача вместо суммарной: по окончанию — самая поздняя (при равенстве — последняя), по
         началу — самая ранняя (при равенстве — первая)."""
+        if (group_uid, use_finish) in picked:
+            return picked[group_uid, use_finish]
         candidates = _descendant_rows(group_uid, children, kinds)
         if not candidates:
-            return None
-        if use_finish:
-            return max(candidates, key=lambda uid: (bounds(uid)[1], order[uid]))
-        return min(candidates, key=lambda uid: (bounds(uid)[0], order[uid]))
+            result = None
+        elif use_finish:
+            result = max(candidates, key=lambda uid: (bounds(uid)[1], order[uid]))
+        else:
+            result = min(candidates, key=lambda uid: (bounds(uid)[0], order[uid]))
+        picked[group_uid, use_finish] = result
+        return result
 
     candidates, seen = [], set()
     for link in project.links:
@@ -594,6 +627,9 @@ def _links(project, by_uid, kinds, keys, children, item_by_key, rows, ctx, warn)
             continue
         kind = link.type_code
         lag, lag_kind = ctx.lag(link, pred_task)
+        if abs(lag) > MAX_LAG:
+            warn.add("lags_clamped", label)
+            lag = max(-MAX_LAG, min(MAX_LAG, lag))
         source, target, moved = pred, succ, False
         if kinds[pred] == "group":
             source, moved = pick(pred, kind in ("FS", "FF")), True
@@ -710,24 +746,25 @@ def _assignees(project, rows, kinds, keys, opts, warn):
             by_name.setdefault(norm_name(user["name"]), []).append(user["id"])
     assignees, resource_key, resource_name = [], {}, {}
     for resource in project.resources:
-        if resource.is_null or not resource.name:
+        name = " ".join(clean(resource.name).split())
+        if resource.is_null or not name:
             continue
         if resource.type != RESOURCE_WORK:
-            warn.add("material_resources", resource.name)
+            warn.add("material_resources", name)
             continue
         user_id = None
         emails = by_email.get(norm_email(resource.email)) if resource.email else None
-        names = by_name.get(norm_name(resource.name))
+        names = by_name.get(norm_name(name))
         if emails and len(set(emails)) == 1:
             user_id = emails[0]
         elif names and len(set(names)) == 1:
             user_id = names[0]
         elif names:
-            warn.add("ambiguous_users", resource.name)
+            warn.add("ambiguous_users", name)
         key = f"a{resource.uid}"
         resource_key[resource.uid] = key
-        resource_name[resource.uid] = resource.name
-        assignees.append({"key": key, "name": resource.name[:500], "role": (resource.group or "")[:500],
+        resource_name[resource.uid] = name
+        assignees.append({"key": key, "name": name[:500], "role": " ".join(clean(resource.group).split())[:500],
                           "color": ASSIGNEE_COLORS[len(assignees) % len(ASSIGNEE_COLORS)], "userId": user_id,
                           "position": float(len(assignees) + 1)})
     by_task = {}
@@ -757,8 +794,10 @@ def _assignees(project, rows, kinds, keys, opts, warn):
     return assignees, assignee_of, also
 
 
-def _range(project, items, ctx):
-    """Шкала плана: начало проекта − 7 дней … окончание + 14 дней (и все даты строк)."""
+def _range(project, items, ctx, warn):
+    """Шкала плана: начало проекта − 7 дней … окончание + 14 дней (и все даты строк), не длиннее 15 лет — иначе
+    план не создать. Если строки разбросаны шире, шкала — по срокам проекта, а если и они шире — 15 лет от
+    начала проекта."""
     days = []
     for item in items:
         for name in ("start", "end", "date"):
@@ -772,10 +811,14 @@ def _range(project, items, ctx):
         start = finish = date.today()
     if finish is None or finish < start:
         finish = start
-    low = min([start] + days)
-    high = max([finish] + days)
-    return start, finish, {"start": (low - timedelta(days=7)).isoformat(),
-                           "end": (high + timedelta(days=14)).isoformat()}
+    low = min([start] + days) - timedelta(days=7)
+    high = max([finish] + days) + timedelta(days=14)
+    if (high - low).days > RANGE_LIMIT:
+        warn.add("range_too_long")
+        low, high = start - timedelta(days=7), finish + timedelta(days=14)
+        if (high - low).days > RANGE_LIMIT:
+            high = low + timedelta(days=RANGE_LIMIT)
+    return start, finish, {"start": low.isoformat(), "end": high.isoformat()}
 
 
 def _calendar_info(ctx, plan_range, warn, limit=3660):
@@ -787,17 +830,22 @@ def _calendar_info(ctx, plan_range, warn, limit=3660):
     week = sorted(DAY_TYPE_TO_ISO[day_type] for day_type, day in ctx.week.items() if day.working)
     low = date.fromisoformat(plan_range["start"]) - timedelta(days=366)
     high = date.fromisoformat(plan_range["end"]) + timedelta(days=366)
-    exceptions = {}
+    exceptions, budget = {}, EXCEPTION_BUDGET
     for exception in calendar.exceptions:
-        dates, understood = exception.dates(limit=limit)
+        if budget <= 0 or len(exceptions) >= limit:
+            warn.add("calendar_exceptions_truncated")
+            break
+        dates, understood = exception.dates(limit=min(limit, budget), low=low, high=high)
+        budget -= max(1, len(dates))
         if not understood:
-            warn.add("calendar_exceptions_unsupported", exception.name)
+            warn.add("calendar_exceptions_unsupported", clean(exception.name) or None)
             continue
         for day in dates:
-            if low <= day <= high and day not in exceptions:
-                exceptions[day] = {"date": day.isoformat(), "working": exception.working, "title": exception.name or ""}
+            if day not in exceptions:
+                exceptions[day] = {"date": day.isoformat(), "working": exception.working,
+                                   "title": clean(exception.name)}
     return {
-        "name": calendar.name,
+        "name": clean(calendar.name) or None,
         "workWeek": week,
         "dayStart": ctx.day_start.strftime("%H:%M"),
         "minutesPerDay": ctx.minutes_per_day,

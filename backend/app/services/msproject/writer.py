@@ -31,6 +31,7 @@ DAY_START, DAY_FINISH = time(8, 0), time(17, 0)
 WORK_TIMES = ((time(8, 0), time(12, 0)), (time(13, 0), time(17, 0)))
 MINUTES_PER_DAY, MINUTES_PER_WEEK, DAYS_PER_MONTH = 480, 2400, 20
 CATEGORY_FIELD_ID, CATEGORY_FIELD_NAME, CATEGORY_ALIAS = "188743731", "Text1", "Категория"
+MAX_UID = 2_147_483_647        # UID в MS Project — 32-битное целое
 GUID_RE = re.compile(r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$")
 _NAMESPACE_UUID = uuid.UUID("0b7c3f4e-2a59-5d0e-9b8e-7075c5f0a012")
 # Символы, недопустимые в XML 1.0 (управляющие, кроме табуляции и переводов строки): MS Project не откроет файл
@@ -186,6 +187,19 @@ class _WorkCalendar:
         return count
 
 
+def _allocator(used):
+    """Новые UID по порядку после наибольшего занятого; у границы 32 бит — первые свободные с 1."""
+    state = {"next": max(used) + 1}
+
+    def allocate():
+        while state["next"] in used or state["next"] > MAX_UID:
+            state["next"] = state["next"] + 1 if state["next"] <= MAX_UID else 1
+        used.add(state["next"])
+        return state["next"]
+
+    return allocate
+
+
 def _guid(*parts):
     return str(uuid.uuid5(_NAMESPACE_UUID, ":".join(str(p) for p in parts))).upper()
 
@@ -262,19 +276,17 @@ def write_mspdi(plan_document, *, holidays=(), workdays=(), include_comments=Tru
             count += 1
             walk(item, str(count))
 
-    # UID: из файла MS Project, если он есть и не повторяется; остальным — по порядку
+    # UID: из файла MS Project, если он есть и не повторяется; остальным — по порядку после занятых
     uids, used = {}, {0}
     for item, _, _ in ordered:
         uid = ((item.get("extra") or {}).get("msp") or {}).get("uid")
-        if isinstance(uid, int) and not isinstance(uid, bool) and uid > 0 and uid not in used:
+        if isinstance(uid, int) and not isinstance(uid, bool) and 0 < uid <= MAX_UID and uid not in used:
             uids[item["key"]] = uid
             used.add(uid)
-    next_uid = max(used) + 1
+    allocate = _allocator(used)
     for item, _, _ in ordered:
         if item["key"] not in uids:
-            uids[item["key"]] = next_uid
-            used.add(next_uid)
-            next_uid += 1
+            uids[item["key"]] = allocate()
 
     # Сроки: задача — начало и окончание со сдвигом; веха — дата; суммарная — по вложенным
     spans = {}
@@ -324,18 +336,18 @@ def write_mspdi(plan_document, *, holidays=(), workdays=(), include_comments=Tru
 
     assignees = sorted((a for a in plan_document.get("assignees") or [] if isinstance(a, dict) and a.get("key")
                         and not a.get("deleted")), key=lambda a: (float(a.get("position") or 0), a["key"]))
-    resource_uid, used_resources = {}, set()
+    # Исполнитель, пришедший из MS Project, — ключ a<UID ресурса> (до 7 цифр); ключи «Пульса» — a и 10
+    # шестнадцатеричных знаков, даже из одних цифр они UID не дают
+    resource_uid, used_resources = {}, {0}
     for assignee in assignees:
-        match = re.match(r"^a(\d+)$", assignee["key"])
+        match = re.match(r"^a(\d{1,7})$", assignee["key"])
         if match and int(match.group(1)) > 0 and int(match.group(1)) not in used_resources:
             resource_uid[assignee["key"]] = int(match.group(1))
             used_resources.add(int(match.group(1)))
-    next_resource = max(used_resources, default=0) + 1
+    allocate = _allocator(used_resources)
     for assignee in assignees:
         if assignee["key"] not in resource_uid:
-            resource_uid[assignee["key"]] = next_resource
-            used_resources.add(next_resource)
-            next_resource += 1
+            resource_uid[assignee["key"]] = allocate()
     emails = {u.get("id"): u.get("email") for u in users or () if isinstance(u, dict)}
 
     root = ET.Element("Project", {"xmlns": NAMESPACE})
@@ -530,6 +542,10 @@ def _constraint(item, scheduling, span):
 def _link(link, uids):
     kind = link.get("type") if link.get("type") in LINK_TYPE_CODES else "FS"
     lag = int(link.get("lag") or 0)
+    if kind == "SF":
+        # SF в «Пульсе» кончает задачу в день начала предшественника + лаг, в MS Project — к его началу (концу
+        # предыдущего дня) + лаг: лаг MS Project на день больше (обратное к mapping.convert_lag)
+        lag += 1
     elapsed = link.get("lagKind") == "calendar"
     return _element("PredecessorLink", LINK_ORDER, {
         "PredecessorUID": uids[link["from"]], "Type": LINK_TYPE_CODES[kind], "CrossProject": 0,

@@ -25,6 +25,14 @@ _RTF_TOKEN = re.compile(r"\\([a-zA-Z]{1,32})(-?\d{1,10})? ?|\\'([0-9a-fA-F]{2})|
                         r"|([^\\{}\r\n]+)|[\r\n]+")
 _HTML_HINT = re.compile(r"<\s*(html|body|p|div|br|span|font|b|i|u|ul|ol|li|table)\b", re.IGNORECASE)
 _HTML_BREAK = {"br", "p", "div", "li", "tr", "h1", "h2", "h3", "h4", "h5", "h6", "table", "ul", "ol"}
+# NUL и управляющие символы (кроме табуляции и перевода строки), одиночные суррогаты, не-символы U+FFFE/U+FFFF:
+# из RTF (\'00, \u0, \u55296) и HTML они попали бы в комментарий, а PostgreSQL не принимает NUL в тексте
+_UNSAFE = re.compile("[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ud800-\udfff\ufffe\uffff]")
+
+
+def clean(value):
+    """Текст без символов, которые нельзя сохранить в базе или записать в XML; None — пустая строка."""
+    return _UNSAFE.sub("", str(value)) if value is not None else ""
 
 
 def plain_text(value):
@@ -37,7 +45,7 @@ def plain_text(value):
         text = rtf_to_text(stripped)
     elif _HTML_HINT.search(text):
         text = html_to_text(text)
-    text = text.replace("\r\n", "\n").replace("\r", "\n").replace("\u00a0", " ")
+    text = clean(text.replace("\r\n", "\n").replace("\r", "\n").replace("\u00a0", " "))
     lines = [line.rstrip() for line in text.split("\n")]
     text = re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
     return text or None
@@ -101,11 +109,13 @@ def rtf_to_text(rtf):
                 except LookupError:
                     codepage = "cp1251"
             elif word == "uc" and arg is not None:
-                uc_skip = max(0, int(arg))
+                uc_skip = max(0, min(int(arg), 16))
             elif word == "u" and arg is not None:
-                if not skip:
-                    code = int(arg)
-                    out.append(chr(code + 65536 if code < 0 else code))
+                code = int(arg)
+                code = code + 65536 if code < 0 else code
+                # Вне Юникода (\u1114112) и суррогаты — не символ: пропускаются, а не роняют разбор
+                if not skip and 0 < code <= 0x10FFFF and not 0xD800 <= code <= 0xDFFF:
+                    out.append(chr(code))
                 pending_skip = uc_skip
             elif not skip and word in _RTF_SPECIAL:
                 out.append(_RTF_SPECIAL[word])

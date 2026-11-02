@@ -5,8 +5,12 @@
 в сотни мегабайт. Защита — та же, что у `defusedxml`, но без зависимости:
 
 * объявление DOCTYPE (а с ним и сущности, внешние ссылки, «миллиард смехов») отклоняется до разбора —
-  в MSPDI его не бывает; внешние сущности expat и сам не загружает;
-* ограничения: файл до 50 МБ, до 20 000 задач, 50 000 ресурсов, 200 000 назначений, вложенность до 32.
+  в MSPDI его не бывает. Пролог проверяет сам expat (обработчики объявлений), поэтому кодировку он определяет
+  так же, как основной разбор: UTF-16 без метки порядка байтов DOCTYPE не спрячет. Внешние сущности expat и сам
+  не загружает;
+* ограничения: файл до 50 МБ, до 20 000 задач, 50 000 ресурсов, 200 000 назначений, вложенность до 32;
+* даты вне диапазона MS Project (1984–2149) считаются пустыми: ни 0001-01-01, ни 9999-12-31 не доходят до
+  арифметики дат.
 
 Файл .mpp (двоичный OLE) и другие форматы узнаются по первым байтам — сотрудник получает подсказку, как
 сохранить файл в XML. Ошибки — `MsProjectError` с текстом для сотрудника.
@@ -16,6 +20,7 @@ from __future__ import annotations
 
 import re
 import xml.etree.ElementTree as ET
+import xml.parsers.expat as expat
 from datetime import date, datetime, time
 
 from app.services.msproject.model import (
@@ -47,18 +52,18 @@ CHUNK = 1 << 20
 SAVE_AS_XML = "в MS Project выберите «Файл → Сохранить как → XML (*.xml)»"
 NOT_MSPDI = f"Это не файл MS Project XML — {SAVE_AS_XML}"
 OLE_MAGIC = b"\xd0\xcf\x11\xe0"
-# Кодировки, совместимые с ASCII: MS Project пишет UTF-8, сторонние программы — иногда windows-1251
-ASCII_ENCODINGS = {"utf-8", "utf8", "us-ascii", "ascii", "windows-1251", "cp1251", "koi8-r", "iso-8859-5",
-                   "iso-8859-1", "latin-1", "latin1", "windows-1252", "cp1252"}
-_DECLARED_RE = re.compile(rb"^\s*<\?xml[^>]*?encoding\s*=\s*[\"']([A-Za-z0-9._-]{1,40})[\"']")
+DOCTYPE_REJECTED = ("Файл содержит объявление DOCTYPE или сущностей — MS Project таких файлов не создаёт, загрузка "
+                    "отклонена. Сохраните план из MS Project заново: «Файл → Сохранить как → XML (*.xml)»")
+# Даты, которые понимает MS Project; за пределами — пустое значение
+MIN_DATE, MAX_DATE = datetime(1984, 1, 1), datetime(2149, 12, 31, 23, 59, 59)
+_DECLARED_RE = re.compile(r"^\s*<\?xml[^>]*?encoding\s*=\s*[\"']([A-Za-z0-9._-]{1,40})[\"']")
 _DURATION_RE = re.compile(
     r"^(-)?P(?:(\d+(?:\.\d+)?)Y)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)W)?(?:(\d+(?:\.\d+)?)D)?"
     r"(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$")
 
 
 # ---------------------------------------------------------------- значения
-def parse_datetime(value):
-    """'2026-03-02T08:00:00' → datetime (без часового пояса); пустое и неверное — None."""
+def _moment(value):
     text = (value or "").strip()
     if not text:
         return None
@@ -71,6 +76,18 @@ def parse_datetime(value):
             return datetime.combine(date.fromisoformat(text[:10]), time())
         except ValueError:
             return None
+
+
+def parse_datetime(value):
+    """'2026-03-02T08:00:00' → datetime (без часового пояса); пустое, неверное и вне 1984–2149 — None."""
+    moment = _moment(value)
+    return moment if moment is not None and MIN_DATE <= moment <= MAX_DATE else None
+
+
+def parse_period_date(value):
+    """Граница отрезка календаря («по 31.12.9999» — «бессрочно»): дата, прижатая к диапазону MS Project."""
+    moment = _moment(value)
+    return min(max(moment, MIN_DATE), MAX_DATE).date() if moment is not None else None
 
 
 def parse_date(value):
@@ -154,14 +171,13 @@ def _guid(value):
 
 # ---------------------------------------------------------------- проверка до разбора
 def _read_bytes(source, max_bytes):
+    """Содержимое файла: bytes (кодировку определяет expat) или str (уже текст — разбирается как есть)."""
     if isinstance(source, (bytes, bytearray, memoryview)):
         data = bytes(source)
     elif isinstance(source, str):
-        data = source.encode("utf-8")
+        data = source
     elif hasattr(source, "read"):
         data = source.read(max_bytes + 1)
-        if isinstance(data, str):
-            data = data.encode("utf-8")
     else:
         raise TypeError("source: bytes, str или файл")
     if len(data) > max_bytes:
@@ -174,6 +190,8 @@ def _read_bytes(source, max_bytes):
 
 
 def _check_signature(data):
+    if isinstance(data, str):
+        return
     head = data[:8]
     if head.startswith(OLE_MAGIC):
         raise MsProjectError("Файл .mpp: сохраните его в MS Project как XML — «Файл → Сохранить как → "
@@ -187,61 +205,52 @@ def _check_signature(data):
                              "«Файл → Сохранить как → XML (*.xml)»")
 
 
-def _decode(data):
-    """Текст файла для разбора. UTF-16 (с меткой порядка байтов или без неё) переводится в str — expat разбирает
-    его как UTF-8, не глядя на объявление. Остальное остаётся байтами в кодировке, совместимой с ASCII: только в
-    такой DOCTYPE в прологе виден побайтовой проверке, поэтому другие объявленные кодировки отклоняются."""
-    if data.startswith((b"\x00\x00\xfe\xff", b"\xff\xfe\x00\x00")):
-        raise MsProjectError(f"Кодировка UTF-32 не поддерживается — {SAVE_AS_XML}")
-    codec = None
-    if data.startswith((b"\xff\xfe", b"\xfe\xff")):
-        codec = "utf-16"
-    elif data.startswith(b"<\x00"):
-        codec = "utf-16-le"
-    elif data.startswith(b"\x00<"):
-        codec = "utf-16-be"
-    if codec:
-        try:
-            return data.decode(codec)
-        except UnicodeDecodeError:
-            raise MsProjectError(f"Файл повреждён: неверная кодировка UTF-16 — {SAVE_AS_XML}") from None
-    declared = _DECLARED_RE.match(data[3:] if data.startswith(b"\xef\xbb\xbf") else data)
-    if declared:
-        encoding = declared.group(1).decode("ascii").lower()
-        if encoding not in ASCII_ENCODINGS and not encoding.startswith("utf-16") and encoding != "utf16":
-            raise MsProjectError(f"Кодировка файла «{encoding}» не поддерживается — {SAVE_AS_XML}")
-    return data
+class _RootReached(Exception):
+    """Начался корневой элемент — пролог проверен, дальше объявлений быть не может."""
 
 
-def _prolog_end(text):
-    """Пролог XML (до корневого элемента) проверяется на DOCTYPE и сущности: в MSPDI их не бывает, а через них
-    идут атаки «миллиард смехов» и чтение файлов сервера. После корня объявление DOCTYPE expat сам отклоняет
-    как ошибку разбора, а без DOCTYPE сущностей объявить нельзя. Возвращает позицию корневого элемента."""
-    is_bytes = isinstance(text, bytes)
-    lt, bang, question = (b"<", b"<!", b"<?") if is_bytes else ("<", "<!", "<?")
-    pos, size = 0, len(text)
-    while pos < size:
-        start = text.find(lt, pos)
-        if start < 0:
-            return size
-        if text.startswith(bang + (b"--" if is_bytes else "--"), start):
-            end = text.find(b"-->" if is_bytes else "-->", start + 4)
-            if end < 0:
-                return size
-            pos = end + 3
-            continue
-        if text.startswith(bang, start):
-            raise MsProjectError("Файл содержит объявление DOCTYPE или сущностей — MS Project таких файлов не "
-                                 "создаёт, загрузка отклонена. Сохраните план из MS Project заново: «Файл → "
-                                 "Сохранить как → XML (*.xml)»")
-        if text.startswith(question, start):
-            end = text.find(b"?>" if is_bytes else "?>", start + 2)
-            if end < 0:
-                return size
-            pos = end + 2
-            continue
-        return start
-    return size
+def _reject_dtd(text):
+    """Пролог разбирает expat с обработчиками объявлений: DOCTYPE, сущность или нотация — отказ, начало корневого
+    элемента — пролог чист. Кодировку (метка порядка байтов, UTF-16 без метки, объявление) expat определяет так
+    же, как при основном разборе, поэтому объявление нельзя спрятать от проверки другой кодировкой."""
+    parser = expat.ParserCreate()
+
+    def declaration(*_):
+        raise MsProjectError(DOCTYPE_REJECTED)
+
+    def root(*_):
+        raise _RootReached
+
+    parser.StartDoctypeDeclHandler = declaration
+    parser.EntityDeclHandler = declaration
+    parser.UnparsedEntityDeclHandler = declaration
+    parser.NotationDeclHandler = declaration
+    parser.StartElementHandler = root
+    try:
+        for offset in range(0, len(text), CHUNK):
+            parser.Parse(text[offset:offset + CHUNK], False)
+        parser.Parse(text[:0], True)
+    except _RootReached:
+        return
+    except MsProjectError:
+        raise
+    except expat.ExpatError as error:
+        if error.code in _ENCODING_ERRORS:
+            raise MsProjectError(_encoding_message(text)) from None
+        return  # прочие ошибки разбора сообщит основной разбор — с номером строки
+    except (ValueError, LookupError):
+        raise MsProjectError(_encoding_message(text)) from None
+
+
+_ENCODING_ERRORS = {expat.errors.codes[expat.errors.XML_ERROR_UNKNOWN_ENCODING],
+                    expat.errors.codes[expat.errors.XML_ERROR_INCORRECT_ENCODING]}
+
+
+def _encoding_message(text):
+    head = text[:200].decode("latin-1") if isinstance(text, bytes) else text[:200]
+    declared = _DECLARED_RE.match(head.lstrip("\ufeff\xef\xbb\xbf"))
+    name = f"«{declared.group(1).lower()}» " if declared else ""
+    return f"Кодировка файла {name}не поддерживается — {SAVE_AS_XML}"
 
 
 # ---------------------------------------------------------------- разбор элементов
@@ -283,7 +292,7 @@ def _time_period(elem):
     for child in elem:
         if _local(child.tag) == "TimePeriod":
             f = _fields(child)
-            return parse_date(f.get("FromDate")), parse_date(f.get("ToDate"))
+            return parse_period_date(f.get("FromDate")), parse_period_date(f.get("ToDate"))
     return None, None
 
 
@@ -426,10 +435,9 @@ def read_mspdi(source, *, max_bytes=MAX_BYTES, max_tasks=MAX_TASKS, max_resource
     """Файл MS Project XML (bytes, str или файловый объект) → `Project`.
 
     Ошибки формата, размера и безопасности — `MsProjectError` с текстом для сотрудника."""
-    data = _read_bytes(source, max_bytes)
-    _check_signature(data)
-    text = _decode(data)
-    _prolog_end(text)
+    text = _read_bytes(source, max_bytes)
+    _check_signature(text)
+    _reject_dtd(text)
 
     parser = ET.XMLPullParser(events=("start", "end"))
     stack, containers = [], {}
@@ -467,7 +475,8 @@ def read_mspdi(source, *, max_bytes=MAX_BYTES, max_tasks=MAX_TASKS, max_resource
             if task is not None:
                 tasks.append(task)
                 links.extend(task_links)
-                if len(tasks) > max_tasks:
+                # Суммарная задача проекта (UID 0) — не задача плана и в ограничение не входит
+                if len(tasks) - (tasks[0].uid == 0) > max_tasks:
                     raise MsProjectError(f"В файле больше {max_tasks} задач — такой план не загрузить. "
                                          "Разделите проект в MS Project на несколько файлов")
         elif container == "Resources" and name == "Resource":
@@ -512,7 +521,7 @@ def read_mspdi(source, *, max_bytes=MAX_BYTES, max_tasks=MAX_TASKS, max_resource
         raise MsProjectError(f"Файл MS Project XML повреждён{where}: сохраните его из MS Project заново") from None
     except (ValueError, LookupError):
         # Кодировка, которую expat не разбирает (многобайтная, кроме UTF-8/16)
-        raise MsProjectError(f"Кодировка файла не поддерживается — {SAVE_AS_XML}") from None
+        raise MsProjectError(_encoding_message(text)) from None
     if root is None:
         raise MsProjectError(NOT_MSPDI)
 
