@@ -115,11 +115,9 @@ def preview(data, options, target, plan=None, file_name="", viewer=None):
         changes = diff_plan(snapshot_document(plan), doc, reserved_keys=_taken_keys(plan)).to_dict()
         out["changes"] = _short_changes(changes)
         out["planRevision"] = plan.revision
-        source = (plan.settings or {}).get("source") or {}
-        if source.get("projectGuid") and doc["project"].get("guid") and source["projectGuid"] != doc["project"]["guid"]:
-            out["warnings"] = [{"code": "other_project", "count": 1, "examples": [doc["project"].get("name") or ""],
-                                "message": "Файл — другой проект MS Project, чем тот, из которого загружен план"},
-                               *out["warnings"]]
+        # Предупреждения плана обновления (другой проект, сменившие тип строки, удалённые в «Пульсе»…) — первыми,
+        # в общем списке, который показывает окно загрузки
+        out["warnings"] = [*changes.get("warnings", []), *out["warnings"]]
     elif target == "replace":
         out["planRevision"] = plan.revision
         out["replacing"] = db.session.query(PlanItem).filter(

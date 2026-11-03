@@ -267,6 +267,10 @@ const sizeText = computed(() => (file.value ? `${(file.value.size / 1024 / 1024)
           <span class="chip changed">Изменено {{ changes.changed.length }}</span>
           <span class="chip missing">Нет в файле {{ changes.missing.length }}</span>
           <span class="chip">Связи: +{{ changes.links.added.length }} −{{ changes.links.removed.length }}</span>
+          <span
+            v-if="changes.assignees?.renamed?.length" class="chip" data-testid="msp-renamed"
+            :title="changes.assignees.renamed.map((a) => `${a.before} → ${a.after}`).join('\n')"
+          >Исполнители переименованы: {{ changes.assignees.renamed.length }}</span>
           <span class="chip muted">Без изменений {{ changes.unchanged }}</span>
         </div>
         <div v-if="changes.changed.length" class="list scroll-thin">

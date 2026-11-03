@@ -829,6 +829,7 @@ def test_обновление_без_изменений(doc):
     changes = diff_plan(as_plan(doc), doc)
     assert changes.counts == {"new": 0, "changed": 0, "recreated": 0, "unchanged": 41, "missing": 0, "pulsOnly": 0,
                               "linksAdded": 0, "linksRemoved": 0, "linksChanged": 0, "assigneesAdded": 0,
+                              "assigneesRenamed": 0,
                               "deletedInPuls": 0}
     assert to_ops(changes) == [] and changes.warnings == []
     assert changes.key_map["i6"] == "k6" and changes.assignees["matched"] == {"a1": "p1", "a2": "p2", "a3": "p3"}

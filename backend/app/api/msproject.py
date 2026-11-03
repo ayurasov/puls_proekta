@@ -143,7 +143,8 @@ def _next_project_position(direction_id):
 @login_required
 @limiter.limit("30 per minute", key_func=_user_key)
 def export(plan_id):
-    """План → MS Project XML. Комментарии строк — заметками задач, исполнители — ресурсами (с email сотрудников)."""
+    """План → MS Project XML. Комментарии строк — заметками задач, исполнители — ресурсами. Email сотрудников —
+    только в выгрузке администратора: адреса видит только он, а выгрузку может сделать любой, кто видит план."""
     plan, project, _level = _plan_with_access(plan_id)
     doc = snapshot_document(plan)
     doc["project"] = {"name": project.title, "title": plan.title}
@@ -151,7 +152,8 @@ def export(plan_id):
     doc["comments"] = [{"itemKey": c.item_key, "text": c.text} for c in db.session.execute(
         select(ItemComment).where(ItemComment.plan_id == plan.id, ItemComment.deleted_at.is_(None))
         .order_by(ItemComment.id)).scalars() if c.item_key in alive]
-    linked = {a.get("userId") for a in doc.get("assignees", []) if a.get("userId")}
+    linked = {a.get("userId") for a in doc.get("assignees", []) if a.get("userId")} \
+        if current_user().role == "admin" else set()
     users = [{"id": u.id, "email": u.email} for u in db.session.execute(
         select(User).where(User.id.in_(linked))).scalars()] if linked else []
     days = db.session.execute(select(CalendarDay)).scalars().all()
