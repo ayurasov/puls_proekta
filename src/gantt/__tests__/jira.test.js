@@ -155,3 +155,40 @@ describe('0.4.0: автоперенос из Jira', () => {
     expect(editor.updateItems.mock.calls[0][0].map((c) => c.key)).toEqual(['b'])
   })
 })
+
+describe('0.7.1: срок задачи Jira — в крайний срок (ADR-0012, 5.4)', () => {
+  it('срок не меняет окончание, а становится крайним сроком задачи и вехи', () => {
+    const changes = jiraChanges(task({ deadline: null }), issue({ start: '2026-11-03', due: '2026-11-12' }), { dueTo: 'deadline' })
+    expect(changes.map((c) => c.field)).toEqual(['dates', 'deadline'])
+    expect(changes[0].fields).toEqual({ start: '2026-11-03', end: '2026-11-06' })
+    expect(changes[1]).toMatchObject({ label: 'Крайний срок', from: null, to: '2026-11-12', fields: { deadline: '2026-11-12' } })
+    // Крайний срок уже совпадает — ничего не предлагается
+    expect(jiraChanges(task({ deadline: '2026-11-12' }), issue({ due: '2026-11-12' }), { dueTo: 'deadline' })).toEqual([])
+    // Начало из Jira позже окончания плана — сроки не меняются, крайний срок — да
+    const late = jiraChanges(task(), issue({ start: '2026-11-09', due: '2026-11-12' }), { dueTo: 'deadline' })
+    expect(late.map((c) => c.field)).toEqual(['deadline'])
+    // Веха: дата остаётся, срок — в крайний срок, даже если дату задаёт связь
+    const milestone = { key: 'm', type: 'milestone', name: 'Сборка', date: '2026-11-05' }
+    expect(jiraChanges(milestone, issue({ due: '2026-11-09' }), { dueTo: 'deadline', linked: { start: true } })[0].fields)
+      .toEqual({ deadline: '2026-11-09' })
+  })
+
+  it('автоперенос «Сроки» переносит и крайний срок; настройка — одна правка плана', () => {
+    const items = { a: task({ key: 'a', jiraUrl: `${BASE}/browse/ABC-1` }) }
+    const editor = {
+      settings: { jiraAuto: ['dates'], jiraDue: 'deadline', display: { autoShift: true } }, canEdit: true, calendar: null,
+      itemList: Object.values(items), state: { items, today: '2026-11-04', plan: { id: 7 }, access: 'edit' },
+      updateItems: vi.fn(), updatePlan: vi.fn((fields) => Object.assign(editor.settings, fields.settings)),
+    }
+    const jira = createJira(editor, { success: vi.fn(), error: vi.fn() })
+    Object.assign(jira.state, { connected: true, baseUrl: BASE, loaded: true })
+    jira.state.issues = { 'ABC-1': issue({ due: '2026-11-20' }) }
+    expect(jira.dueSetting()).toBe('deadline')
+    expect(jira.autoApply()).toBe(1)
+    expect(editor.updateItems.mock.calls[0][0]).toEqual([{ key: 'a', fields: { deadline: '2026-11-20' } }])
+    jira.setDue('end')
+    expect(editor.updatePlan).toHaveBeenCalledWith({ settings: { jiraDue: 'end' } }, 'Срок из Jira — в окончание')
+    jira.setDue('end')
+    expect(editor.updatePlan).toHaveBeenCalledTimes(1)
+  })
+})

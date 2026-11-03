@@ -270,3 +270,98 @@ def test_review_replace_with_new_resource_takes_free_key(app, admin):
     assert _apply(admin, _small_file("Сидоров Семён"), "replace", {"mode": "once"}, planId=plan_id).status_code == 200
     names = sorted(a["name"] for a in _plan(admin, plan_id)["assignees"])
     assert names == ["Иванов Иван", "Петров Пётр", "Сидоров Семён"]
+
+
+def test_after_import_version_for_every_target(app, admin):
+    """ADR-0012, раздел 2: после импорта — версия «После импорта»; перед заменой и обновлением — «Перед импортом»."""
+    def reasons(plan_id):
+        return [s["reason"] for s in admin.get(f"/api/plans/{plan_id}/snapshots").get_json()]
+
+    res = _apply(admin, CRM.read_bytes(), "project", {"mode": "master"})
+    plan_id = res.get_json()["planId"]
+    assert reasons(plan_id) == ["after_import"]
+    assert _apply(admin, CRM.read_bytes(), "update", {}, planId=plan_id).status_code == 200
+    assert sorted(reasons(plan_id)) == ["after_import", "after_import", "before_import"]
+    snaps = admin.get(f"/api/plans/{plan_id}/snapshots").get_json()
+    after = next(s for s in snaps if s["reason"] == "after_import")
+    assert after["label"] == "Импорт из MS Project: Внедрение CRM.xml"
+    assert after["itemsCount"] == len(_plan(admin, plan_id)["items"])
+
+
+def test_export_emails_only_for_admin(app, admin):
+    """Email сотрудника — в выгрузке MS Project только у администратора: наблюдатель адресов не видит."""
+    from tests.conftest import make_user
+    from tests.test_projects_access import _uid
+
+    make_user(app, "petrov", "editor", name="Петров Пётр", email="petrov@romashka.ru")
+    project_id, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [
+        {"op": "assignee.create", "assignee": {"key": "a1", "name": "Петров Пётр", "userId": _uid(app, "petrov")}},
+        {"op": "item.create", "item": {"key": "t1", "type": "task", "name": "Задача", "start": "2026-05-04",
+                                       "end": "2026-05-08", "assigneeKey": "a1"}}])
+    assert b"petrov@romashka.ru" in admin.get(f"/api/plans/{plan_id}/export/msproject").data
+    viewer = new_client(app, "smotrit", "viewer")
+    admin.post("/api/access", json={"userIds": [_uid(app, "smotrit")], "projectIds": [project_id], "level": "view"})
+    response = viewer.get(f"/api/plans/{plan_id}/export/msproject")
+    assert response.status_code == 200
+    assert b"petrov@romashka.ru" not in response.data and "Петров Пётр".encode() in response.data
+
+
+def test_update_renamed_resource_renames_assignee(app, admin):
+    """Ресурс переименовали в MS Project: при обновлении — тот же исполнитель с новым ФИО, а не второй."""
+    project_id, _ = create_project(admin)
+    plan_id = _apply(admin, _small_file("Сидоров Алексей"), "plan", {"mode": "master"},
+                     projectId=project_id).get_json()["planId"]
+    before = _plan(admin, plan_id)["assignees"]
+    preview = _preview(admin, _small_file("Сидоров Алексей Петрович"), "update", {}, planId=plan_id).get_json()
+    assert preview["changes"]["assignees"]["renamed"] == [
+        {"key": before[0]["key"], "before": "Сидоров Алексей", "after": "Сидоров Алексей Петрович"}]
+    assert _apply(admin, _small_file("Сидоров Алексей Петрович"), "update", {}, planId=plan_id).status_code == 200
+    doc = _plan(admin, plan_id)
+    assert [(a["key"], a["name"]) for a in doc["assignees"]] == [(before[0]["key"], "Сидоров Алексей Петрович")]
+    assert doc["items"][0]["assigneeKey"] == before[0]["key"]
+
+
+def _no_guid_file(names):
+    """Файл без GUID проекта и задач (MS Project 2003 и старше): задачи с UID 1, 2, 3…"""
+    ns = "http://schemas.microsoft.com/project"
+    tasks = "".join(f"<Task><UID>{n}</UID><ID>{n}</ID><Name>{name}</Name><OutlineLevel>1</OutlineLevel>"
+                    "<Start>2026-03-02T08:00:00</Start><Finish>2026-03-02T17:00:00</Finish><Duration>PT8H0M0S</Duration>"
+                    "</Task>" for n, name in enumerate(names, start=1))
+    return (f'<?xml version="1.0" encoding="UTF-8"?><Project xmlns="{ns}"><Name>old.xml</Name><Tasks>'
+            "<Task><UID>0</UID><ID>0</ID><Name>P</Name><OutlineLevel>0</OutlineLevel><Summary>1</Summary></Task>"
+            f"{tasks}</Tasks></Project>").encode()
+
+
+def test_update_from_other_project_without_guids_warns(app, admin):
+    """Без GUID строки сопоставляются по UID: файл другого проекта (другие названия у большинства) — предупреждение;
+    предупреждения плана обновления видны в общем списке окна загрузки."""
+    project_id, _ = create_project(admin)
+    names = ["Анализ", "Проектирование", "Разработка", "Тестирование"]
+    plan_id = _apply(admin, _no_guid_file(names), "plan", {"mode": "master"}, projectId=project_id).get_json()["planId"]
+    same = _preview(admin, _no_guid_file(["Анализ рынка", *names[1:]]), "update", {}, planId=plan_id).get_json()
+    assert "uid_names_differ" not in [w["code"] for w in same["warnings"]]
+    other = _preview(admin, _no_guid_file(["Task 1", "Second Task", "Third", "Разработка"]), "update", {},
+                     planId=plan_id).get_json()
+    warning = other["warnings"][0]
+    assert warning["code"] == "uid_names_differ" and warning["count"] == 4 and "другого проекта" in warning["message"]
+
+
+def test_update_warns_about_puls_rows_after_moved_file_rows(app, admin):
+    """Строка «Пульса» после строки файла, сроки которой меняются: обновление её не сдвигает — план обновления
+    предупреждает об этом заранее."""
+    project_id, _ = create_project(admin)
+    plan_id = _apply(admin, _no_guid_file(["Анализ", "Сборка"]), "plan", {"mode": "master"},
+                     projectId=project_id).get_json()["planId"]
+    analysis = next(i for i in _plan(admin, plan_id)["items"] if i["name"] == "Анализ")
+    ok_ops(admin, plan_id, [
+        {"op": "item.create", "item": {"key": "own", "type": "task", "name": "Своя проверка", "start": "2026-03-03",
+                                       "end": "2026-03-04"}},
+        {"op": "link.create", "link": {"key": "own-link", "from": analysis["key"], "to": "own"}}])
+    same = _preview(admin, _no_guid_file(["Анализ", "Сборка"]), "update", {}, planId=plan_id).get_json()
+    assert "puls_rows_follow" not in [w["code"] for w in same["warnings"]]
+    longer = _no_guid_file(["Анализ", "Сборка"]).replace(b"<Finish>2026-03-02T17:00:00</Finish>",
+                                                         b"<Finish>2026-03-04T17:00:00</Finish>", 1)
+    warning = next(w for w in _preview(admin, longer, "update", {}, planId=plan_id).get_json()["warnings"]
+                   if w["code"] == "puls_rows_follow")
+    assert warning["examples"] == ["Своя проверка"] and "Выровнять по связям" in warning["message"]

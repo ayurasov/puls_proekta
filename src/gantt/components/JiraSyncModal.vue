@@ -4,6 +4,7 @@ import { api } from '../../api/client'
 import BaseModal from '../../components/common/BaseModal.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import AppIcon from '../../components/common/AppIcon.vue'
+import SegmentedControl from '../../components/common/SegmentedControl.vue'
 import { STATUS_BY_KEY } from '../domain/colors'
 import { formatDay } from '../domain/dates'
 import { formatRelative } from '../../utils/format'
@@ -14,7 +15,12 @@ const editor = inject('gantt')
 const jira = inject('jira')
 const FIELDS = [
   { key: 'name', label: 'Название' }, { key: 'status', label: 'Статус' }, { key: 'dates', label: 'Сроки' },
-  { key: 'date', label: 'Дата' }, { key: 'progress', label: 'Прогресс' },
+  { key: 'date', label: 'Дата' }, { key: 'deadline', label: 'Крайний срок' }, { key: 'progress', label: 'Прогресс' },
+]
+// Срок (Due date) задачи Jira — в окончание строки или в крайний срок (настройка плана, ADR-0012, 5.4)
+const DUE = [
+  { value: 'end', label: 'В окончание', title: 'Срок задачи Jira — окончание строки (дата вехи)' },
+  { value: 'deadline', label: 'В крайний срок', title: 'Срок задачи Jira — крайний срок строки, сроки плана не меняются' },
 ]
 const enabled = reactive(Object.fromEntries(FIELDS.map((f) => [f.key, f.key !== 'name'])))
 // Автоперенос — настройка плана: выбранные поля переносятся сами при открытии плана и обновлении из Jira
@@ -68,6 +74,7 @@ function describe(change) {
   if (change.field === 'status') return [STATUS_BY_KEY[change.from]?.label, STATUS_BY_KEY[change.to]?.label]
   if (change.field === 'dates') return [`${formatDay(change.from[0])} — ${formatDay(change.from[1])}`, `${formatDay(change.to[0])} — ${formatDay(change.to[1])}`]
   if (change.field === 'date') return [formatDay(change.from), formatDay(change.to)]
+  if (change.field === 'deadline') return [change.from ? formatDay(change.from) : 'нет', formatDay(change.to)]
   if (change.field === 'progress') return [`${change.from}%`, `${change.to}%`]
   return [change.from, change.to]
 }
@@ -108,6 +115,13 @@ function open(key) {
           <input type="checkbox" :checked="auto.has(f.key)" :disabled="!editor.canEdit" :data-testid="`jira-auto-${f.key}`" @change="toggleAuto(f.key)" />
           {{ f.label }}
         </label>
+      </div>
+      <div class="due-row">
+        <span class="small">Срок задачи Jira</span>
+        <SegmentedControl
+          :model-value="jira.dueSetting()" :options="DUE" size="sm" aria-label="Срок задачи Jira переносится"
+          :disabled="!editor.canEdit" data-testid="jira-due" @update:model-value="jira.setDue"
+        />
       </div>
     </section>
     <section v-if="editor.canEdit" class="auto source" :class="{ on: jira.sourceSetting().project || jira.sourceSetting().jql }" data-testid="jira-source">
@@ -181,6 +195,7 @@ function open(key) {
 .auto.on { border-color: #b3c7f5; background: #f3f6ff; }
 .auto-text { display: flex; flex-direction: column; gap: 2px; flex: 1 1 320px; line-height: 1.45; }
 .auto-fields { display: flex; flex-wrap: wrap; gap: 6px; }
+.due-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; flex-basis: 100%; }
 .source-form { display: grid; grid-template-columns: minmax(160px, 220px) minmax(200px, 1fr) auto auto; gap: 6px; flex: 1 1 100%; align-items: center; }
 .source-state { color: #0052cc; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }

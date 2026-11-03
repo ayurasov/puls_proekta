@@ -233,6 +233,7 @@ function toggleColumn(column) {
       </template>
       <div v-if="jiraSource.project || jiraSource.jql" class="menu-note small" data-testid="jira-source-note">Источник задач: {{ jiraSource.project || 'запрос JQL' }}{{ jiraSource.project && jiraSource.jql ? ' + JQL' : '' }}</div>
       <div v-if="jira.autoFields().length" class="menu-note small" data-testid="jira-auto-note">Автоперенос: {{ jiraAutoLabel }}</div>
+      <div v-if="jira.dueSetting() === 'deadline'" class="menu-note small" data-testid="jira-due-note">Срок задачи Jira — в крайний срок</div>
       <div v-if="jiraForeignRows" class="menu-note small menu-warn" data-testid="jira-foreign-note">
         {{ jiraForeignRows }} {{ jiraForeignRows === 1 ? 'строка ссылается' : 'строк ссылаются' }} на задачи по адресу {{ jiraForeign.map((f) => f.host).join(', ') }} — это не подключённая Jira, статусы не загружаются.
         Если это та же Jira, администратор добавит адрес в «Интеграции → Jira → Другие адреса».

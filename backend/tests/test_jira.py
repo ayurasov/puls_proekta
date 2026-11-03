@@ -439,6 +439,12 @@ def test_v040_plan_jira_auto_fields_are_validated(app, admin):
     assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraAuto"] == []
     ok_ops(admin, plan_id, [{"op": "plan.update", "fields": {"settings": {"jiraAuto": ["dates", "мусор", "status", "status"]}}}])
     assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraAuto"] == ["status", "dates"]
+    # Срок задачи Jira — в окончание (по умолчанию) или в крайний срок; прочие значения не принимаются
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraDue"] == "end"
+    ok_ops(admin, plan_id, [{"op": "plan.update", "fields": {"settings": {"jiraDue": "deadline"}}}])
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraDue"] == "deadline"
+    ok_ops(admin, plan_id, [{"op": "plan.update", "fields": {"settings": {"jiraDue": "мусор"}}}])
+    assert admin.get(f"/api/plans/{plan_id}").get_json()["plan"]["settings"]["jiraDue"] == "deadline"
 
 
 

@@ -25,7 +25,7 @@ const snapshots = ref([])
 const loading = ref(false)
 const userFilter = ref('')
 
-const REASONS = { auto: 'Автосохранение', manual: 'Сохранённая версия', before_restore: 'Перед восстановлением', legacy_import: 'При переносе из прежней версии', before_import: 'Перед импортом' }
+const REASONS = { auto: 'Автосохранение', manual: 'Сохранённая версия', before_restore: 'Перед восстановлением', legacy_import: 'При переносе из прежней версии', before_import: 'Перед импортом', after_import: 'После импорта' }
 const ACTION_ICONS = { create: 'plus', update: 'edit', delete: 'trash', restore: 'undo', comment: 'message', legacy: 'history', archive: 'archive', unarchive: 'unarchive', import: 'upload', restore_snapshot: 'history' }
 const users = computed(() => [...new Set(events.value.map((e) => e.userName).filter(Boolean))].sort())
 const filtered = computed(() => (userFilter.value ? events.value.filter((e) => e.userName === userFilter.value) : events.value))

@@ -159,8 +159,9 @@ export function createPlanEditor({ planId, ui, onRemoteChange = () => {} }) {
       } : null,
       mine: myAssigneeKeys(assigneeList.value, filterEnv.user),
       links: linkList.value,
-      // Номера строк — только при поиске: поиск «2.3» находит строку по номеру
-      numbers: (state.view.search || '').trim() ? rowNumbers(index.value, settings.value) : null,
+      // Номера строк — при поиске и включённой колонке «Номер»: поиск «2.3» находит строку по номеру, а без колонки
+      // поиск — только по названию, как до 0.7.0 (иначе «3» показывал бы весь третий раздел)
+      numbers: (state.view.search || '').trim() && state.view.columns?.wbs ? rowNumbers(index.value, settings.value) : null,
     }
   })
   const filtersActive = computed(() => hasActiveFilters(state.view, filterContext.value))

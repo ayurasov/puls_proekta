@@ -35,10 +35,16 @@
 
 from __future__ import annotations
 
+import re
 from bisect import bisect_left
 from dataclasses import asdict, dataclass, field
 
 from app.services.msproject.text import norm_name
+
+# Поля строки, изменение которых двигает её последующие
+SCHEDULE_CHANGES = {"start", "end", "date", "offset", "status", "completedDate", "parentKey"}
+# Ключ исполнителя из ресурса MS Project — a<UID> (mapping.py); по нему узнаётся переименованный ресурс
+RESOURCE_KEY = re.compile(r"^a\d+$")
 
 MS_FIELDS = {
     "task": ("name", "parentKey", "position", "start", "end", "endMode", "duration", "durationType", "progress",
@@ -53,6 +59,10 @@ LINK_FIELDS = ("type", "lag", "lagKind")
 LINK_DEFAULTS = {"type": "FS", "lag": 0, "lagKind": "calendar"}
 DIFF_WARNINGS = {
     "other_project": "Файл — другой проект MS Project: GUID проекта не совпадает с источником плана",
+    "puls_rows_follow": "Строки, добавленные в «Пульсе», связаны со строками файла, сроки которых меняются: "
+                        "обновление их не сдвигает — после него нажмите «Выровнять по связям» над графиком",
+    "uid_names_differ": "В файле нет GUID задач — строки сопоставлены по номерам (UID), и у большинства из них другие "
+                        "названия: возможно, это файл другого проекта",
     "type_changed": "Строки сменили тип в MS Project — они будут созданы заново, комментарии останутся у прежних "
                     "(удалённых) строк",
     "duplicate_rows": "В плане несколько строк с одной задачей MS Project — обновляется первая, копии остаются "
@@ -235,6 +245,7 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
         if candidate is not None and candidate["key"] not in taken:
             match[item["key"]] = candidate
             taken.add(candidate["key"])
+    by_uid_only = []
     for item in imported:
         guid, uid, _ = _msp(item)
         if item["key"] in match or uid is None:
@@ -245,6 +256,14 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
             if not (other_guid and guid and other_guid != guid):
                 match[item["key"]] = other
                 taken.add(other["key"])
+                by_uid_only.append((item, other))
+    # Без GUID (MS Project 2003 и старше, другие программы) строки сопоставляются по номерам UID: если у большинства
+    # совпавших строк другие названия, скорее всего это файл другого проекта — предупредить до применения
+    renamed = [item.get("name") for item, other in by_uid_only
+               if norm_name(item.get("name")) != norm_name(other.get("name"))]
+    if len(by_uid_only) >= 3 and len(renamed) * 2 > len(by_uid_only):
+        for name in renamed:
+            warn("uid_names_differ", name)
 
     key_map, recreate = {}, set()
     for item in imported:
@@ -258,20 +277,31 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
             key_map[item["key"]] = _free_key(item["key"], used_items)
     changes.key_map = dict(key_map)
 
-    # ---- исполнители: по сотруднику, затем по ФИО
+    # ---- исполнители: по сотруднику, затем по ресурсу MS Project (ключ a<UID> из прошлой загрузки), затем по ФИО
     all_assignees = [a for a in existing_document.get("assignees") or [] if isinstance(a, dict)]
     existing_assignees = [a for a in all_assignees if not a.get("deleted")]
     used_assignees = {a.get("key") for a in all_assignees} | reserved_keys
     by_user = {a["userId"]: a for a in existing_assignees if a.get("userId") is not None}
+    by_key = {a.get("key"): a for a in existing_assignees}
     by_name = {}
     for assignee in existing_assignees:
         by_name.setdefault(norm_name(assignee.get("name")), assignee)
     assignee_map = {}
+    taken = set()
     next_position = max([float(a.get("position") or 0) for a in existing_assignees] + [0.0])
     for assignee in import_document.get("assignees") or []:
         found = by_user.get(assignee.get("userId")) if assignee.get("userId") is not None else None
+        same_resource = by_key.get(assignee["key"]) if RESOURCE_KEY.match(str(assignee["key"])) else None
+        if found is None and same_resource is not None and same_resource["key"] not in taken and (
+                assignee.get("userId") is None or same_resource.get("userId") in (None, assignee.get("userId"))):
+            # Ресурс переименовали в MS Project: тот же исполнитель «Пульса» с новым ФИО, а не второй
+            found = same_resource
+            if norm_name(found.get("name")) != norm_name(assignee.get("name")):
+                changes.assignees.setdefault("renamed", []).append(
+                    {"key": found["key"], "before": found.get("name"), "after": assignee.get("name")})
         found = found or by_name.get(norm_name(assignee.get("name")))
         if found is not None:
+            taken.add(found["key"])
             assignee_map[assignee["key"]] = found["key"]
             changes.assignees["matched"][assignee["key"]] = found["key"]
             continue
@@ -425,6 +455,16 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
                                              **{name: _link_value(link, name) for name in LINK_FIELDS}})
     changes.links["removed"].sort(key=lambda link: link["key"])
 
+    # Строки «Пульса» после строк файла, у которых меняются сроки: обновление их не сдвигает (сроки строк файла
+    # приходят как есть) — после применения их подвинет «Выровнять по связям» над графиком
+    moved = {entry["key"] for entry in changes.changed
+             if entry.get("recreate") or set(entry.get("fields") or {}) & SCHEDULE_CHANGES}
+    own = {entry["key"]: entry["name"] for entry in changes.puls_only if "copyOf" not in entry}
+    following = {link.get("to") for link in all_links
+                 if not link.get("deleted") and link.get("from") in moved and link.get("to") in own}
+    for key in sorted(following, key=lambda k: own[k] or ""):
+        warn("puls_rows_follow", own[key])
+
     changes.warnings = [{"code": code, "message": DIFF_WARNINGS[code], **warnings[code]}
                         for code in DIFF_WARNINGS if code in warnings]
     changes.counts = {
@@ -433,6 +473,7 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
         "pulsOnly": len(changes.puls_only), "linksAdded": len(changes.links["added"]),
         "linksRemoved": len(changes.links["removed"]), "linksChanged": len(changes.links["changed"]),
         "assigneesAdded": len(changes.assignees["added"]),
+        "assigneesRenamed": len(changes.assignees.get("renamed") or []),
         "deletedInPuls": sum(1 for entry in changes.new if entry.get("deletedInPuls")),
     }
     return changes
@@ -448,7 +489,9 @@ def to_ops(changes, options=None):
     options = options or {}
     if isinstance(changes, dict):
         changes = _from_dict(changes)
-    ops = [{"op": "assignee.create", "assignee": dict(a)} for a in changes.assignees["added"]]
+    ops = [{"op": "assignee.update", "key": a["key"], "fields": {"name": a["after"]}}
+           for a in changes.assignees.get("renamed") or []]
+    ops += [{"op": "assignee.create", "assignee": dict(a)} for a in changes.assignees["added"]]
     recreated = sorted((c for c in changes.changed if c.get("recreate")), key=lambda c: c["order"])
     ops += [{"op": "item.delete", "key": c["key"]} for c in recreated]
     creates = sorted(changes.new + recreated, key=lambda c: c["order"])

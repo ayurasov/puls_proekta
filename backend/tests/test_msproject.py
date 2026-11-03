@@ -334,7 +334,9 @@ def test_окончание_в_начале_дня_предыдущий_день
 
 def test_окончание_в_начале_дня_по_календарю_проекта():
     six = map_project(read_file(SIX_DAY))
-    assert row(six, 2)["end"] == "2027-01-31"   # 01.02 09:00 при начале дня 09:00
+    # 01.02 (пн) 09:00 при начале дня 09:00 — конец предыдущего рабочего дня: суббота 30.01 (неделя из 6 дней),
+    # а не воскресенье (0.7.1)
+    assert row(six, 2)["end"] == "2027-01-30"
     assert row(six, 3)["end"] == "2027-01-30"   # 30.01 10:00 — тот же день
     assert row(six, 1)["end"] == "2027-01-16"
 
@@ -829,6 +831,7 @@ def test_обновление_без_изменений(doc):
     changes = diff_plan(as_plan(doc), doc)
     assert changes.counts == {"new": 0, "changed": 0, "recreated": 0, "unchanged": 41, "missing": 0, "pulsOnly": 0,
                               "linksAdded": 0, "linksRemoved": 0, "linksChanged": 0, "assigneesAdded": 0,
+                              "assigneesRenamed": 0,
                               "deletedInPuls": 0}
     assert to_ops(changes) == [] and changes.warnings == []
     assert changes.key_map["i6"] == "k6" and changes.assignees["matched"] == {"a1": "p1", "a2": "p2", "a3": "p3"}
@@ -1385,7 +1388,19 @@ def test_круговой_обход_импорт_экспорт_импорт(cr
     data = write_mspdi(first, users=USERS, holidays=["2026-03-09", "2026-05-01", "2026-05-11", "2026-06-12"])
     second = map_project(read_mspdi(data), {**OPTIONS, **options})
     assert without_outline_numbers(second["items"]) == without_outline_numbers(first["items"])
-    assert second["links"] == first["links"]
+    if options.get("baseline"):
+        # Строки после сдвинутых предшественников не согласованы с текущими сроками файла (это отставание и
+        # показывает расчёт), а выгрузка пишет текущие сроки «Пульса» — лаги таких связей подбираются заново.
+        # Остальное — как было, а повторный обход уже ничего не меняет
+        def shape(links):
+            return [{k: v for k, v in x.items() if k != "lag"} for x in links]
+        assert shape(second["links"]) == shape(first["links"])
+        third = map_project(read_mspdi(write_mspdi(second, users=USERS, holidays=["2026-03-09", "2026-05-01",
+                                                                                   "2026-05-11", "2026-06-12"])),
+                            {**OPTIONS, **options})
+        assert third["links"] == second["links"]
+    else:
+        assert second["links"] == first["links"]
     assert second["assignees"] == first["assignees"]
     assert second["comments"] == first["comments"]
     assert second["settings"]["categories"] == first["settings"]["categories"]
@@ -1406,8 +1421,10 @@ def test_круговой_обход_плана_пульса():
     assert (development["category"], development["jiraUrl"]) == ("разработка", "https://jira.romashka.ru/browse/REL-7")
     assert by_name["Релиз"]["date"] == "2026-03-16" and by_name["Релиз 2.0"]["type"] == "group"
     assert by_name["Тестирование"]["completedDate"] == "2026-03-13"
+    # План-образец не согласован со своими связями (FS +2 раб. дн. от окончания со сдвигом 08.03 — это 12.03, а
+    # «Тестирование» начинается 10.03): лаги подбираются по текущим срокам файла
     assert [(x["type"], x["lag"], x["lagKind"]) for x in document["links"]] == [
-        ("FS", 2, "working"), ("SS", 3, "calendar")]
+        ("FS", 0, "working"), ("SS", 6, "calendar")]
     assert [(a["key"], a["name"], a["userId"]) for a in document["assignees"]] == [
         ("a1", "Иванов Иван", 1), ("a2", "Петрова Анна", 2)]
 
@@ -1487,22 +1504,23 @@ def vitest_fixture(name, document):
     return "\n".join(lines)
 
 
-@pytest.mark.parametrize("case", ["crm", "crm-working", "6day", "generated"])
+@pytest.mark.parametrize("case", ["crm", "crm-working", "generated-baseline", "6day", "generated"])
 def test_план_согласован_со_связями_пульса(case):
-    """Автосдвиг «Пульса» не трогает ни одной строки плана из файла; документы — для теста vitest на клиенте."""
+    """Автосдвиг «Пульса» не трогает ни одной строки плана из файла; документы — для теста vitest на клиенте.
+    generated-baseline — «по базовому плану» без отставания (в файле нет базового плана — текущие сроки): до 0.7.1
+    лаги там не подбирались, и расчёт двигал строки из-за перевода лагов в дни."""
     source = {"crm": CRM.read_bytes(), "crm-working": CRM.read_bytes(), "6day": SIX_DAY.read_bytes(),
-              "generated": None}[case]
-    document = map_project(read_mspdi(source or varied_file()),
-                           {"durations": "working"} if case == "crm-working" else {})
+              "generated": None, "generated-baseline": None}[case]
+    options = {"crm-working": {"durations": "working"}, "generated-baseline": {"baseline": "baseline"}}.get(case, {})
+    document = map_project(read_mspdi(source or varied_file()), options)
     assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
     assert document["links"]
-    if case != "crm-working":
-        path = VITEST_FIXTURES / f"msproject-{case}.json"
-        text = vitest_fixture(case, document)
-        if not path.exists() or path.read_text(encoding="utf-8") != text:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        assert json.loads(path.read_text(encoding="utf-8"))["links"] == document["links"]
+    path = VITEST_FIXTURES / f"msproject-{case}.json"
+    text = vitest_fixture(case, document)
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    assert json.loads(path.read_text(encoding="utf-8"))["links"] == document["links"]
 
 
 def test_без_подбора_лагов_план_был_бы_не_согласован(doc):
@@ -1574,10 +1592,18 @@ def test_лаги_подобраны_под_даты_файла(case):
     assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
 
 
-def test_по_базовому_плану_лаги_не_подбираются(crm):
+def test_по_базовому_плану_лаги_по_текущим_срокам(crm):
+    """По базовому плану строки — плановые сроки и сдвиг, а лаги — те же, что при загрузке по текущим срокам: их
+    MS Project рассчитал по этим связям. Несогласованы со связями только строки, которые и в MS Project начинаются
+    позже базового плана, — отставание, которое и должен показать расчёт (0.7.1; раньше лаги не подбирались, и
+    погрешность перевода лагов в дни тоже выглядела отставанием)."""
     base = map_project(crm, {"baseline": "baseline"})
-    assert warning(base, "lags_adjusted") is None
-    assert link(base, "l11-12")["lag"] == 0 and link(base, "l26-28")["lag"] == 1
+    current = map_project(crm, {})
+    assert base["links"] == current["links"] and warning(base, "lags_adjusted") is not None
+    starts = {i["key"]: i.get("start") or i.get("date") for i in current["items"]}
+    late = {i["key"] for i in base["items"] if (i.get("start") or i.get("date")) and starts[i["key"]] > (i.get("start") or i.get("date"))}
+    flagged = inconsistent_rows(base["items"], base["links"], puls_calendar(base))
+    assert flagged and set(flagged) <= late
 
 
 def test_календарь_пульса_из_параметров():
@@ -1814,3 +1840,26 @@ def test_review_копия_строки_в_пульсе_не_удаляется(
     assert changes.missing == [] and [c["key"] for c in changes.puls_only] == ["icopy"]
     assert changes.puls_only[0]["copyOf"]["uid"] == 8
     assert to_ops(changes, {"deleteMissing": True}) == []
+
+
+def test_выгрузка_связей_от_вехи():
+    """Веха выгружается на 17:00 своего дня: SS от неё — лаг на день меньше, SF — без поправки на день (у задачи —
+    с поправкой); иначе MS Project ставит последующие на день позже, чем «Пульс» (0.7.1, проверено пересчётом
+    выгрузки планировщиком MPXJ по правилам MS Project)."""
+    doc = {"items": [
+        {"key": "m", "type": "milestone", "name": "Веха", "date": "2026-03-11", "position": 1},
+        {"key": "t", "type": "task", "name": "Задача", "start": "2026-03-16", "end": "2026-03-17", "position": 2},
+        {"key": "ss", "type": "task", "name": "SS от вехи", "start": "2026-03-11", "end": "2026-03-12", "position": 3},
+        {"key": "sf", "type": "task", "name": "SF от вехи", "start": "2026-03-10", "end": "2026-03-11", "position": 4},
+        {"key": "fs", "type": "task", "name": "FS от вехи", "start": "2026-03-12", "end": "2026-03-13", "position": 5},
+        {"key": "tf", "type": "task", "name": "SF от задачи", "start": "2026-03-13", "end": "2026-03-15", "position": 6},
+    ], "links": [
+        {"key": "l1", "from": "m", "to": "ss", "type": "SS", "lag": 0, "lagKind": "working"},
+        {"key": "l2", "from": "m", "to": "sf", "type": "SF", "lag": 0, "lagKind": "working"},
+        {"key": "l3", "from": "m", "to": "fs", "type": "FS", "lag": 0, "lagKind": "working"},
+        {"key": "l4", "from": "t", "to": "tf", "type": "SF", "lag": 0, "lagKind": "working"},
+    ], "assignees": [], "project": {"name": "Связи вех"}}
+    root = ET.fromstring(write_mspdi(doc))
+    lags = {task.findtext(Q + "Name"): int(task.find(Q + "PredecessorLink").findtext(Q + "LinkLag"))
+            for task in root.iter(Q + "Task") if task.find(Q + "PredecessorLink") is not None}
+    assert lags == {"SS от вехи": -4800, "SF от вехи": 0, "FS от вехи": 0, "SF от задачи": 4800}

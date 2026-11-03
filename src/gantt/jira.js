@@ -153,8 +153,10 @@ export function buildImportRows(issues, { group = 'none', epics = {}, epicGroups
  * обычно не отдельная категория статуса. Если сроки задачи задают связи (автосдвиг), из Jira берётся только
  * та дата, которую связи не определяют: linked = { start, end } — начало задают связи FS/SS, окончание — FF/SF
  * (linkedDates). Если связи задают обе даты, сроки из Jira не переносятся.
+ * dueTo — куда переносится срок задачи Jira (настройка плана jiraDue): 'end' — в окончание строки (дату вехи),
+ * 'deadline' — в крайний срок: в Jira — обязательство, в «Пульсе» — план (ADR-0012, 5.4).
  */
-export function jiraChanges(item, issue, { calendar, today, linked = null } = {}) {
+export function jiraChanges(item, issue, { calendar, today, linked = null, dueTo = 'end' } = {}) {
   if (!item || !issue) return []
   const out = []
   if (issue.summary && issue.summary !== item.name) {
@@ -176,7 +178,7 @@ export function jiraChanges(item, issue, { calendar, today, linked = null } = {}
     const startDriven = Boolean(linked?.start)
     const endDriven = Boolean(linked?.end)
     const start = startDriven ? item.start : issue.start || item.start
-    const end = endDriven ? item.end : issue.due || item.end
+    const end = endDriven || dueTo === 'deadline' ? item.end : issue.due || item.end
     if ((start !== item.start || end !== item.end) && start <= end) {
       const fields = { start, end }
       if (item.endMode === 'duration') {
@@ -185,15 +187,24 @@ export function jiraChanges(item, issue, { calendar, today, linked = null } = {}
       const note = endDriven ? 'окончание задаёт связь' : startDriven ? 'начало задаёт связь' : null
       out.push({ field: 'dates', label: 'Сроки', from: [item.start, item.end], to: [start, end], fields, note })
     }
+    if (dueTo === 'deadline') pushDeadline(out, item, issue)
     const progress = out.some((c) => c.fields.progress === 100) ? null : issue.progress
     if (progress !== null && progress !== undefined && progress !== (item.progress || 0) && item.status !== 'done') {
       out.push({ field: 'progress', label: 'Прогресс', from: item.progress || 0, to: progress, fields: { progress } })
     }
+  } else if (item.type === 'milestone' && dueTo === 'deadline') {
+    pushDeadline(out, item, issue)
   } else if (item.type === 'milestone' && issue.due && issue.due !== item.date && !linked?.start && !linked?.end) {
     // Дату вехи-последующей задаёт связь (0.7.0) — из Jira она не переносится
     out.push({ field: 'date', label: 'Дата', from: item.date, to: issue.due, fields: { date: issue.due } })
   }
   return out
+}
+
+function pushDeadline(out, item, issue) {
+  if (issue.due && issue.due !== (item.deadline || null)) {
+    out.push({ field: 'deadline', label: 'Крайний срок', from: item.deadline || null, to: issue.due, fields: { deadline: issue.due } })
+  }
 }
 
 /** Какие даты строки задают её связи: { start } — есть входящая FS/SS, { end } — FF/SF (links — связи плана). */
@@ -316,7 +327,9 @@ export function createJira(editor, ui) {
     const linked = editor.settings.display.autoShift
       ? linkedDates(item, (editor.linkList || []).filter((link) => editor.state.items[link.from]))
       : null
-    return jiraChanges(item, issueFor(item), { calendar: editor.calendar, today: editor.state.today, linked })
+    return jiraChanges(item, issueFor(item), {
+      calendar: editor.calendar, today: editor.state.today, linked, dueTo: dueSetting(),
+    })
   }
 
   /** Строки, которые расходятся с Jira не только названием: названия в плане часто короче темы в Jira. */
@@ -335,6 +348,18 @@ export function createJira(editor, ui) {
     for (const { key, fields } of list) merged.set(key, { ...(merged.get(key) || {}), ...fields })
     for (const fields of merged.values()) if (fields.status === undefined || fields.status === 'done') delete fields.offset
     editor.updateItems([...merged].map(([key, fields]) => ({ key, fields })), label, { keepFreeDates: true, keepRedo: auto })
+  }
+
+  /** Куда переносится срок задачи Jira: 'end' — в окончание, 'deadline' — в крайний срок (настройка плана). */
+  function dueSetting() {
+    return editor.settings.jiraDue === 'deadline' ? 'deadline' : 'end'
+  }
+
+  function setDue(value) {
+    const next = value === 'deadline' ? 'deadline' : 'end'
+    if (next === dueSetting()) return
+    editor.updatePlan({ settings: { jiraDue: next } }, next === 'deadline' ? 'Срок из Jira — в крайний срок' : 'Срок из Jira — в окончание')
+    if (autoFields().length) autoApply()
   }
 
   /** Поля, которые план переносит из Jira сам (настройка плана «Автоперенос из Jira»). */
@@ -383,8 +408,8 @@ export function createJira(editor, ui) {
       if (only && !only.has(key)) continue
       if (!issueFor(item)) continue
       for (const change of changesFor(item)) {
-        // Срок вехи («Дата») переносится вместе со сроками задач
-        const setting = change.field === 'date' ? 'dates' : change.field
+        // Срок вехи («Дата») и крайний срок переносятся вместе со сроками задач
+        const setting = change.field === 'date' || change.field === 'deadline' ? 'dates' : change.field
         if (!fields.includes(setting)) continue
         const mark = `${item.key}:${change.field}:${JSON.stringify(change.to)}`
         if (done.has(mark)) continue
@@ -441,6 +466,6 @@ export function createJira(editor, ui) {
 
   return reactive({
     state, init, load, fetchKeys, keyFor, foreignHostFor, issueFor, linkedItems, changesFor, differs, apply, autoFields,
-    autoApply, setAutoFields, sourceSetting, loadSource, setSource, suggest,
+    autoApply, setAutoFields, dueSetting, setDue, sourceSetting, loadSource, setSource, suggest,
   })
 }
