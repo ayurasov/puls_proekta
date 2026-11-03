@@ -1488,22 +1488,27 @@ def vitest_fixture(name, document):
     return "\n".join(lines)
 
 
-@pytest.mark.parametrize("case", ["crm", "crm-working", "6day", "generated"])
+@pytest.mark.parametrize("case", ["crm", "crm-working", "crm-baseline", "6day", "generated"])
 def test_план_согласован_со_связями_пульса(case):
-    """Автосдвиг «Пульса» не трогает ни одной строки плана из файла; документы — для теста vitest на клиенте."""
-    source = {"crm": CRM.read_bytes(), "crm-working": CRM.read_bytes(), "6day": SIX_DAY.read_bytes(),
-              "generated": None}[case]
-    document = map_project(read_mspdi(source or varied_file()),
-                           {"durations": "working"} if case == "crm-working" else {})
+    """Автосдвиг «Пульса» не трогает ни одной строки плана из файла; документы — для теста vitest на клиенте.
+    По базовому плану (crm-baseline) — без отставания: сдвиг и фактические окончания убраны, расчёт по плановым
+    срокам не должен двигать строки из-за перевода лагов в дни (0.7.1)."""
+    source = {"crm": CRM.read_bytes(), "crm-working": CRM.read_bytes(), "crm-baseline": CRM.read_bytes(),
+              "6day": SIX_DAY.read_bytes(), "generated": None}[case]
+    options = {"crm-working": {"durations": "working"}, "crm-baseline": {"baseline": "baseline"}}.get(case, {})
+    document = map_project(read_mspdi(source or varied_file()), options)
+    if case == "crm-baseline":
+        document = {**document, "items": [
+            {**i, "offset": 0, "completedDate": None, "status": "new" if i.get("status") == "done" else i.get("status")}
+            for i in document["items"]]}
     assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
     assert document["links"]
-    if case != "crm-working":
-        path = VITEST_FIXTURES / f"msproject-{case}.json"
-        text = vitest_fixture(case, document)
-        if not path.exists() or path.read_text(encoding="utf-8") != text:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        assert json.loads(path.read_text(encoding="utf-8"))["links"] == document["links"]
+    path = VITEST_FIXTURES / f"msproject-{case}.json"
+    text = vitest_fixture(case, document)
+    if not path.exists() or path.read_text(encoding="utf-8") != text:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    assert json.loads(path.read_text(encoding="utf-8"))["links"] == document["links"]
 
 
 def test_без_подбора_лагов_план_был_бы_не_согласован(doc):

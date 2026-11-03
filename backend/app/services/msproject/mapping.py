@@ -309,12 +309,15 @@ def _map(project, opts):
     links = _links(project, by_uid, kinds, keys, children, item_by_key, rows, ctx, warn)
     for item in clamp_snet(items):
         warn.add("constraints_adjusted", item["name"])
-    if opts["baseline"] == "current":
-        # Даты файла — главные: лаги подбираются так, чтобы автосдвиг «Пульса» их не трогал. По базовому плану
-        # сроки строк — плановые, а предшественники — со сдвигом: там расчёт и должен показать отставание.
-        names = {item["key"]: item["name"] for item in items}
-        for link, _ in align_links(items, links, ru_calendar):
-            warn.add("lags_adjusted", f"{names[link['from']]} → {names[link['to']]}")
+    # Даты файла — главные: лаги подбираются так, чтобы автосдвиг «Пульса» их не трогал. По базовому плану сроки
+    # строк — плановые: лаги подбираются по плановым срокам без сдвига и фактических окончаний, — тогда расчёт
+    # показывает только настоящее отставание (сдвиг предшественников), а не погрешность перевода лагов в дни.
+    planned = items if opts["baseline"] == "current" else [
+        {**item, "offset": 0, "completedDate": None, "status": "new" if item.get("status") == "done" else item.get("status")}
+        for item in items]
+    names = {item["key"]: item["name"] for item in items}
+    for link, _ in align_links(planned, links, ru_calendar):
+        warn.add("lags_adjusted", f"{names[link['from']]} → {names[link['to']]}")
     assignees, assignee_of, also = _assignees(project, rows, kinds, keys, opts, warn)
     for item in items:
         uid = item["extra"]["msp"]["uid"]
