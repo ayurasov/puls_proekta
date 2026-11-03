@@ -186,14 +186,15 @@ test('CSV: столбец «Предшественники» с номерами
   const lines = text.slice(1).split('\r\n')
   const header = lines[0].split(';')
   assert.equal(header[0], '№')
+  assert.equal(header[1], 'Номер')
   const column = header.indexOf('Предшественники')
   assert.ok(column > 0)
   assert.ok(header.includes('Крайний срок'))
-  // 1 Анализ, 2 Дизайн, 3 Разработка, 4 Сдача
-  assert.match(lines[2], /^2;1;Задача;Дизайн;/)
+  // 1 Анализ, 2 Дизайн, 3 Разработка, 4 Сдача; «Номер» — по структуре плана (строки верхнего уровня)
+  assert.match(lines[2], /^2;2;1;Задача;Дизайн;/)
   assert.match(lines[2], /;1FS;/)
   assert.match(lines[3], /;"1FS;2FS\+4д";/)
-  assert.match(lines[4], /^4;1;Веха;Сдача;.*;3FS;/)
+  assert.match(lines[4], /^4;4;1;Веха;Сдача;.*;3FS;/)
 })
 
 test('«Начало не ранее» не пускает задачу раньше даты', async () => {

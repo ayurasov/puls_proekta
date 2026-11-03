@@ -53,6 +53,9 @@ DEFAULT_SETTINGS = {
     "categories": list(DEFAULT_CATEGORIES),
     "defaultCollapsed": [],
     "jiraAuto": [],
+    # Куда переносится срок (Due date) задачи Jira: «end» — в окончание строки, «deadline» — в крайний срок
+    # (ADR-0012, 5.4: в Jira — обязательства, в «Пульсе» — план)
+    "jiraDue": "end",
     # Источник задач плана в Jira: проект и, по желанию, уточняющий JQL. По нему «Задачи из Jira» открываются
     # сразу на этом проекте, а план сообщает о новых задачах источника, которых в плане ещё нет (ADR-0007).
     "jiraSource": {"project": "", "jql": ""},
@@ -179,6 +182,8 @@ def normalize_settings(raw, base=None):
         result["defaultCollapsed"] = [k for k in raw["defaultCollapsed"] if isinstance(k, str) and _KEY.match(k)][:5000]
     if isinstance(raw.get("jiraAuto"), list):
         result["jiraAuto"] = [f for f in JIRA_AUTO_FIELDS if f in raw["jiraAuto"]]
+    if raw.get("jiraDue") in ("end", "deadline"):
+        result["jiraDue"] = raw["jiraDue"]
     if isinstance(raw.get("jiraSource"), dict):
         source = raw["jiraSource"]
         project = str(source.get("project") or "").strip().upper()[:50]

@@ -8,6 +8,7 @@ import { createChartContext, deadlinePath, dependencyPaths, legendEntries, rowMo
 import { diffDays, formatDay, formatDayNoYear } from './domain/dates'
 import { STATUS_BY_KEY, resolveColor } from './domain/colors'
 import { filterChips } from './domain/filters'
+import { rowNumbers } from './domain/tree'
 import { formatDateTime } from '../utils/format'
 
 const FONT = '-apple-system, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif'
@@ -64,6 +65,8 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
   const legendH = legendRows.length ? 12 + legendRows.length * 20 : 0
   const height = titleH + ctx.headerHeight + bodyH + legendH + 12
   const assigneeName = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
+  // Номер строки (1.2.3; у мастер-копии — код WBS из файла) — как на экране, если колонка «Номер» включена
+  const numbers = editor.state.view?.columns?.wbs ? rowNumbers(editor.index, editor.settings) : null
   const out = []
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="${FONT}">`)
   out.push('<defs><marker id="ar" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8 z" fill="#94a3b8"/></marker>'
@@ -117,7 +120,9 @@ export function buildSvg(editor, { projectTitle = '' } = {}) {
     out.push(mark)
     const nameY = meta && rowHeight >= 36 ? y + rowHeight / 2 - 2 : y + rowHeight / 2 + 4
     const maxChars = Math.floor((gridW - x - 24) / 6.4)
-    const name = item.name.length > maxChars ? item.name.slice(0, maxChars - 1) + '…' : item.name
+    const number = numbers?.get(item.key)
+    const fullName = number ? `${number} ${item.name}` : item.name
+    const name = fullName.length > maxChars ? fullName.slice(0, maxChars - 1) + '…' : fullName
     out.push(`<text x="${x + 14}" y="${nameY}" font-size="12" font-weight="${item.type === 'group' ? 700 : 500}" fill="#1c2331">${esc(name)}</text>`)
     if (meta && rowHeight >= 36) out.push(`<text x="${x + 14}" y="${nameY + 14}" font-size="11" fill="#6b7280">${esc(meta.length > maxChars + 6 ? meta.slice(0, maxChars + 5) + '…' : meta)}</text>`)
   })
@@ -228,12 +233,15 @@ export function predecessorsText(links, numbers, items) {
 
 export function buildCsv(editor) {
   const assignee = (key) => editor.assigneeList.find((a) => a.key === key)?.name || ''
-  const header = ['№', 'Уровень', 'Тип', 'Название', 'Статус', 'Начало', 'Окончание', 'Длительность, дн.', 'Прогресс, %', 'Сдвиг, дн.',
+  const header = ['№', 'Номер', 'Уровень', 'Тип', 'Название', 'Статус', 'Начало', 'Окончание', 'Длительность, дн.', 'Прогресс, %', 'Сдвиг, дн.',
     'Дата завершения', 'Крайний срок', 'Исполнитель', 'Категория', 'Предшественники', 'Jira', 'Комментариев']
   const lines = [header.map(csvCell).join(';')]
   const types = { task: 'Задача', milestone: 'Веха', group: 'Группа' }
   const rows = editor.visibleRows
   const numbers = new Map(rows.map(({ item }, i) => [item.key, i + 1]))
+  // «№» — порядковый номер в выгрузке (на него ссылаются «Предшественники», как ID в MS Project); «Номер» — по
+  // структуре плана (1.2.3), у мастер-копии MS Project — код WBS из файла (ADR-0012, 5.5)
+  const outline = rowNumbers(editor.index, editor.settings)
   const incoming = new Map()
   for (const link of editor.linkList) {
     if (!editor.state.items[link.from]) continue
@@ -243,7 +251,7 @@ export function buildCsv(editor) {
   for (const [i, { item, depth }] of rows.entries()) {
     const task = item.type === 'task'
     lines.push([
-      i + 1, depth + 1, types[item.type], '  '.repeat(depth) + item.name,
+      i + 1, outline.get(item.key) || '', depth + 1, types[item.type], '  '.repeat(depth) + item.name,
       task ? STATUS_BY_KEY[item.status || 'new'].label : '',
       task ? formatDay(item.start) : item.type === 'milestone' ? formatDay(item.date) : '',
       task ? formatDay(item.end) : '',
