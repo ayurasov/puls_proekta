@@ -175,3 +175,87 @@ def test_review_browser_copy_of_row_does_not_take_ms_project_ids(app, admin):
     ok_ops(admin, plan_id, [{"op": "item.delete", "key": "i1"}])
     assert admin.post(f"/api/plans/{plan_id}/snapshots/{snapshot_id}/restore").status_code == 200
     assert next(i for i in _doc(admin, plan_id)["items"] if i["key"] == "i1")["extra"]["msp"]["uid"] == 1
+
+
+def test_v071_parent_subtask_link_from_061_stays_editable(app, admin):
+    """Связь подзадачи с её родительской задачей разрешалась до 0.7.0 и переносится миграцией: её можно править,
+    отменить её удаление, она копируется с планом; новая такая связь по-прежнему не создаётся."""
+    project_id, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("p", "Родительская", end="2026-05-20"), task("c", "Вложенная", parentKey="p")])
+    # Страница или скрипт до 0.7.0: предшественник — полем строки
+    ok_ops(admin, plan_id, [{"op": "item.update", "key": "c", "fields": {"dependencyKey": "p"}}])
+    link = _doc(admin, plan_id)["links"][0]
+    assert (link["from"], link["to"]) == ("p", "c")
+    ok_ops(admin, plan_id, [{"op": "link.update", "key": link["key"], "fields": {"lag": 2, "type": "SS"}}])
+    ok_ops(admin, plan_id, [{"op": "link.delete", "key": link["key"]}])
+    ok_ops(admin, plan_id, [{"op": "link.restore", "key": link["key"]}])
+    assert [(x["from"], x["to"], x["type"], x["lag"]) for x in _doc(admin, plan_id)["links"]] == [("p", "c", "SS", 2)]
+    copy = admin.post(f"/api/projects/{project_id}/plans", json={"title": "Копия", "sourcePlanId": plan_id})
+    assert copy.status_code in (200, 201), copy.get_json()
+    assert [(x["from"], x["to"]) for x in _doc(admin, copy.get_json()["id"])["links"]] == [("p", "c")]
+    # Новая связь между вложенными строками и смена конца на родительскую — нельзя
+    response = ops(admin, plan_id, [{"op": "link.update", "key": link["key"], "fields": {"from": "c", "to": "p"}}])
+    assert response.status_code == 400 and "вложена" in response.get_json()["message"]
+
+
+def test_v071_legacy_cyclic_predecessor_is_dropped_not_rejected(app, admin):
+    """Как в 0.6.1: предшественник полем строки, замыкающий цикл, снимается отметкой, пакет не отклоняется."""
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("a"), task("b"), {"op": "link.create", "link": {"key": "ab", "from": "a", "to": "b"}}])
+    result = ok_ops(admin, plan_id, [{"op": "item.update", "key": "a", "fields": {"dependencyKey": "b", "name": "А2"}}])
+    assert any(f["field"] == "dependencyKey" and "цикл" in f["reason"] for f in result["fixes"])
+    doc = _doc(admin, plan_id)
+    assert _links(admin, plan_id) == [("a", "b")]
+    assert next(i for i in doc["items"] if i["key"] == "a")["name"] == "А2"
+    # Предшественник, которого нет, — тоже отметкой
+    result = ok_ops(admin, plan_id, [{"op": "item.update", "key": "b", "fields": {"dependencyKey": "nope"}}])
+    assert any(f["field"] == "dependencyKey" for f in result["fixes"])
+
+
+def test_v071_versions_with_parent_subtask_link_restore(app, admin):
+    """Версии 0.6.1 (формат 1, предшественник полем строки) и 0.7 со связью подзадачи и её родительской задачи
+    восстанавливаются целиком; отмена удаления строки возвращает и такую связь."""
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("p", "Родительская", end="2026-05-20"), task("c", "Вложенная", parentKey="p"),
+                            task("x", "Другая")])
+    ok_ops(admin, plan_id, [{"op": "item.update", "key": "c", "fields": {"dependencyKey": "p"}}])
+    # Версия 0.7 (связи списком): связь удалили — восстановление возвращает её
+    snap = admin.post(f"/api/plans/{plan_id}/snapshots", json={"label": "Со связью"}).get_json()
+    key = _doc(admin, plan_id)["links"][0]["key"]
+    ok_ops(admin, plan_id, [{"op": "link.delete", "key": key}])
+    assert admin.post(f"/api/plans/{plan_id}/snapshots/{snap['id']}/restore").status_code == 200
+    assert _links(admin, plan_id) == [("p", "c")]
+    # Удаление и отмена удаления подзадачи — связь возвращается вместе с ней
+    ok_ops(admin, plan_id, [{"op": "item.delete", "key": "c"}])
+    assert _links(admin, plan_id) == []
+    ok_ops(admin, plan_id, [{"op": "item.restore", "key": "c"}])
+    assert _links(admin, plan_id) == [("p", "c")]
+    # Версия 0.6.1 (формат 1): предшественник подзадачи — её родительская задача
+    current = _doc(admin, plan_id)
+    old_items = []
+    for item in current["items"]:
+        item = {k: v for k, v in item.items() if k not in ("updatedAt", "updatedById", "updatedRev", "commentCount",
+                                                           "deadline", "constraintType", "constraintDate")}
+        item.update({"dependencyKey": "p" if item["key"] == "c" else None, "dependencyType": "FS", "dependencyLag": 1})
+        old_items.append(item)
+    ok_ops(admin, plan_id, [{"op": "link.delete", "key": key}])
+    with app.app_context():
+        snapshot = PlanSnapshot(plan_id=plan_id, revision=1, reason="manual", label="0.6.1", items_count=len(old_items),
+                                data={"format": "puls-plan", "version": 1, "plan": {"title": "План"},
+                                      "items": old_items, "notes": [], "assignees": []})
+        db.session.add(snapshot)
+        db.session.commit()
+        snapshot_id = snapshot.id
+    response = admin.post(f"/api/plans/{plan_id}/snapshots/{snapshot_id}/restore")
+    assert response.status_code == 200, response.get_json()
+    assert [(x["from"], x["to"], x["lag"]) for x in _doc(admin, plan_id)["links"]] == [("p", "c", 1)]
+
+
+def test_v071_legacy_export_history_has_link_changes(app, admin):
+    """JSON в формате 1.0: в истории строки — и правки её связей, как правки предшественника до 0.7.0."""
+    _, plan_id = create_project(admin)
+    ok_ops(admin, plan_id, [task("a", "Анализ"), task("b", "Сборка"),
+                            {"op": "link.create", "link": {"key": "ab", "from": "a", "to": "b", "lag": 2}}])
+    rows = admin.get(f"/api/plans/{plan_id}/export").get_json()["rows"]
+    history = next(r for r in rows if r["id"] == "b")["changeHistory"]
+    assert any("Связь «Анализ» → «Сборка»" in h["details"] for h in history), history

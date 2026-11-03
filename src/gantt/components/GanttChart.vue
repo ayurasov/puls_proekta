@@ -53,6 +53,17 @@ const ctx = computed(() => createChartContext({
   calendar: editor.calendar, today: editor.todayMarker, index: editor.index, notes: editor.noteList, assignees: editor.assigneeList,
 }))
 const rows = computed(() => editor.visibleRows)
+// Лаги входящих связей строки — под названием, как «лаг +2 д» до 0.7.0 («рд» — рабочие дни)
+const lagsByRow = computed(() => {
+  const out = new Map()
+  for (const link of editor.linkList || []) {
+    const lag = Number(link.lag || 0)
+    if (!lag) continue
+    if (!out.has(link.to)) out.set(link.to, [])
+    out.get(link.to).push(`${lag > 0 ? '+' : ''}${lag} ${link.lagKind === 'working' ? 'рд' : 'д'}`)
+  }
+  return out
+})
 const extraRows = computed(() => (editor.canEdit && !editor.filtersActive ? 1 : 0))
 const bodyHeight = computed(() => Math.max((rows.value.length + extraRows.value) * rowHeight.value + 40, viewport.height - ctx.value.headerHeight))
 const windowRange = computed(() => {
@@ -222,6 +233,8 @@ function metaLine(item) {
     if (item.assigneeKey) parts.push({ text: assigneeName(item.assigneeKey) })
     if (item.category) parts.push({ text: item.category })
     if (item.offset) parts.push({ text: `сдвиг ${item.offset > 0 ? '+' : ''}${item.offset} д`, color: item.offset > 0 ? LATE_TEXT : EARLY_TEXT })
+    const lags = lagsByRow.value.get(item.key)
+    if (lags) parts.push({ text: `${lags.length > 1 ? 'лаги' : 'лаг'} ${lags.join(', ')}` })
     if (item.commentCount) parts.push({ text: `💬 ${item.commentCount}` })
     const issue = jira.issueFor(item)
     if (issue) parts.push({ text: `${issue.key}: ${issue.status}`, color: JIRA_COLORS[issue.statusCategory] })

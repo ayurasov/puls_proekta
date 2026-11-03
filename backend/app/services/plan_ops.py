@@ -269,7 +269,10 @@ class PlanEditor:
             return
         if current is not None:
             self.op_link_delete({"key": current.key})
-        self.op_link_create({"link": {"from": wanted, "to": item.key, "type": link_type, "lag": lag}})
+        # Как в 0.6.1: цикл или недопустимый предшественник не отклоняет пакет, а снимается отметкой на строке
+        self._create_link({"link": {"from": wanted, "to": item.key, "type": link_type, "lag": lag}}, strict=False,
+                          cycle_fix=lambda: self._fix(item, "item", "dependencyKey", "циклическая связь"),
+                          legacy_item=item)
 
     def op_item_create(self, op):
         data = op.get("item") or {}
@@ -458,9 +461,11 @@ class PlanEditor:
                 f"{self._row_name(link.to_key)} уже предшествует {self._row_name(link.from_key)} "
                 "(напрямую или через цепочку связей) — получился бы цикл")
 
-    def _link_problem(self, link):
+    def _link_problem(self, link, nested=True):
         """Почему связь не может быть живой: (статус, код, сообщение) или None. Цикл здесь не проверяется — его
-        проверяет конец пакета (_check_cycles), один раз для всех связей пакета."""
+        проверяет конец пакета (_check_cycles), один раз для всех связей пакета. nested — проверять, что строки не
+        вложены одна в другую: только у новой связи и при смене её концов. Такие связи разрешались до 0.7.0 и
+        переносятся миграцией — их можно править, восстанавливать и копировать."""
         for role, key in (("Предшественник", link.from_key), ("Последующая строка", link.to_key)):
             item = self.items.get(key)
             if item is None:
@@ -471,7 +476,7 @@ class PlanEditor:
                 return 400, "validation_error", "Связь возможна только между задачами и вехами, группы не связываются"
         if link.from_key == link.to_key:
             return 400, "validation_error", "Строка не может быть предшественником самой себя"
-        if self._nested(link.from_key, link.to_key) or self._nested(link.to_key, link.from_key):
+        if nested and (self._nested(link.from_key, link.to_key) or self._nested(link.to_key, link.from_key)):
             # Как в MS Project: вложенная задача и так в сроках родительской, связь между ними выталкивала бы её
             return 400, "validation_error", (f"Нельзя связать {self._row_name(link.from_key)} и "
                                              f"{self._row_name(link.to_key)}: одна строка вложена в другую")
@@ -574,8 +579,8 @@ class PlanEditor:
                 raise ApiError(400, "link_cycle", self._cycle_message(link), details={"key": link.key})
             undo(self._cycle_message(link))
 
-    def _check_link(self, link):
-        problem = self._link_problem(link)
+    def _check_link(self, link, nested=True):
+        problem = self._link_problem(link, nested)
         if problem:
             status, code, message = problem
             raise ApiError(status, code, message, details={"key": link.key})
@@ -610,9 +615,10 @@ class PlanEditor:
     def op_link_create(self, op):
         self._create_link(op, strict=not self.skip_invalid_links)
 
-    def _create_link(self, op, strict, cycle_fix=None):
+    def _create_link(self, op, strict, cycle_fix=None, legacy_item=None):
         """Создать связь. strict — связь, замкнувшая цикл, отклоняет пакет; иначе связь не создаётся, а в fixes —
-        отметка (cycle_fix — своя отметка вместо стандартной)."""
+        отметка (cycle_fix — своя отметка вместо стандартной). legacy_item — связь из поля dependencyKey строки
+        (скрипт или страница до 0.7.0): как в 0.6.1, недопустимый предшественник снимается отметкой на строке."""
         data = op.get("link") or {}
         if not isinstance(data, dict):
             raise ApiError(400, "validation_error", "Неверный формат связи")
@@ -627,11 +633,17 @@ class PlanEditor:
         link = PlanLink(plan_id=self.plan.id, key=key, type="FS", lag=0, lag_kind="calendar",
                         created_at=self.now, created_by_id=self.user.id if self.user else None)
         self._link_fields(link, {k: v for k, v in data.items() if k != "key"})
-        problem = self._link_problem(link)
+        # Пакет сервера (копия плана, восстановление версии) переносит связи как есть, в том числе прежние
+        # связи строки с её родительской задачей; новая связь из браузера такой быть не может
+        nested = not self.trusted and legacy_item is None
+        problem = self._link_problem(link, nested)
+        if problem and legacy_item is not None:
+            self._fix(legacy_item, "item", "dependencyKey", "предшественник удалён или недопустим")
+            return
         if problem and self.skip_invalid_links:
             self._fix(link, "link", "key", f"связь не перенесена: {problem[2]}")
             return
-        self._check_link(link)
+        self._check_link(link, nested)
         db.session.add(link)
         self.links[key] = link
         self._graph_add(link)
@@ -662,7 +674,7 @@ class PlanEditor:
         self._graph_remove(link)
         changes = self._link_fields(link, fields)
         if changes:
-            self._check_link(link)
+            self._check_link(link, nested="from" in changes or "to" in changes)
         self._graph_add(link)
         if not changes:
             return
@@ -695,7 +707,7 @@ class PlanEditor:
     def _restore_link(self, link, summary, report=False):
         """Вернуть удалённую связь, если её строки живы и она не повторяет другую; True — вернули. Если в конце пакета
         окажется, что она замкнула цикл, связь снова удаляется (report — с отметкой в fixes)."""
-        if self._link_problem(link) is not None:
+        if self._link_problem(link, nested=False) is not None:
             return False
         was = (link.deleted_at, link.deleted_by_id)
         link.deleted_at = None
@@ -722,7 +734,7 @@ class PlanEditor:
         if not self._restore_link(link, f"{self._link_label(link)} восстановлена", report=True):
             # Связь, которую уже нельзя вернуть (строку удалили, появилась такая же связь), остаётся удалённой:
             # отмена удаления строк из-за неё не отклоняется целиком, а клиент получает связь удалённой
-            self._fix(link, "link", "key", f"связь не восстановлена: {self._link_problem(link)[2]}")
+            self._fix(link, "link", "key", f"связь не восстановлена: {self._link_problem(link, nested=False)[2]}")
             self._touch(link, self.result.links)
 
     # ---------- пометки ----------
@@ -925,13 +937,14 @@ class PlanEditor:
             link = PlanLink(plan_id=self.plan.id, key=new_key("l"), from_key=legacy["dependencyKey"], to_key=key,
                             type=legacy.get("dependencyType") or "FS", lag=legacy.get("dependencyLag") or 0,
                             lag_kind="calendar")
-            if self._link_problem(link) is not None:
+            if self._link_problem(link, nested=False) is not None:
                 self._fix(item, "item", "dependencyKey", "предшественник удалён или недопустим")
                 continue
             # Как и раньше, цикл через поле строки не отклоняет пакет, а снимает связь
             self._create_link({"link": {"key": link.key, "from": link.from_key, "to": key, "type": link.type,
                                         "lag": link.lag}}, strict=False,
-                              cycle_fix=lambda item=item: self._fix(item, "item", "dependencyKey", "циклическая связь"))
+                              cycle_fix=lambda item=item: self._fix(item, "item", "dependencyKey", "циклическая связь"),
+                              legacy_item=item)
         self.legacy_links = []
 
     def check_integrity(self):

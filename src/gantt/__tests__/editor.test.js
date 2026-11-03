@@ -515,3 +515,18 @@ describe('ревью 0.7.0: автосдвиг больших планов и с
     expect(ui.error).toHaveBeenLastCalledWith('Нельзя связать «Вложенная» и «Родитель»: одна строка вложена в другую')
   })
 })
+
+describe('0.7.1: поиск по номеру строки', () => {
+  beforeEach(() => { vi.useFakeTimers(); server.posts = [] })
+  afterEach(() => vi.useRealTimers())
+
+  it('номер ищется только при включённой колонке «Номер»', async () => {
+    const items = [task('a', 'Анализ'), { ...task('b', 'Сборка'), position: 2048 }, { ...task('c', 'Тест 2'), position: 3072 }]
+    const editor = await openEditor(items)
+    const names = () => editor.visibleRows.map((r) => r.item.name)
+    editor.state.view.search = '2'
+    expect(names()).toEqual(['Тест 2'])
+    editor.state.view.columns.wbs = true
+    expect(names()).toEqual(['Сборка', 'Тест 2'])
+  })
+})

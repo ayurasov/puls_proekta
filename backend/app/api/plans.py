@@ -544,7 +544,8 @@ def export_plan(plan_id):
                                 .order_by(ItemComment.created_at, ItemComment.id)).scalars():
         comments.setdefault(c.item_key, []).append(c)
     events = {}
-    for e in db.session.execute(select(PlanEvent).where(PlanEvent.plan_id == plan.id, PlanEvent.entity == "item")
+    # История строки в формате 1.0 — правки строки и её связей (событие связи записано на последующую строку)
+    for e in db.session.execute(select(PlanEvent).where(PlanEvent.plan_id == plan.id, PlanEvent.entity.in_(("item", "link")))
                                 .order_by(PlanEvent.created_at, PlanEvent.id)).scalars():
         events.setdefault(e.entity_key, []).append(e)
     state = plan_to_legacy_state(plan, items, notes, assignees, comments, events, links=links)
