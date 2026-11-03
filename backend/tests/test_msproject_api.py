@@ -345,3 +345,23 @@ def test_update_from_other_project_without_guids_warns(app, admin):
                      planId=plan_id).get_json()
     warning = other["warnings"][0]
     assert warning["code"] == "uid_names_differ" and warning["count"] == 4 and "другого проекта" in warning["message"]
+
+
+def test_update_warns_about_puls_rows_after_moved_file_rows(app, admin):
+    """Строка «Пульса» после строки файла, сроки которой меняются: обновление её не сдвигает — план обновления
+    предупреждает об этом заранее."""
+    project_id, _ = create_project(admin)
+    plan_id = _apply(admin, _no_guid_file(["Анализ", "Сборка"]), "plan", {"mode": "master"},
+                     projectId=project_id).get_json()["planId"]
+    analysis = next(i for i in _plan(admin, plan_id)["items"] if i["name"] == "Анализ")
+    ok_ops(admin, plan_id, [
+        {"op": "item.create", "item": {"key": "own", "type": "task", "name": "Своя проверка", "start": "2026-03-03",
+                                       "end": "2026-03-04"}},
+        {"op": "link.create", "link": {"key": "own-link", "from": analysis["key"], "to": "own"}}])
+    same = _preview(admin, _no_guid_file(["Анализ", "Сборка"]), "update", {}, planId=plan_id).get_json()
+    assert "puls_rows_follow" not in [w["code"] for w in same["warnings"]]
+    longer = _no_guid_file(["Анализ", "Сборка"]).replace(b"<Finish>2026-03-02T17:00:00</Finish>",
+                                                         b"<Finish>2026-03-04T17:00:00</Finish>", 1)
+    warning = next(w for w in _preview(admin, longer, "update", {}, planId=plan_id).get_json()["warnings"]
+                   if w["code"] == "puls_rows_follow")
+    assert warning["examples"] == ["Своя проверка"] and "Выровнять по связям" in warning["message"]

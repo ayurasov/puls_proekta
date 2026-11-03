@@ -41,6 +41,8 @@ from dataclasses import asdict, dataclass, field
 
 from app.services.msproject.text import norm_name
 
+# Поля строки, изменение которых двигает её последующие
+SCHEDULE_CHANGES = {"start", "end", "date", "offset", "status", "completedDate", "parentKey"}
 # Ключ исполнителя из ресурса MS Project — a<UID> (mapping.py); по нему узнаётся переименованный ресурс
 RESOURCE_KEY = re.compile(r"^a\d+$")
 
@@ -57,6 +59,8 @@ LINK_FIELDS = ("type", "lag", "lagKind")
 LINK_DEFAULTS = {"type": "FS", "lag": 0, "lagKind": "calendar"}
 DIFF_WARNINGS = {
     "other_project": "Файл — другой проект MS Project: GUID проекта не совпадает с источником плана",
+    "puls_rows_follow": "Строки, добавленные в «Пульсе», связаны со строками файла, сроки которых меняются: "
+                        "обновление их не сдвигает — после него нажмите «Выровнять по связям» над графиком",
     "uid_names_differ": "В файле нет GUID задач — строки сопоставлены по номерам (UID), и у большинства из них другие "
                         "названия: возможно, это файл другого проекта",
     "type_changed": "Строки сменили тип в MS Project — они будут созданы заново, комментарии останутся у прежних "
@@ -450,6 +454,16 @@ def diff_plan(existing_document, import_document, *, reserved_keys=()):
             changes.links["removed"].append({"key": link["key"], "from": source_key, "to": target_key,
                                              **{name: _link_value(link, name) for name in LINK_FIELDS}})
     changes.links["removed"].sort(key=lambda link: link["key"])
+
+    # Строки «Пульса» после строк файла, у которых меняются сроки: обновление их не сдвигает (сроки строк файла
+    # приходят как есть) — после применения их подвинет «Выровнять по связям» над графиком
+    moved = {entry["key"] for entry in changes.changed
+             if entry.get("recreate") or set(entry.get("fields") or {}) & SCHEDULE_CHANGES}
+    own = {entry["key"]: entry["name"] for entry in changes.puls_only if "copyOf" not in entry}
+    following = {link.get("to") for link in all_links
+                 if not link.get("deleted") and link.get("from") in moved and link.get("to") in own}
+    for key in sorted(following, key=lambda k: own[k] or ""):
+        warn("puls_rows_follow", own[key])
 
     changes.warnings = [{"code": code, "message": DIFF_WARNINGS[code], **warnings[code]}
                         for code in DIFF_WARNINGS if code in warnings]
