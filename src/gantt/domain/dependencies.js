@@ -7,7 +7,8 @@ import { shiftedEnd } from './tree'
  * угодно предшественников, последующей может быть и веха. Лаг — в календарных днях или, при lagKind 'working',
  * в рабочих днях по календарю плана (отрицательный — опережение).
  *
- * Автосдвиг (как applyDependencies в 1.0.1, для одной связи — то же самое):
+ * Автосдвиг (как applyDependencies в 1.0.1, для одной связи — то же самое; отличие с 0.7.0 — задача «по длительности»
+ * в рабочих днях при сдвиге сохраняет число рабочих дней своих сроков, а не календарный размах):
  *   FS — начало после окончания предшественника (+лаг);
  *   SS — начало вместе с началом предшественника (+лаг);
  *   FF — окончание вместе с окончанием предшественника (+лаг), длительность сохраняется;
@@ -132,11 +133,15 @@ function shiftTask(task, links, byKey, calendar, pin) {
   const snet = snetDate(task)
   if (bounds.start === null && bounds.end === null && !(snet && task.start < snet)) return null
   const dur = Math.max(1, diffDays(task.start, task.end) + 1)
-  // Задача «по длительности» в рабочих днях сохраняет число рабочих дней, а не календарный размах
+  // Задача «по длительности» в рабочих днях при сдвиге сохраняет число рабочих дней своих сроков, а не календарный
+  // размах. Считается по датам, а не по полю duration: у перенесённых из 1.0.1 планов оно бывает устаревшим.
+  // Начало (окончание) не сдвигается — сроки остаются как есть, как в 0.6.1: согласованная строка не меняется.
   const working = task.endMode === 'duration' && task.durationType === 'working'
-  const workDays = working ? Math.max(1, Number(task.duration) || calendar.countWorkingDays(task.start, task.end)) : 0
-  const endFrom = (start) => (working ? calendar.addWorkingDays(start, workDays) : addDays(start, dur - 1))
-  const startFrom = (end) => (working ? startForWorkingDays(calendar, end, workDays) : addDays(end, -(dur - 1)))
+  const workDays = working ? Math.max(1, calendar.countWorkingDays(task.start, task.end)) : 0
+  const endFrom = (start) => (start === task.start ? task.end
+    : working ? calendar.addWorkingDays(start, workDays) : addDays(start, dur - 1))
+  const startFrom = (end) => (end === task.end ? task.start
+    : working ? startForWorkingDays(calendar, end, workDays) : addDays(end, -(dur - 1)))
   // Что задают связи: начало (все FS/SS), окончание (все FF/SF) или и то и другое
   let mode = bounds.end === null ? 'start' : bounds.start === null ? 'end' : 'both'
   let ns = task.start

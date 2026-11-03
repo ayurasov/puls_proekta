@@ -237,6 +237,20 @@ describe('ревью 0.7.0', () => {
     expect(span(shift(calendarDays, [link('A', 'B')], { calendar }).get('B'))).toBe('2026-11-04..2026-11-08')
   })
 
+  it('0.7.1: устаревшее поле duration не сдвигает согласованную строку и не задаёт длину при сдвиге', () => {
+    const calendar = createCalendar({ useRuCalendar: false })
+    // Перенесённые из 1.0.1 данные: «7 рабочих дней», а по датам — 5 (пн 02.11 — пт 06.11); начало уже по связи
+    const stale = task('B', '2026-11-02', '2026-11-06', { endMode: 'duration', durationType: 'working', duration: 7 })
+    const a = task('A', '2026-10-26', '2026-11-01')
+    expect(shift([a, stale], [link('A', 'B')], { calendar }).size).toBe(0)
+    // Окончание по связи FF совпадает — начало не пересчитывается, даже если начало — выходной
+    const weekend = task('B', '2026-10-31', '2026-11-06', { endMode: 'duration', durationType: 'working', duration: 9 })
+    expect(shift([task('A', '2026-10-26', '2026-11-06'), weekend], [link('A', 'B', 'FF')], { calendar }).size).toBe(0)
+    // При сдвиге — 5 рабочих дней по датам, а не 7 из поля: ср 04.11 — вт 10.11
+    const moved = [task('A', '2026-10-26', '2026-11-03'), stale]
+    expect(span(shift(moved, [link('A', 'B')], { calendar }).get('B'))).toBe('2026-11-04..2026-11-10')
+  })
+
   it('связь строки с её родительской или вложенной недопустима', () => {
     const items = [task('p', '2026-01-01', '2026-01-10'), task('c', '2026-01-02', '2026-01-03', { parentKey: 'p' }),
       task('g', '2026-01-02', '2026-01-02', { parentKey: 'c' }), task('x', '2026-01-01', '2026-01-01')]
