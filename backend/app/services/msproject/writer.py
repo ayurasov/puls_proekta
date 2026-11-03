@@ -437,7 +437,8 @@ def write_mspdi(plan_document, *, holidays=(), workdays=(), include_comments=Tru
             values["Notes"] = "\n\n".join(comments[key])
         links = links_in.get(key, [])  # в порядке документа: повторный импорт даёт тот же порядок связей
         if links:
-            values["PredecessorLink"] = [_link(link, uids) for link in links]
+            values["PredecessorLink"] = [_link(link, uids, by_key[link["from"]].get("type") == "milestone")
+                                         for link in links]
         if kind == "task" and item.get("category") and not is_summary:
             values["ExtendedAttribute"] = [_element("ExtendedAttribute", TASK_EXTENDED_ORDER, {
                 "FieldID": CATEGORY_FIELD_ID, "Value": item["category"]})]
@@ -539,10 +540,16 @@ def _constraint(item, scheduling, span):
     return {}
 
 
-def _link(link, uids):
+def _link(link, uids, from_milestone=False):
     kind = link.get("type") if link.get("type") in LINK_TYPE_CODES else "FS"
     lag = int(link.get("lag") or 0)
-    if kind == "SF":
+    if from_milestone:
+        # Веха выгружается на 17:00 своего дня. SS от неё в MS Project начал бы задачу со следующего утра, а в
+        # «Пульсе» — в день вехи: лаг на день меньше. SF кончает задачу в 17:00 дня вехи — как в «Пульсе», без
+        # поправки на день, которая нужна для задач, начинающихся утром (FS и FF от вехи совпадают и так)
+        if kind == "SS":
+            lag -= 1
+    elif kind == "SF":
         # SF в «Пульсе» кончает задачу в день начала предшественника + лаг, в MS Project — к его началу (концу
         # предыдущего дня) + лаг: лаг MS Project на день больше (обратное к mapping.convert_lag)
         lag += 1

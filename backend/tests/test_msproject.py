@@ -1840,3 +1840,26 @@ def test_review_копия_строки_в_пульсе_не_удаляется(
     assert changes.missing == [] and [c["key"] for c in changes.puls_only] == ["icopy"]
     assert changes.puls_only[0]["copyOf"]["uid"] == 8
     assert to_ops(changes, {"deleteMissing": True}) == []
+
+
+def test_выгрузка_связей_от_вехи():
+    """Веха выгружается на 17:00 своего дня: SS от неё — лаг на день меньше, SF — без поправки на день (у задачи —
+    с поправкой); иначе MS Project ставит последующие на день позже, чем «Пульс» (0.7.1, проверено пересчётом
+    выгрузки планировщиком MPXJ по правилам MS Project)."""
+    doc = {"items": [
+        {"key": "m", "type": "milestone", "name": "Веха", "date": "2026-03-11", "position": 1},
+        {"key": "t", "type": "task", "name": "Задача", "start": "2026-03-16", "end": "2026-03-17", "position": 2},
+        {"key": "ss", "type": "task", "name": "SS от вехи", "start": "2026-03-11", "end": "2026-03-12", "position": 3},
+        {"key": "sf", "type": "task", "name": "SF от вехи", "start": "2026-03-10", "end": "2026-03-11", "position": 4},
+        {"key": "fs", "type": "task", "name": "FS от вехи", "start": "2026-03-12", "end": "2026-03-13", "position": 5},
+        {"key": "tf", "type": "task", "name": "SF от задачи", "start": "2026-03-13", "end": "2026-03-15", "position": 6},
+    ], "links": [
+        {"key": "l1", "from": "m", "to": "ss", "type": "SS", "lag": 0, "lagKind": "working"},
+        {"key": "l2", "from": "m", "to": "sf", "type": "SF", "lag": 0, "lagKind": "working"},
+        {"key": "l3", "from": "m", "to": "fs", "type": "FS", "lag": 0, "lagKind": "working"},
+        {"key": "l4", "from": "t", "to": "tf", "type": "SF", "lag": 0, "lagKind": "working"},
+    ], "assignees": [], "project": {"name": "Связи вех"}}
+    root = ET.fromstring(write_mspdi(doc))
+    lags = {task.findtext(Q + "Name"): int(task.find(Q + "PredecessorLink").findtext(Q + "LinkLag"))
+            for task in root.iter(Q + "Task") if task.find(Q + "PredecessorLink") is not None}
+    assert lags == {"SS от вехи": -4800, "SF от вехи": 0, "FS от вехи": 0, "SF от задачи": 4800}
