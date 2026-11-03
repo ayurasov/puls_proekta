@@ -204,11 +204,20 @@ class _Context:
         self.day_start = min(starts) if starts else (project.default_start_time or DEFAULT_DAY_START)
 
     def finish_day(self, moment):
-        """Окончание в начале рабочего дня и раньше (08:00, 00:00) — это конец предыдущего дня."""
+        """Окончание в начале рабочего дня и раньше (08:00, 00:00) — это конец предыдущего рабочего дня по неделе
+        календаря проекта: окончание в понедельник 08:00 — пятница, а не воскресенье."""
         if moment is None:
             return None
         day = moment.date()
-        return day - timedelta(days=1) if moment.time() <= self.day_start else day
+        if moment.time() > self.day_start:
+            return day
+        day -= timedelta(days=1)
+        for _ in range(6):
+            week_day = self.week.get(day.isoweekday() % 7 + 1)  # DayType MS Project: 1 — воскресенье … 7 — суббота
+            if week_day is None or week_day.working:
+                break
+            day -= timedelta(days=1)
+        return day
 
     def start_day(self, moment):
         return moment.date() if moment is not None else None
@@ -309,14 +318,16 @@ def _map(project, opts):
     links = _links(project, by_uid, kinds, keys, children, item_by_key, rows, ctx, warn)
     for item in clamp_snet(items):
         warn.add("constraints_adjusted", item["name"])
-    # Даты файла — главные: лаги подбираются так, чтобы автосдвиг «Пульса» их не трогал. По базовому плану сроки
-    # строк — плановые: лаги подбираются по плановым срокам без сдвига и фактических окончаний, — тогда расчёт
-    # показывает только настоящее отставание (сдвиг предшественников), а не погрешность перевода лагов в дни.
-    planned = items if opts["baseline"] == "current" else [
-        {**item, "offset": 0, "completedDate": None, "status": "new" if item.get("status") == "done" else item.get("status")}
-        for item in items]
+    # Даты файла — главные: лаги подбираются так, чтобы автосдвиг «Пульса» их не трогал. Подбор — всегда по текущим
+    # срокам: их MS Project рассчитал по этим связям, и они показывают, сколько дней «Пульса» стоит за лагом в часах.
+    # По базовому плану строки получают плановые сроки и сдвиг, а лаги — те же: без отставания расчёт ничего не
+    # двигает, а отставание предшественника сдвигает последующие (0.7.1; раньше лаги не подбирались вовсе).
+    current = []
+    for item in items:
+        dates = item.pop("_current", None)
+        current.append({**item, **dates} if dates else item)
     names = {item["key"]: item["name"] for item in items}
-    for link, _ in align_links(planned, links, ru_calendar):
+    for link, _ in align_links(current, links, ru_calendar):
         warn.add("lags_adjusted", f"{names[link['from']]} → {names[link['to']]}")
     assignees, assignee_of, also = _assignees(project, rows, kinds, keys, opts, warn)
     for item in items:
@@ -529,6 +540,8 @@ def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, 
         if kind == "milestone":
             day = ctx.start_day(base.start if base else start_moment)
             item.update({"date": _iso(day), "color": MILESTONE_COLOR, **common})
+            if base:
+                item["_current"] = {"date": _iso(ctx.start_day(start_moment))}
         else:
             current_start = ctx.start_day(start_moment)
             current_end = max(current_start, ctx.finish_day(finish_moment))
@@ -537,6 +550,8 @@ def _item(task, kind, keys, parent_of, index, ctx, warn, category, ru_calendar, 
                 end = max(start, ctx.finish_day(base.finish))
                 offset = (current_end - end).days
                 minutes = base.duration if base.duration is not None else task.duration
+                # Текущие сроки — для подбора лагов: их MS Project рассчитал по тем же связям
+                item["_current"] = {"start": _iso(current_start), "end": _iso(current_end), "offset": 0}
             else:
                 start, end, offset, minutes = current_start, current_end, 0, task.duration
             progress = task.percent_complete

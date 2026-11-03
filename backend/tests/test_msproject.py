@@ -334,7 +334,9 @@ def test_окончание_в_начале_дня_предыдущий_день
 
 def test_окончание_в_начале_дня_по_календарю_проекта():
     six = map_project(read_file(SIX_DAY))
-    assert row(six, 2)["end"] == "2027-01-31"   # 01.02 09:00 при начале дня 09:00
+    # 01.02 (пн) 09:00 при начале дня 09:00 — конец предыдущего рабочего дня: суббота 30.01 (неделя из 6 дней),
+    # а не воскресенье (0.7.1)
+    assert row(six, 2)["end"] == "2027-01-30"
     assert row(six, 3)["end"] == "2027-01-30"   # 30.01 10:00 — тот же день
     assert row(six, 1)["end"] == "2027-01-16"
 
@@ -1386,7 +1388,19 @@ def test_круговой_обход_импорт_экспорт_импорт(cr
     data = write_mspdi(first, users=USERS, holidays=["2026-03-09", "2026-05-01", "2026-05-11", "2026-06-12"])
     second = map_project(read_mspdi(data), {**OPTIONS, **options})
     assert without_outline_numbers(second["items"]) == without_outline_numbers(first["items"])
-    assert second["links"] == first["links"]
+    if options.get("baseline"):
+        # Строки после сдвинутых предшественников не согласованы с текущими сроками файла (это отставание и
+        # показывает расчёт), а выгрузка пишет текущие сроки «Пульса» — лаги таких связей подбираются заново.
+        # Остальное — как было, а повторный обход уже ничего не меняет
+        def shape(links):
+            return [{k: v for k, v in x.items() if k != "lag"} for x in links]
+        assert shape(second["links"]) == shape(first["links"])
+        third = map_project(read_mspdi(write_mspdi(second, users=USERS, holidays=["2026-03-09", "2026-05-01",
+                                                                                   "2026-05-11", "2026-06-12"])),
+                            {**OPTIONS, **options})
+        assert third["links"] == second["links"]
+    else:
+        assert second["links"] == first["links"]
     assert second["assignees"] == first["assignees"]
     assert second["comments"] == first["comments"]
     assert second["settings"]["categories"] == first["settings"]["categories"]
@@ -1407,8 +1421,10 @@ def test_круговой_обход_плана_пульса():
     assert (development["category"], development["jiraUrl"]) == ("разработка", "https://jira.romashka.ru/browse/REL-7")
     assert by_name["Релиз"]["date"] == "2026-03-16" and by_name["Релиз 2.0"]["type"] == "group"
     assert by_name["Тестирование"]["completedDate"] == "2026-03-13"
+    # План-образец не согласован со своими связями (FS +2 раб. дн. от окончания со сдвигом 08.03 — это 12.03, а
+    # «Тестирование» начинается 10.03): лаги подбираются по текущим срокам файла
     assert [(x["type"], x["lag"], x["lagKind"]) for x in document["links"]] == [
-        ("FS", 2, "working"), ("SS", 3, "calendar")]
+        ("FS", 0, "working"), ("SS", 6, "calendar")]
     assert [(a["key"], a["name"], a["userId"]) for a in document["assignees"]] == [
         ("a1", "Иванов Иван", 1), ("a2", "Петрова Анна", 2)]
 
@@ -1488,19 +1504,15 @@ def vitest_fixture(name, document):
     return "\n".join(lines)
 
 
-@pytest.mark.parametrize("case", ["crm", "crm-working", "crm-baseline", "6day", "generated"])
+@pytest.mark.parametrize("case", ["crm", "crm-working", "generated-baseline", "6day", "generated"])
 def test_план_согласован_со_связями_пульса(case):
     """Автосдвиг «Пульса» не трогает ни одной строки плана из файла; документы — для теста vitest на клиенте.
-    По базовому плану (crm-baseline) — без отставания: сдвиг и фактические окончания убраны, расчёт по плановым
-    срокам не должен двигать строки из-за перевода лагов в дни (0.7.1)."""
-    source = {"crm": CRM.read_bytes(), "crm-working": CRM.read_bytes(), "crm-baseline": CRM.read_bytes(),
-              "6day": SIX_DAY.read_bytes(), "generated": None}[case]
-    options = {"crm-working": {"durations": "working"}, "crm-baseline": {"baseline": "baseline"}}.get(case, {})
+    generated-baseline — «по базовому плану» без отставания (в файле нет базового плана — текущие сроки): до 0.7.1
+    лаги там не подбирались, и расчёт двигал строки из-за перевода лагов в дни."""
+    source = {"crm": CRM.read_bytes(), "crm-working": CRM.read_bytes(), "6day": SIX_DAY.read_bytes(),
+              "generated": None, "generated-baseline": None}[case]
+    options = {"crm-working": {"durations": "working"}, "generated-baseline": {"baseline": "baseline"}}.get(case, {})
     document = map_project(read_mspdi(source or varied_file()), options)
-    if case == "crm-baseline":
-        document = {**document, "items": [
-            {**i, "offset": 0, "completedDate": None, "status": "new" if i.get("status") == "done" else i.get("status")}
-            for i in document["items"]]}
     assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
     assert document["links"]
     path = VITEST_FIXTURES / f"msproject-{case}.json"
@@ -1580,10 +1592,18 @@ def test_лаги_подобраны_под_даты_файла(case):
     assert inconsistent_rows(document["items"], document["links"], puls_calendar(document)) == []
 
 
-def test_по_базовому_плану_лаги_не_подбираются(crm):
+def test_по_базовому_плану_лаги_по_текущим_срокам(crm):
+    """По базовому плану строки — плановые сроки и сдвиг, а лаги — те же, что при загрузке по текущим срокам: их
+    MS Project рассчитал по этим связям. Несогласованы со связями только строки, которые и в MS Project начинаются
+    позже базового плана, — отставание, которое и должен показать расчёт (0.7.1; раньше лаги не подбирались, и
+    погрешность перевода лагов в дни тоже выглядела отставанием)."""
     base = map_project(crm, {"baseline": "baseline"})
-    assert warning(base, "lags_adjusted") is None
-    assert link(base, "l11-12")["lag"] == 0 and link(base, "l26-28")["lag"] == 1
+    current = map_project(crm, {})
+    assert base["links"] == current["links"] and warning(base, "lags_adjusted") is not None
+    starts = {i["key"]: i.get("start") or i.get("date") for i in current["items"]}
+    late = {i["key"] for i in base["items"] if (i.get("start") or i.get("date")) and starts[i["key"]] > (i.get("start") or i.get("date"))}
+    flagged = inconsistent_rows(base["items"], base["links"], puls_calendar(base))
+    assert flagged and set(flagged) <= late
 
 
 def test_календарь_пульса_из_параметров():

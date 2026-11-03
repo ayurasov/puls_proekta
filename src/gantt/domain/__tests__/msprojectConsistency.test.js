@@ -19,8 +19,8 @@ const files = readdirSync(dir).filter((name) => /^msproject-.*\.json$/.test(name
 
 describe('план из MS Project и автосдвиг по связям', () => {
   it('документы с сервера на месте', () => {
-    expect(files).toEqual(['msproject-6day.json', 'msproject-crm-baseline.json', 'msproject-crm-working.json',
-      'msproject-crm.json', 'msproject-generated.json'])
+    expect(files).toEqual(['msproject-6day.json', 'msproject-crm-working.json',
+      'msproject-crm.json', 'msproject-generated-baseline.json', 'msproject-generated.json'])
   })
 
   for (const name of files) {
