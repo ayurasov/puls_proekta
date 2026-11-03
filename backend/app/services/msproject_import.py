@@ -146,6 +146,13 @@ def _snapshot(plan, user, label):
     snapshot.data = data
 
 
+def snapshot_after(plan, user, file_name):
+    """Версия плана сразу после импорта («После импорта»): к ней можно вернуться после правок в «Пульсе» и
+    сравнить с ней следующее обновление из файла (ADR-0012, раздел 2)."""
+    db.session.flush()
+    return create_snapshot(plan, user, reason="after_import", label=f"Импорт из MS Project: {file_name}")
+
+
 def _apply_ops(plan, user, ops, summary):
     editor = PlanEditor(plan, user)
     # Связь, которую нельзя создать (строку пропустили), не останавливает загрузку — она попадает в исправления

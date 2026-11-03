@@ -128,6 +128,7 @@ def apply():
         counts = importer.update_plan(plan, user, doc, options, file_name)
         _audit_plan(project, plan, "update", new=f"обновлено из MS Project: {file_name}", field="content")
         result = {"projectId": project.id, "planId": plan.id, **counts}
+    importer.snapshot_after(plan, user, file_name)
     db.session.commit()
     return jsonify(result)
 

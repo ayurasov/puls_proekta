@@ -270,3 +270,19 @@ def test_review_replace_with_new_resource_takes_free_key(app, admin):
     assert _apply(admin, _small_file("Сидоров Семён"), "replace", {"mode": "once"}, planId=plan_id).status_code == 200
     names = sorted(a["name"] for a in _plan(admin, plan_id)["assignees"])
     assert names == ["Иванов Иван", "Петров Пётр", "Сидоров Семён"]
+
+
+def test_after_import_version_for_every_target(app, admin):
+    """ADR-0012, раздел 2: после импорта — версия «После импорта»; перед заменой и обновлением — «Перед импортом»."""
+    def reasons(plan_id):
+        return [s["reason"] for s in admin.get(f"/api/plans/{plan_id}/snapshots").get_json()]
+
+    res = _apply(admin, CRM.read_bytes(), "project", {"mode": "master"})
+    plan_id = res.get_json()["planId"]
+    assert reasons(plan_id) == ["after_import"]
+    assert _apply(admin, CRM.read_bytes(), "update", {}, planId=plan_id).status_code == 200
+    assert sorted(reasons(plan_id)) == ["after_import", "after_import", "before_import"]
+    snaps = admin.get(f"/api/plans/{plan_id}/snapshots").get_json()
+    after = next(s for s in snaps if s["reason"] == "after_import")
+    assert after["label"] == "Импорт из MS Project: Внедрение CRM.xml"
+    assert after["itemsCount"] == len(_plan(admin, plan_id)["items"])
