@@ -229,6 +229,8 @@ class PodeluClient:
         self.user = None
         parts = urlsplit(self.base_url)
         self.secure = parts.scheme.lower() == "https"
+        # on_result(ok, message) — итог каждого запроса для «Состояния системы» (ADR-0014); задаёт сервис
+        self.on_result = None
         self.session = requests.Session()  # прокси из окружения сервера подхватываются автоматически
         self.session.headers.update({
             "Accept": "application/json",
@@ -268,8 +270,28 @@ class PodeluClient:
             raise self._too_long()
         return remaining
 
-    def request(self, method, path, *, json_body=None, params=None, timeout=None, max_bytes=MAX_JSON_BYTES,
-                final=False):
+    def request(self, method, path, **kwargs):
+        """(ответ, тело) — см. _request. Сбой связи, отказ во входе (401) и ошибки сервера (5xx) сообщаются в
+        on_result как неполадка подключения, остальные ответы — как работающее подключение."""
+        try:
+            resp, body = self._request(method, path, **kwargs)
+        except PodeluError as exc:
+            self._report(exc.status is None or exc.status == 401 or exc.status >= 500, str(exc))
+            raise
+        status = getattr(resp, "status_code", 200)
+        self._report(status == 401 or status >= 500, f"«По Делу» вернула ошибку {status}")
+        return resp, body
+
+    def _report(self, bad, message):
+        if self.on_result is None:
+            return
+        try:
+            self.on_result(not bad, message if bad else "")
+        except Exception:  # noqa: BLE001 — учёт состояния не должен ломать запрос
+            pass
+
+    def _request(self, method, path, *, json_body=None, params=None, timeout=None, max_bytes=MAX_JSON_BYTES,
+                 final=False):
         """(ответ, тело) — с повтором чтения при 429/5xx и понятными сообщениями об ошибках. Тело читается не больше
         max_bytes: ответ больше — ошибка, а не память сервера. Каждый запрос укладывается в общий предел операции
         (final=True — выход: после предела тоже)."""

@@ -9,7 +9,9 @@ from sqlalchemy import func, select
 from app import audit
 from app.extensions import db
 from app.models import Direction, Project, utcnow
-from app.security import ApiError, accessible_projects_query, admin_required, current_user, login_required, roles_required
+from app.security import (
+    accessible_projects_query, ApiError, capability_required, current_user, login_required, roles_or_capability,
+)
 from app.serializers import direction as serialize
 
 bp = Blueprint("directions", __name__, url_prefix="/api/directions")
@@ -58,7 +60,7 @@ def list_directions():
 
 
 @bp.post("")
-@roles_required("admin", "manager")
+@roles_or_capability(("admin", "manager"), "access.manage")
 def create_direction():
     payload = DirectionIn.model_validate(request.get_json(silent=True) or {})
     if not payload.name:
@@ -74,7 +76,7 @@ def create_direction():
 
 
 @bp.patch("/<int:direction_id>")
-@roles_required("admin", "manager")
+@roles_or_capability(("admin", "manager"), "access.manage")
 def update_direction(direction_id):
     direction = _get(direction_id)
     payload = DirectionIn.model_validate(request.get_json(silent=True) or {})
@@ -89,7 +91,7 @@ def update_direction(direction_id):
 
 
 @bp.post("/reorder")
-@admin_required
+@capability_required("access.manage")
 def reorder():
     payload = ReorderIn.model_validate(request.get_json(silent=True) or {})
     directions = {d.id: d for d in db.session.execute(select(Direction)).scalars()}
@@ -101,7 +103,7 @@ def reorder():
 
 
 @bp.delete("/<int:direction_id>")
-@admin_required
+@capability_required("access.manage")
 def delete_direction(direction_id):
     direction = _get(direction_id)
     moved = db.session.execute(

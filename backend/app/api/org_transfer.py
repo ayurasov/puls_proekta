@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field, field_validator
 from app import audit
 from app.extensions import db
 from app.ldap_auth import effective_mode, get_ldap_config
-from app.security import ApiError, admin_required, current_user
+from app.security import ApiError, capability_required, current_user, require_capabilities, SYNC_NEEDS_BOTH
 from app.services import org, ad_sync, employee_transfer, org_import, org_transfer
 from app.sessions import revoke_user_sessions
 
@@ -60,14 +60,14 @@ def _revoke(user_ids):
 
 # ---------------------------------------------------------------- структура (JSON)
 @bp.get("/org/export")
-@admin_required
+@capability_required("org.manage")
 def export_structure():
     body = json.dumps(org_transfer.export_structure(), ensure_ascii=False, indent=2)
     return _download(body.encode("utf-8"), "application/json", f"puls-structure-{_stamp()}.json")
 
 
 @bp.post("/org/import/structure")
-@admin_required
+@capability_required("org.manage")
 def import_structure():
     payload = request.get_json(silent=True) or {}
     bundle = payload.get("bundle")
@@ -92,7 +92,7 @@ def import_structure():
 
 # ---------------------------------------------------------------- быстрый импорт CSV
 @bp.post("/org/import/csv")
-@admin_required
+@capability_required("org.manage")
 def import_csv():
     payload = request.get_json(silent=True) or {}
     text = payload.get("csv")
@@ -163,13 +163,13 @@ def _ad_status():
 
 
 @bp.get("/org/sync/ad")
-@admin_required
+@capability_required("org.manage")
 def ad_status():
     return jsonify(_ad_status())
 
 
 @bp.put("/org/sync/ad/settings")
-@admin_required
+@capability_required("org.manage")
 def ad_settings():
     payload = AdSyncOptionsIn.model_validate(request.get_json(silent=True) or {})
     if payload.pathSource == "attributes" and not payload.pathAttributes:
@@ -185,8 +185,9 @@ def ad_settings():
 
 
 @bp.post("/org/sync/ad")
-@admin_required
+@capability_required("org.manage")
 def ad_sync_run():
+    require_capabilities(current_user(), "org.manage", "users.manage", message=SYNC_NEEDS_BOTH)
     payload = request.get_json(silent=True) or {}
     create_missing, deactivate_missing = bool(payload.get("createMissing")), bool(payload.get("deactivateMissing"))
     try:
@@ -211,7 +212,7 @@ def ad_sync_run():
 
 # ---------------------------------------------------------------- сотрудники
 @bp.get("/users/export")
-@admin_required
+@capability_required("users.manage")
 def export_users():
     fmt = request.args.get("format", "csv")
     if fmt not in ("csv", "json", "zip"):
@@ -230,7 +231,7 @@ def export_users():
 
 
 @bp.post("/users/import")
-@admin_required
+@capability_required("users.manage")
 def import_users():
     payload = request.get_json(silent=True) or {}
     content = payload.get("content")
@@ -271,7 +272,7 @@ def import_users():
 
 
 @bp.post("/users/import/avatars")
-@admin_required
+@capability_required("users.manage")
 def import_avatars():
     """Фото после загрузки сотрудников: имя поля формы — id сотрудника, файл — фото."""
     max_bytes = current_app.config["AVATAR_MAX_BYTES"]

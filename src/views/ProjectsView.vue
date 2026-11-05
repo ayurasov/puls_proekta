@@ -88,7 +88,7 @@ const groups = computed(() => {
       projects: sortProjects(g.projects.filter((p) => (!q || p.title.toLowerCase().includes(q)) && matchesProjectFilters(p, f, auth.user)), f.sort),
     }))
     // Пустое направление видно только администратору: остальным направление без их проектов ни к чему
-    .filter((g) => g.projects.length || (!narrowed && g.direction && auth.isAdmin))
+    .filter((g) => g.projects.length || (!narrowed && g.direction && auth.can('access.manage')))
 })
 const total = computed(() => projects.projects.length)
 const query = computed(() => search.value.trim())
@@ -359,7 +359,7 @@ function onDragEnd() {
             >
               <AppIcon name="chart" />
             </button>
-            <button v-if="project.access === 'manage'" class="btn btn-ghost btn-icon btn-sm card-menu" type="button" title="Действия" @click.stop="openMenu($event, project)">
+            <button v-if="project.access === 'manage' || auth.can('trash.manage')" class="btn btn-ghost btn-icon btn-sm card-menu" type="button" title="Действия" @click.stop="openMenu($event, project)">
               <AppIcon name="more" />
             </button>
           </div>
@@ -425,8 +425,8 @@ function onDragEnd() {
 
     <PopupMenu v-if="menu" :anchor="menu.anchor" align="end" @close="menu = null">
       <button v-if="mainPlanId(menu.project)" class="menu-item" type="button" @click="openStats(menu.project)"><AppIcon name="chart" /> Статистика</button>
-      <button class="menu-item" type="button" @click="openEdit(menu.project)"><AppIcon name="edit" /> Изменить</button>
-      <button v-if="auth.isAdmin" class="menu-item is-danger" type="button" @click="removeProject(menu.project)"><AppIcon name="trash" /> Удалить</button>
+      <button v-if="menu.project.access === 'manage'" class="menu-item" type="button" @click="openEdit(menu.project)"><AppIcon name="edit" /> Изменить</button>
+      <button v-if="auth.can('trash.manage')" class="menu-item is-danger" type="button" @click="removeProject(menu.project)"><AppIcon name="trash" /> Удалить</button>
     </PopupMenu>
 
     <StatsModal v-if="statsPlanId" :plan-id="statsPlanId" :plans="statsPlans" @close="statsPlanId = null" />

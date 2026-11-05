@@ -25,6 +25,8 @@ export const HELP_TOPICS = {
   'podelu-tasks': { guide: 'user', id: 'задачи-по-делу-в-проекте', title: 'Задачи «По Делу» в проекте' },
   org: { guide: 'user', id: 'структура-компании', title: 'Структура компании' },
   'admin-users': { guide: 'admin', id: 'сотрудники', title: 'Сотрудники' },
+  'admin-capabilities': { guide: 'admin', id: 'полномочия-без-роли-администратора', title: 'Полномочия без роли администратора' },
+  'admin-health': { guide: 'admin', id: 'состояние-системы', title: 'Состояние системы' },
   'admin-structure': { guide: 'admin', id: 'структура-компании', title: 'Структура компании' },
   'admin-org-transfer': { guide: 'admin', id: 'импорт-и-экспорт', title: 'Импорт и экспорт' },
   'admin-integrations': { guide: 'admin', id: 'интеграции', title: 'Интеграции' },

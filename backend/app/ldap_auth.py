@@ -73,6 +73,13 @@ def _friendly(exc, unreachable_text):
     return text or unreachable_text
 
 
+def _note(ok, message=""):
+    """Итог обращения к каталогу при входе — в «Состояние системы» (ADR-0014)."""
+    from app.services import system_health
+
+    system_health.note("ldap", ok, message)
+
+
 def test_connection(config):
     from ldap3 import Connection
 
@@ -108,7 +115,9 @@ def authenticate(username, password, config=None):
         service = Connection(_server(config), user=config.get("bindDN") or None,
                              password=config.get("bindPassword") or None, receive_timeout=timeout)
         if not service.bind():
+            _note(False, "Сервисная учётная запись каталога не принята")
             return DirectoryResult(False, error="Сервисная учётная запись каталога не принята")
+        _note(True)
         search_filter = config["searchFilter"].replace("{{username}}", escape_filter_chars(username))
         service.search(config["baseDN"], search_filter, search_scope=SUBTREE,
                        attributes=[a for a in {attrs["username"], attrs["name"], attrs["email"]} if a], size_limit=2)
@@ -133,4 +142,5 @@ def authenticate(username, password, config=None):
         return DirectoryResult(True, username=attr(attrs["username"]) or username,
                                name=attr(attrs["name"]) or username, email=attr(attrs["email"]))
     except Exception as exc:  # noqa: BLE001
+        _note(False, _friendly(exc, "Не удалось подключиться к LDAP-серверу"))
         return DirectoryResult(False, error=_friendly(exc, "Не удалось подключиться к LDAP-серверу"))

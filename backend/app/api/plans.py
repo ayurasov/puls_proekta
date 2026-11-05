@@ -13,7 +13,7 @@ from app.models import (
     ItemComment, Plan, PlanAssignee, PlanEvent, PlanItem, PlanLink, PlanNote, PlanPresence, PlanSnapshot, Project, User,
     utcnow,
 )
-from app.security import ApiError, LEVEL_ORDER, current_user, login_required, require_project
+from app.security import ApiError, LEVEL_ORDER, current_user, has_capability, login_required, require_project
 from app.serializers import iso, user_public
 from app.services.legacy_format import plan_to_legacy_state
 from app.services.plan_doc import (
@@ -235,8 +235,8 @@ def purge_plan(plan_id):
     plan = db.session.get(Plan, plan_id)
     if plan is None or plan.deleted_at is None:
         raise ApiError(404, "not_found", "Плана нет в корзине")
-    if current_user().role != "admin":
-        raise ApiError(403, "forbidden", "Удалить навсегда может только администратор")
+    if not has_capability(current_user(), "trash.manage"):
+        raise ApiError(403, "forbidden", "Удалить навсегда может администратор или сотрудник с полномочием «Управляет корзиной»")
     project = db.session.get(Project, plan.project_id)
     _audit_plan(project, plan, "purge", old=plan.title, new="удалён навсегда")
     db.session.delete(plan)

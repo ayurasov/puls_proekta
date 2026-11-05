@@ -8,22 +8,27 @@ import EmployeesTransfer from '../../components/org-transfer/EmployeesTransfer.v
 import QuickCsvImport from '../../components/org-transfer/QuickCsvImport.vue'
 import AdSync from '../../components/org-transfer/AdSync.vue'
 import PodeluSync from '../../components/org-transfer/PodeluSync.vue'
+import { useAuthStore } from '../../stores/auth'
 
 /**
  * Структура компании → Импорт и экспорт (ADR-0008): перенос структуры и сотрудников файлами,
  * общими с todo-planner «По Делу», загрузка напрямую из «По Делу» (ADR-0009), быстрая загрузка из кадровой
  * системы и синхронизация с Active Directory. Везде сначала — проверка без записи, затем применение одной транзакцией.
  */
-const TABS = [
-  { key: 'structure', label: 'Структура (JSON)', icon: 'hierarchy' },
-  { key: 'employees', label: 'Сотрудники (CSV, JSON, ZIP)', icon: 'users' },
-  { key: 'podelu', label: 'Из «По Делу»', icon: 'checklist' },
-  { key: 'csv', label: 'Быстрый импорт CSV', icon: 'file' },
-  { key: 'ad', label: 'Active Directory', icon: 'link' },
+// Вкладки по полномочиям (ADR-0013): структура — «Ведёт структуру компании», сотрудники — «Ведёт учётные записи»,
+// синхронизации меняют и то и другое — нужны оба
+const ALL_TABS = [
+  { key: 'structure', label: 'Структура (JSON)', icon: 'hierarchy', needs: ['org.manage'] },
+  { key: 'employees', label: 'Сотрудники (CSV, JSON, ZIP)', icon: 'users', needs: ['users.manage'] },
+  { key: 'podelu', label: 'Из «По Делу»', icon: 'checklist', needs: ['org.manage', 'users.manage'] },
+  { key: 'csv', label: 'Быстрый импорт CSV', icon: 'file', needs: ['org.manage'] },
+  { key: 'ad', label: 'Active Directory', icon: 'link', needs: ['org.manage', 'users.manage'] },
 ]
+const auth = useAuthStore()
+const TABS = computed(() => ALL_TABS.filter((item) => item.needs.every((cap) => auth.can(cap))))
 const route = useRoute()
 const router = useRouter()
-const tab = computed(() => (TABS.some((item) => item.key === route.query.tab) ? route.query.tab : 'structure'))
+const tab = computed(() => (TABS.value.some((item) => item.key === route.query.tab) ? route.query.tab : TABS.value[0]?.key))
 function selectTab(key) {
   router.replace({ query: { ...route.query, tab: key } })
 }

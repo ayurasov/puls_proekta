@@ -15,7 +15,9 @@ from pydantic import BaseModel, Field
 from app import audit
 from app.extensions import db, limiter
 from app.podelu_client import PodeluError, check_base_url, check_server_url, encrypt_password, rights
-from app.security import ApiError, admin_required, current_user, login_required
+from app.security import (
+    ApiError, capability_required, current_user, login_required, require_capabilities, SYNC_NEEDS_BOTH,
+)
 from app.services import employee_transfer, org, org_transfer
 from app.services import podelu as podelu_service
 from app.services import podelu_sync
@@ -60,13 +62,13 @@ def _form(payload):
 # ---------- администратор: «Интеграции» ----------
 
 @bp.get("/settings/podelu")
-@admin_required
+@capability_required("modules.manage")
 def get_connection():
     return jsonify(podelu_service.admin_json(podelu_service.get_connection()))
 
 
 @bp.put("/settings/podelu")
-@admin_required
+@capability_required("modules.manage")
 def put_connection():
     data = _form(ConnectionIn.model_validate(request.get_json(silent=True) or {}))
     existing = podelu_service.get_connection()
@@ -99,7 +101,7 @@ def put_connection():
 
 
 @bp.delete("/settings/podelu")
-@admin_required
+@capability_required("modules.manage")
 def delete_connection():
     existing = podelu_service.get_connection()
     if existing:
@@ -110,7 +112,7 @@ def delete_connection():
 
 
 @bp.post("/settings/podelu/test")
-@admin_required
+@capability_required("modules.manage")
 def test_connection():
     """Вход и /api/auth/me: учётная запись и есть ли у неё права на выгрузку структуры и сотрудников."""
     payload = request.get_json(silent=True)
@@ -150,7 +152,7 @@ def status():
 # ---------- загрузка структуры и сотрудников ----------
 
 @bp.get("/org/sync/podelu")
-@admin_required
+@capability_required("org.manage")
 def sync_status():
     conn = podelu_service.get_connection()
     return jsonify({"configured": bool(conn and conn["passwordEncrypted"]),
@@ -193,12 +195,13 @@ def _replanning():
 
 
 @bp.post("/org/sync/podelu")
-@admin_required
+@capability_required("org.manage")
 @limiter.limit("20 per minute", key_func=_user_key, exempt_when=_replanning)
 def sync_run():
     """Без snapshot и apply — получить данные из «По Делу» и показать план (ответ содержит snapshot для
     пересчёта); со snapshot — пересчитать план с решениями по коллизиям без обращения к «По Делу»;
     apply — заново получить данные, сверить fingerprint с проверенным и применить одной транзакцией."""
+    require_capabilities(current_user(), "org.manage", "users.manage", message=SYNC_NEEDS_BOTH)
     payload = SyncIn.model_validate(request.get_json(silent=True) or {})
     options = podelu_sync.Options(apply_settings=payload.applySettings, new_users=payload.newUsers,
                                   create_missing=payload.createMissing, photos=payload.photos)

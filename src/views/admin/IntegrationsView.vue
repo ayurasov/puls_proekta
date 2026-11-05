@@ -4,12 +4,15 @@ import { api } from '../../api/client'
 import AppIcon from '../../components/common/AppIcon.vue'
 import HelpLink from '../../components/common/HelpLink.vue'
 import IntegrationLogo from '../../components/integrations/IntegrationLogo.vue'
+import { useAuthStore } from '../../stores/auth'
 import { formatDateTime } from '../../utils/format'
 
 /**
  * «Интеграции» — отдельный блок администрирования: Jira, «По Делу», вход через домен (LDAP / Active Directory).
- * Каждая карточка показывает состояние подключения и ведёт к его настройке.
+ * Каждая карточка показывает состояние подключения и ведёт к его настройке. Сотрудник с полномочием «Настраивает
+ * модули» (ADR-0013) видит Jira и «По Делу»; вход через домен и ключи доступа — только администратору.
  */
+const auth = useAuthStore()
 const jira = ref(undefined)
 const podelu = ref(undefined)
 const links = ref(undefined)
@@ -17,9 +20,10 @@ const ldap = ref(undefined)
 const keys = ref(undefined)
 
 onMounted(async () => {
+  const adminOnly = (path) => (auth.isAdmin ? api.get(path) : Promise.reject(new Error('admin only')))
   const [j, p, l, d, k] = await Promise.allSettled([
-    api.get('/settings/jira'), api.get('/settings/podelu'), api.get('/settings/podelu/links'), api.get('/settings/ldap'),
-    api.get('/settings/integration-keys'),
+    api.get('/settings/jira'), api.get('/settings/podelu'), api.get('/settings/podelu/links'), adminOnly('/settings/ldap'),
+    adminOnly('/settings/integration-keys'),
   ])
   jira.value = j.status === 'fulfilled' ? j.value : null
   podelu.value = p.status === 'fulfilled' ? p.value : null
@@ -32,7 +36,8 @@ function host(url) {
   try { return new URL(url).host } catch { return url || '' }
 }
 
-const cards = computed(() => [
+const cards = computed(() => allCards.value.filter((card) => auth.isAdmin || !['ldap', 'keys'].includes(card.id)))
+const allCards = computed(() => [
   {
     id: 'jira', to: '/admin/integrations/jira', logo: 'jira', title: 'Jira',
     text: 'Статусы, сроки и прогресс задач Jira в планах; задачи, релизы и спринты — строками плана; автоперенос и сверка.',

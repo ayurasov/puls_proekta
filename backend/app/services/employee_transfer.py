@@ -601,6 +601,7 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
     avatars — фото в архиве: {ключ записи: SHA-256 файла} (или список ключей без хешей).
     create_missing=False — сотрудников, которых нет в системе, не создавать (запись пропускается).
     Запись с идентификатором «По Делу» (синхронизация, ADR-0009) сопоставляется сначала по нему."""
+    actor = db.session.get(User, actor_id) if actor_id else None
     decisions = decisions if isinstance(decisions, dict) else {}
     if isinstance(avatars, dict):
         avatars = {str(key).lower(): str(digest or "") for key, digest in avatars.items()}
@@ -689,7 +690,7 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
             entry.action = "skip"
             entry.warnings.append("сотрудника нет в системе — не создаётся (создание новых сотрудников выключено)")
             continue
-        _plan_entry(entry, decision, actor_id=actor_id, new_users=new_users, snap=snap, by_login=by_login,
+        _plan_entry(entry, decision, actor_id=actor_id, actor=actor, new_users=new_users, snap=snap, by_login=by_login,
                     by_email=by_email, avatar_hashes=avatar_hashes,
                     avatar_in_file=avatars.get(key) if key in avatars else None)
     _check_logins(plan, by_login)
@@ -699,7 +700,16 @@ def plan_employees(records, *, actor_id, new_users="active", decisions=None, ava
     return plan
 
 
-def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, by_email, avatar_hashes, avatar_in_file):
+def _protected(actor, user):
+    """Учётная запись, которую загружающий не администратор не меняет: администратор или сотрудник с полномочиями,
+    которых нет у загружающего (ADR-0013)."""
+    if actor is None or actor.role == "admin":
+        return False
+    return user.role == "admin" or not set(user.capabilities or []) <= set(actor.capabilities or [])
+
+
+def _plan_entry(entry, decision, *, actor_id, actor=None, new_users, snap, by_login, by_email, avatar_hashes,
+                avatar_in_file):
     record, user = entry.record, entry.user
     field_decisions = decision.get("fields") if isinstance(decision.get("fields"), dict) else {}
     if user is None:
@@ -752,8 +762,21 @@ def _plan_entry(entry, decision, *, actor_id, new_users, snap, by_login, by_emai
     current = _current_values(user, snap, avatar_hashes)
     final = dict(current)
     own = record.department or current["department"]
+    # Загружает не администратор («Ведёт учётные записи», ADR-0013): учётные записи администраторов и сотрудников
+    # с полномочиями, которых нет у загружающего, файлом не меняются, роль «Администратор» не назначается
+    if _protected(actor, user):
+        entry.warnings.append("учётную запись администратора меняет только администратор — не применяется"
+                              if user.role == "admin" else
+                              "у сотрудника есть полномочия, которых нет у вас — учётная запись не меняется")
+        entry.final = final
+        entry.action = "unchanged"
+        return
     for field_name in COMPARED:
         incoming = _incoming(record, field_name, own)
+        if field_name == "role" and incoming == "admin" and actor is not None and actor.role != "admin":
+            if current["role"] != "admin":
+                entry.warnings.append("роль «Администратор» назначает только администратор — не применяется")
+            continue
         if field_name == "avatar":
             # Хеш фото из файла; без хеша (или без фото в системе) сравнить нельзя
             incoming = (avatar_in_file or "file") if avatar_in_file is not None else None

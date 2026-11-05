@@ -10,7 +10,8 @@ from app import audit
 from app.extensions import db
 from app.models import Direction, Plan, PlanItem, Project, User, utcnow
 from app.security import (
-    ApiError, accessible_projects_query, admin_required, current_user, login_required, project_levels,
+    accessible_projects_query, ApiError, capability_required, current_user, has_capability, login_required,
+    project_levels,
     require_project, roles_required,
 )
 from app.serializers import iso
@@ -305,7 +306,7 @@ def reorder_projects():
 
 
 @bp.delete("/projects/<int:project_id>")
-@admin_required
+@capability_required("trash.manage")
 def delete_project(project_id):
     """Проект уходит в корзину; удалить навсегда можно только из корзины."""
     project, _ = require_project(project_id, "manage")
@@ -318,7 +319,7 @@ def delete_project(project_id):
 
 
 @bp.post("/projects/<int:project_id>/restore")
-@admin_required
+@capability_required("trash.manage")
 def restore_project(project_id):
     project = db.session.get(Project, project_id)
     if project is None or project.deleted_at is None:
@@ -336,10 +337,11 @@ def restore_project(project_id):
 @bp.get("/trash")
 @login_required
 def trash():
-    """Корзина. Администратор видит всё; остальные — удалённые планы проектов, которыми полностью
-    управляют (вернуть план может «полное управление», удалить навсегда — только администратор)."""
+    """Корзина. Администратор и «Управляет корзиной» видят всё; остальные — удалённые планы проектов, которыми
+    полностью управляют (вернуть план может «полное управление», удалить навсегда — администратор или
+    «Управляет корзиной»)."""
     user = current_user()
-    is_admin = user.role == "admin"
+    is_admin = has_capability(user, "trash.manage")
     projects = db.session.execute(
         select(Project).where(Project.deleted_at.is_not(None)).order_by(Project.deleted_at.desc())
     ).scalars().all() if is_admin else []
@@ -363,7 +365,7 @@ def trash():
 
 
 @bp.delete("/trash/projects/<int:project_id>")
-@admin_required
+@capability_required("trash.manage")
 def purge_project(project_id):
     project = db.session.get(Project, project_id)
     if project is None or project.deleted_at is None:

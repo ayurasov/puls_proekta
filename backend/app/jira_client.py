@@ -426,6 +426,8 @@ class JiraClient:
         self.instance_type = instance_type
         self.detailed = detailed
         self.timeout = timeout
+        # on_result(ok, message) — итог каждого запроса для «Состояния системы» (ADR-0014); задаёт сервис
+        self.on_result = None
         self.session = requests.Session()  # прокси из окружения сервера подхватываются автоматически
         self.session.headers.update({"Accept": "application/json"})
         if instance_type == "server":
@@ -456,7 +458,28 @@ class JiraClient:
         return url if self.detailed else urlsplit(url).path
 
     def request(self, method, url, **kwargs):
-        """Запрос с повтором при 429/503 (с учётом Retry-After) и понятными сообщениями об ошибках."""
+        """Запрос с повтором при 429/503 (с учётом Retry-After) и понятными сообщениями об ошибках. Сбой связи,
+        отказ во входе (401) и ошибки сервера Jira (5xx) сообщаются в on_result как неполадка подключения;
+        остальные ответы (404, 403 на отдельную задачу) — как работающее подключение."""
+        try:
+            resp = self._request(method, url, **kwargs)
+        except JiraError as exc:
+            self._report(False, str(exc))
+            raise
+        if resp is not None and (resp.status_code == 401 or resp.status_code >= 500):
+            self._report(False, f"Jira вернула ошибку {resp.status_code}")
+        else:
+            self._report(True, "")
+        return resp
+
+    def _report(self, ok, message):
+        if self.on_result is not None:
+            try:
+                self.on_result(ok, message)
+            except Exception:  # noqa: BLE001 — учёт состояния не должен ломать запрос
+                pass
+
+    def _request(self, method, url, **kwargs):
         resp = None
         for attempt in range(1, MAX_ATTEMPTS + 1):
             try:

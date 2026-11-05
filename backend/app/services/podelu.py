@@ -83,6 +83,12 @@ def make_client(override=None, total_timeout=None):
         raise PodeluError("Укажите логин учётной записи «По Делу»")
     if not password:
         raise PodeluError("Укажите пароль учётной записи «По Делу»")
-    return PodeluClient(conf["baseUrl"], conf["login"], password, accept_invalid_certs=bool(conf.get("acceptInvalidCerts")),
-                        total_timeout=total_timeout or current_app.config.get("PODELU_TOTAL_TIMEOUT") or None,
-                        server_url=check_server_url(conf.get("serverUrl"), check_base_url(conf["baseUrl"])))
+    client = PodeluClient(conf["baseUrl"], conf["login"], password,
+                          accept_invalid_certs=bool(conf.get("acceptInvalidCerts")),
+                          total_timeout=total_timeout or current_app.config.get("PODELU_TOTAL_TIMEOUT") or None,
+                          server_url=check_server_url(conf.get("serverUrl"), check_base_url(conf["baseUrl"])))
+    if override is None:
+        from app.services import system_health
+
+        client.on_result = system_health.reporter("podelu")
+    return client

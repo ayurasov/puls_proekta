@@ -186,8 +186,14 @@ def make_client(override=None, detailed=False):
         raise JiraError("Укажите пароль или токен")
     if conf["instanceType"] != "server" and not conf.get("login"):
         raise JiraError("Укажите email или логин")
-    return JiraClient(conf["baseUrl"], conf["instanceType"], conf.get("login") or "", token,
-                      accept_invalid_certs=bool(conf.get("acceptInvalidCerts")), detailed=detailed)
+    client = JiraClient(conf["baseUrl"], conf["instanceType"], conf.get("login") or "", token,
+                        accept_invalid_certs=bool(conf.get("acceptInvalidCerts")), detailed=detailed)
+    if override is None:
+        # Сохранённое подключение: итог запросов — в «Состояние системы» (ADR-0014); проверка формы — нет
+        from app.services import system_health
+
+        client.on_result = system_health.reporter("jira")
+    return client
 
 
 def _store(rows):

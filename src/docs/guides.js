@@ -45,10 +45,11 @@ export const GUIDES = {
   },
 }
 
-/** Может ли сотрудник читать руководство (auth — хранилище stores/auth или { isAdmin }). */
+/** Может ли сотрудник читать руководство (auth — хранилище stores/auth или { isAdmin, hasAdminArea }):
+ * руководство администратора — и сотрудникам с полномочиями (ADR-0013), в нём описаны их разделы. */
 export function canReadGuide(kind, auth) {
   const guide = GUIDES[kind]
-  return Boolean(guide && (!guide.adminOnly || auth?.isAdmin))
+  return Boolean(guide && (!guide.adminOnly || auth?.isAdmin || auth?.hasAdminArea))
 }
 
 /** Руководства, доступные сотруднику, — для ссылок и переключателя. */

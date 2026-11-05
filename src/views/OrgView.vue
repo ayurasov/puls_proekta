@@ -342,12 +342,12 @@ const without = computed(() => org.people.filter((p) => p.isActive && !p.departm
           <p v-if="!results.length" class="muted small pad">Ничего не найдено</p>
         </div>
       </div>
-      <router-link v-if="auth.isAdmin" class="btn" to="/admin/structure"><AppIcon name="edit" :size="14" /> Изменить структуру</router-link>
+      <router-link v-if="auth.can('org.manage')" class="btn" to="/admin/structure"><AppIcon name="edit" :size="14" /> Изменить структуру</router-link>
     </div>
 
     <div v-if="org.loaded && !org.departments.length" class="card empty-state">
       <h3>Структура компании ещё не заполнена</h3>
-      <p v-if="auth.isAdmin">Создайте подразделения в разделе <router-link to="/admin/structure">«Структура»</router-link> или загрузите
+      <p v-if="auth.can('org.manage')">Создайте подразделения в разделе <router-link to="/admin/structure">«Структура»</router-link> или загрузите
         структуру из файла «По Делу».</p>
       <p v-else>Администратор пока не заполнил структуру.</p>
     </div>

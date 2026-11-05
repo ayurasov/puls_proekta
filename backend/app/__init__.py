@@ -59,6 +59,9 @@ def _configure_error_handlers(app):
     def _unhandled(exc):
         app.logger.exception("Unhandled exception during request")
         db.session.rollback()
+        from app.services import system_health
+
+        system_health.note_server_error(exc)
         if app.config.get("TESTING"):
             raise exc
         return jsonify({"error": "internal_server_error", "message": "Внутренняя ошибка сервера"}), 500
@@ -83,11 +86,12 @@ def _register_blueprints(app):
     from app.api import podelu_links  # noqa: F401 — маршруты ответной интеграции в том же blueprint «По Делу»
     from app.api.projects import bp as projects_bp
     from app.api.settings import bp as settings_bp
+    from app.api.system import bp as system_bp
     from app.api.users import bp as users_bp
 
     for bp in (health_bp, auth_bp, avatars_bp, users_bp, directions_bp, projects_bp, plans_bp,
                access_bp, audit_bp, settings_bp, calendar_bp, jira_bp, org_bp, org_transfer_bp, podelu_bp, integration_bp,
-               integration_keys_bp, msproject_bp):
+               integration_keys_bp, msproject_bp, system_bp):
         app.register_blueprint(bp)
 
 
@@ -113,6 +117,9 @@ def create_app(config_name=None, overrides=None):
     app.session_interface = DbSessionInterface()
 
     _register_blueprints(app)
+    from app.services import system_health
+
+    system_health.install(app)
     _configure_error_handlers(app)
 
     from app.cli import register_cli

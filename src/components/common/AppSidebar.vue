@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '../../stores/auth'
 import { useProjectsStore } from '../../stores/projects'
+import { useSystemHealthStore } from '../../stores/systemHealth'
+import { ADMIN_SECTIONS, allowedSections, INTEGRATION_SECTIONS } from '../../utils/capabilities'
 import { localStorageGet, localStorageSet, useUiStore } from '../../stores/ui'
 import AppIcon from './AppIcon.vue'
 import UserAvatar from './UserAvatar.vue'
@@ -37,25 +39,19 @@ function toggle(group) {
 }
 
 const groups = computed(() => projects.grouped.filter((g) => g.projects.length || g.direction))
-const adminLinks = [
-  { to: '/admin/users', icon: 'users', label: 'Сотрудники' },
-  { to: '/admin/structure', icon: 'hierarchy', label: 'Структура' },
-  { to: '/admin/org-transfer', icon: 'upload', label: 'Импорт и экспорт' },
-  { to: '/admin/directions', icon: 'folder', label: 'Направления' },
-  { to: '/admin/access', icon: 'shield', label: 'Доступы' },
-  { to: '/admin/audit', icon: 'history', label: 'Реестр изменений' },
-  { to: '/admin/trash', icon: 'trash', label: 'Корзина' },
-  { to: '/admin/settings', icon: 'calendar', label: 'Календарь' },
-]
+// Разделы администрирования — администратору все, сотруднику с полномочиями — свои (ADR-0013)
+const adminLinks = computed(() => allowedSections(auth.user, ADMIN_SECTIONS))
 // Интеграции — отдельный блок: подключения к другим системам и вход через домен
-const integrationLinks = [
-  { to: '/admin/integrations/jira', icon: 'jira', label: 'Jira' },
-  { to: '/admin/integrations/podelu', icon: 'podelu', label: '«По Делу»' },
-  { to: '/admin/integrations/ldap', icon: 'shield', label: 'Вход через домен' },
-  { to: '/admin/integrations/keys', icon: 'key', label: 'Ключи доступа' },
-]
+const integrationLinks = computed(() => allowedSections(auth.user, INTEGRATION_SECTIONS))
 
-onMounted(() => { if (!projects.loaded) projects.load().catch(() => {}) })
+// Точка у «Состояния системы»: жёлтая — есть замечания, красная — неполадки (ADR-0014)
+const health = useSystemHealthStore()
+const HEALTH_TITLES = { warn: 'Есть замечания', error: 'Есть неполадки' }
+
+onMounted(() => {
+  if (!projects.loaded) projects.load().catch(() => {})
+  if (auth.can('system.health') && !health.data) health.load()
+})
 
 async function logout() {
   await auth.logout()
@@ -85,7 +81,7 @@ async function logout() {
       <router-link to="/org" class="nav-item" title="Структура компании" data-testid="org-link">
         <AppIcon name="hierarchy" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Структура компании</span>
       </router-link>
-      <router-link v-if="auth.user?.role === 'manager'" to="/admin/trash" class="nav-item" title="Корзина — удалённые планы ваших проектов">
+      <router-link v-if="auth.user?.role === 'manager' && !auth.can('trash.manage')" to="/admin/trash" class="nav-item" title="Корзина — удалённые планы ваших проектов">
         <AppIcon name="trash" /><span v-if="!ui.sidebarCollapsed" class="nav-label">Корзина</span>
       </router-link>
     </nav>
@@ -111,15 +107,22 @@ async function logout() {
       </div>
     </div>
 
-    <div v-if="auth.isAdmin" class="sidebar-section">
+    <div v-if="adminLinks.length" class="sidebar-section" data-testid="sidebar-admin">
       <div v-if="!ui.sidebarCollapsed" class="section-caption">Администрирование</div>
-      <router-link v-for="link in adminLinks" :key="link.to" :to="link.to" class="nav-item" :title="link.label">
+      <router-link
+        v-for="link in adminLinks" :key="link.to" :to="link.to" class="nav-item" :title="link.label"
+        :data-testid="`nav-admin-${link.to.split('/').pop()}`"
+      >
         <AppIcon :name="link.icon" /><span v-if="!ui.sidebarCollapsed" class="nav-label">{{ link.label }}</span>
+        <span
+          v-if="link.to === '/admin/health' && HEALTH_TITLES[health.status]" class="health-dot" :class="`is-${health.status}`"
+          :title="HEALTH_TITLES[health.status]" data-testid="nav-health-dot"
+        />
       </router-link>
     </div>
 
-    <div v-if="auth.isAdmin" class="sidebar-section" data-testid="sidebar-integrations">
-      <router-link v-if="!ui.sidebarCollapsed" to="/admin/integrations" class="section-caption caption-link" exact-active-class="is-current" title="Все интеграции">
+    <div v-if="integrationLinks.length" class="sidebar-section" data-testid="sidebar-integrations">
+      <router-link v-if="!ui.sidebarCollapsed && auth.can('modules.manage')" to="/admin/integrations" class="section-caption caption-link" exact-active-class="is-current" title="Все интеграции">
         Интеграции
       </router-link>
       <router-link
@@ -182,6 +185,12 @@ async function logout() {
 .int-podelu { background: #15803d; }
 .nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border-radius: var(--radius-sm); font-size: 13px; color: var(--color-text); text-decoration: none; border: 0; background: none; text-align: left; width: 100%; white-space: nowrap; min-height: 32px; }
 .sidebar.collapsed .nav-item { justify-content: center; padding: 8px; }
+/* Точка у «Состояния системы»: жёлтая — замечания, красная — неполадки */
+.health-dot { flex-shrink: 0; width: 8px; height: 8px; margin-left: auto; border-radius: 50%; box-shadow: 0 0 0 3px var(--dot-ring); }
+.health-dot.is-warn { background: #e8a317; --dot-ring: rgba(232, 163, 23, 0.18); }
+.health-dot.is-error { background: #e5484d; --dot-ring: rgba(229, 72, 77, 0.18); }
+.sidebar.collapsed .nav-item:has(.health-dot) { position: relative; }
+.sidebar.collapsed .health-dot { position: absolute; top: 6px; right: 6px; width: 7px; height: 7px; margin: 0; }
 .nav-item:hover { background: #eef1f7; }
 .nav-item.router-link-active { background: var(--color-primary-soft); color: var(--color-primary-dark); font-weight: 600; }
 .nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

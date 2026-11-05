@@ -9,7 +9,7 @@ from sqlalchemy import select
 from app import audit
 from app.extensions import db
 from app.models import AccessRule, Department, DepartmentAccessRule, Direction, Project, User
-from app.security import ApiError, admin_required, best_level, cap_level, department_chain
+from app.security import ApiError, best_level, cap_level, capability_required, department_chain
 from app.serializers import iso
 
 bp = Blueprint("access", __name__, url_prefix="/api/access")
@@ -62,7 +62,7 @@ def _lookups():
 
 
 @bp.get("")
-@admin_required
+@capability_required("access.manage")
 def list_rules():
     stmt = select(AccessRule).order_by(AccessRule.id)
     if request.args.get("userId", type=int):
@@ -75,7 +75,7 @@ def list_rules():
 
 
 @bp.post("")
-@admin_required
+@capability_required("access.manage")
 def grant():
     """Массовая выдача: каждому из сотрудников — к каждому проекту/направлению. Повторов не создаёт."""
     payload = BulkGrant.model_validate(request.get_json(silent=True) or {})
@@ -125,7 +125,7 @@ def grant():
 
 
 @bp.patch("/<int:rule_id>")
-@admin_required
+@capability_required("access.manage")
 def update_rule(rule_id):
     rule = db.session.get(AccessRule, rule_id)
     if rule is None:
@@ -144,13 +144,13 @@ def update_rule(rule_id):
 
 
 @bp.delete("/<int:rule_id>")
-@admin_required
+@capability_required("access.manage")
 def delete_rule(rule_id):
     return _delete([rule_id])
 
 
 @bp.post("/delete")
-@admin_required
+@capability_required("access.manage")
 def delete_many():
     payload = BulkDelete.model_validate(request.get_json(silent=True) or {})
     return _delete(payload.ids)
@@ -170,7 +170,7 @@ def _delete(ids):
 
 
 @bp.get("/effective")
-@admin_required
+@capability_required("access.manage")
 def effective():
     """Матрица «сотрудник × проект» с итоговыми уровнями."""
     users = db.session.execute(select(User).where(User.is_active.is_(True)).order_by(User.name)).scalars().all()
@@ -245,7 +245,7 @@ def _serialize_department(rule, paths, snap, projects, directions):
 
 
 @bp.get("/departments")
-@admin_required
+@capability_required("access.manage")
 def list_department_rules():
     rules = db.session.execute(select(DepartmentAccessRule).order_by(DepartmentAccessRule.id)).scalars().all()
     _users, projects, directions = _lookups()
@@ -254,7 +254,7 @@ def list_department_rules():
 
 
 @bp.post("/departments")
-@admin_required
+@capability_required("access.manage")
 def grant_departments():
     """Выдать подразделениям (со всеми вложенными) доступ к проектам и направлениям."""
     payload = DepartmentGrant.model_validate(request.get_json(silent=True) or {})
@@ -303,7 +303,7 @@ def grant_departments():
 
 
 @bp.patch("/departments/<int:rule_id>")
-@admin_required
+@capability_required("access.manage")
 def update_department_rule(rule_id):
     rule = db.session.get(DepartmentAccessRule, rule_id)
     if rule is None:
@@ -322,7 +322,7 @@ def update_department_rule(rule_id):
 
 
 @bp.post("/departments/delete")
-@admin_required
+@capability_required("access.manage")
 def delete_department_rules():
     payload = BulkDelete.model_validate(request.get_json(silent=True) or {})
     _users, projects, directions = _lookups()

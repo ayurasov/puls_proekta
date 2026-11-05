@@ -62,6 +62,8 @@ class User(db.Model):
     external_id = db.Column(db.String(255), nullable=True, index=True)
     # Идентификатор сотрудника в «По Делу» (ADR-0009): ссылка на его карточку и сопоставление при синхронизации
     podelu_id = db.Column(db.String(36), nullable=True, index=True)
+    # Полномочия без роли администратора (ADR-0013): ключи из security.CAPABILITIES
+    capabilities = db.Column(db.JSON, nullable=False, default=list, server_default="[]")
     created_at = db.Column(db.DateTime, nullable=False, default=utcnow)
     updated_at = db.Column(db.DateTime, nullable=False, default=utcnow, onupdate=utcnow)
     last_login_at = db.Column(db.DateTime, nullable=True)

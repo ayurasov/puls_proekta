@@ -10,7 +10,7 @@ from sqlalchemy import distinct, func, or_, select
 from app.audit_display import SECTION_LABELS, AuditLookups, display_row
 from app.extensions import db
 from app.models import AuditLog, User
-from app.security import ApiError, admin_required
+from app.security import ApiError, capability_required
 from app.serializers import iso
 
 bp = Blueprint("audit", __name__, url_prefix="/api/audit")
@@ -65,7 +65,7 @@ def _row(r, lookups):
 
 
 @bp.get("")
-@admin_required
+@capability_required("audit.view")
 def list_audit():
     limit = min(max(request.args.get("limit", 100, type=int), 1), 500)
     stmt = _filtered()
@@ -80,7 +80,7 @@ def list_audit():
 
 
 @bp.get("/facets")
-@admin_required
+@capability_required("audit.view")
 def facets():
     def values(column):
         return [v for v in db.session.execute(select(distinct(column)).order_by(column)).scalars() if v]
@@ -99,7 +99,7 @@ def facets():
 
 
 @bp.get("/export.csv")
-@admin_required
+@capability_required("audit.view")
 def export_csv():
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";")

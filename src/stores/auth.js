@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { api, AuthRequiredError, ensureCsrf } from '../api/client'
+import { effectiveCapabilities, hasAdminArea, hasCapability } from '../utils/capabilities'
 
 export const ROLE_LABELS = { admin: 'Администратор', manager: 'Менеджер', editor: 'Редактор', viewer: 'Наблюдатель' }
 
@@ -7,6 +8,11 @@ export const useAuthStore = defineStore('auth', {
   state: () => ({ user: null, checked: false, config: { mode: 'local', ldapEnabled: false } }),
   getters: {
     isAdmin: (s) => s.user?.role === 'admin',
+    /** Действующие полномочия (ADR-0013): у администратора — все. */
+    capabilities: (s) => effectiveCapabilities(s.user),
+    /** can('users.manage') — есть ли полномочие; несколько ключей — хотя бы одно; 'admin' — только администратор. */
+    can: (s) => (...capabilities) => hasCapability(s.user, ...capabilities),
+    hasAdminArea: (s) => hasAdminArea(s.user),
     canCreateProjects: (s) => ['admin', 'manager'].includes(s.user?.role),
     roleLabel: (s) => ROLE_LABELS[s.user?.role] || '',
   },
