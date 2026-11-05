@@ -1,6 +1,6 @@
 ---
 title: "Пульс Проекта — руководство по развёртыванию"
-subtitle: "Версия 0.7.1"
+subtitle: "Версия 0.7.2"
 date: "Октябрь 2026"
 lang: ru
 ---
@@ -54,7 +54,7 @@ db — PostgreSQL 16, том db_data              backup — ежедневны�
 ## Шаг 1. Получение дистрибутива
 
 ```bash
-sudo git clone --branch v0.7.1 <адрес репозитория puls_proekta> /opt/puls
+sudo git clone --branch v0.7.2 <адрес репозитория puls_proekta> /opt/puls
 cd /opt/puls
 ```
 
@@ -86,7 +86,7 @@ sudo docker compose ps
 
 ```bash
 curl -fsS http://127.0.0.1:39663/api/health/ready; echo
-# {"status":"ok","schema":"0007_plan_links","version":"0.7.1"}
+# {"status":"ok","schema":"0008_user_capabilities","version":"0.7.2"}
 curl -sI http://127.0.0.1:39663/ | grep -i content-security-policy
 ```
 
@@ -274,6 +274,12 @@ sudo docker compose exec backup sh /usr/local/bin/backup.sh list          # сп
 
 `deploy/update.sh` делает копию `pre-update` перед каждым обновлением, восстановление — копию `pre-restore`.
 
+После каждой копии контейнер записывает её итог в базу (`app_settings.backup_status`: время, файл, размер,
+сколько копий хранится; при ошибке — отметка о неудаче, время последней удачной копии сохраняется). Его
+показывает раздел «Администрирование → Состояние системы»: копии не было больше суток — карточка жёлтая, больше
+двух суток или копия не удалась — красная. Если записать итог не удалось (база недоступна), копия всё равно
+остаётся, а в журнале контейнера — строка «не удалось записать итог копии в базу».
+
 > **Важно.** Копии на том же сервере не спасут от его потери. Копируйте `BACKUP_DIR` на другой сервер, например
 > ежедневно cron-задачей: `rsync -a --chmod=F600 /opt/puls/backups/ backup@storage:/backups/puls/`.
 
@@ -301,7 +307,7 @@ sudo docker compose start backend frontend
 
 ```bash
 cd /opt/puls
-sudo sh deploy/update.sh v0.7.1
+sudo sh deploy/update.sh v0.7.2
 ```
 
 Скрипт: копия `pre-update` → получение версии из git (ветка — только перемоткой вперёд) → сборка и перезапуск
@@ -345,6 +351,11 @@ sudo docker compose exec backend alembic downgrade 0006_integration_keys
 
 Контейнеры проверяют себя сами (`docker compose ps` — `healthy`) и перезапускаются после сбоя
 (`restart: unless-stopped`).
+
+Сводку для людей — схема базы, резервные копии, ошибки сервера за сутки, подключения к Jira, «По Делу» и
+каталогу, производственный календарь — показывает раздел **Администрирование → Состояние системы**
+(администратору и сотрудникам с полномочием «Смотрит состояние системы»). Его данные — `GET /api/system/health`
+под сеансом такого сотрудника.
 
 ## Журналы
 
@@ -463,13 +474,13 @@ sudo docker compose logs backup              # резервные копии
 cd puls_proekta
 docker compose build
 docker pull postgres:16-alpine
-docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.7.1-images.tar.gz
+docker save puls-backend puls-frontend postgres:16-alpine | gzip > puls-0.7.2-images.tar.gz
 ```
 
 На сервере:
 
 ```bash
-gunzip -c puls-0.7.1-images.tar.gz | sudo docker load
+gunzip -c puls-0.7.2-images.tar.gz | sudo docker load
 cd /opt/puls
 sudo docker compose up -d          # без --build: используются загруженные образы
 ```
