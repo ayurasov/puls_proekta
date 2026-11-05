@@ -8,6 +8,9 @@
 * viewer (Наблюдатель) — только просмотр: уровень доступа ограничен «просмотром»,
   даже если правило выдаёт больше.
 
+Полномочия без роли администратора (ADR-0013, app/capabilities.py) открывают сотруднику отдельные разделы
+администрирования: has_capability, capability_required; у администратора действуют все.
+
 Уровни доступа к проекту: view < edit < manage. Правило выдаётся на проект или на всё
 направление — сотруднику или подразделению (действует на всю ветку подразделения, ADR-0008);
 действует наибольший уровень. Менеджер-автор проекта имеет manage.
@@ -18,6 +21,7 @@ from functools import wraps
 from flask import g, jsonify, session
 from sqlalchemy import or_, select
 
+from app.capabilities import CAPABILITIES
 from app.extensions import db
 from app.models import AccessRule, Department, DepartmentAccessRule, Project, User
 
@@ -89,6 +93,84 @@ def roles_required(*roles):
 
 
 admin_required = roles_required("admin")
+
+def user_capabilities(user):
+    """Действующие полномочия сотрудника: у администратора — все, у отключённого — никаких."""
+    if user is None or not user.is_active:
+        return []
+    if user.role == "admin":
+        return list(CAPABILITIES)
+    own = set(user.capabilities or [])
+    return [key for key in CAPABILITIES if key in own]
+
+
+def has_capability(user, *capabilities):
+    """Есть ли у сотрудника хотя бы одно из полномочий."""
+    if user is None or not user.is_active:
+        return False
+    if user.role == "admin":
+        return True
+    own = set(user.capabilities or [])
+    return any(c in own for c in capabilities)
+
+
+def capability_required(*capabilities, message="Недостаточно прав"):
+    """Администратор или сотрудник с одним из полномочий."""
+    def decorator(view):
+        @wraps(view)
+        def wrapper(*args, **kwargs):
+            user = current_user()
+            if user is None:
+                raise ApiError(401, "auth_required", "Требуется вход в систему")
+            if not has_capability(user, *capabilities):
+                raise ApiError(403, "forbidden", message)
+            return view(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+SYNC_NEEDS_BOTH = ("Синхронизация меняет и учётные записи: нужны полномочия «Ведёт структуру компании» "
+                   "и «Ведёт учётные записи»")
+
+
+def require_capabilities(user, *capabilities, message="Недостаточно прав"):
+    """Все перечисленные полномочия (администратору — всегда)."""
+    if user is None:
+        raise ApiError(401, "auth_required", "Требуется вход в систему")
+    if user.role != "admin" and not all(has_capability(user, c) for c in capabilities):
+        raise ApiError(403, "forbidden", message)
+
+
+def roles_or_capability(roles, *capabilities):
+    """Роль из списка или одно из полномочий (направления: менеджер или «Выдаёт доступы к проектам»)."""
+    def decorator(view):
+        @wraps(view)
+        def wrapper(*args, **kwargs):
+            user = current_user()
+            if user is None:
+                raise ApiError(401, "auth_required", "Требуется вход в систему")
+            if user.role not in roles and not has_capability(user, *capabilities):
+                raise ApiError(403, "forbidden", "Недостаточно прав")
+            return view(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
+
+
+def can_manage_account(actor, target):
+    """Может ли сотрудник с «Ведёт учётные записи» менять вход, роль и данные target. Администратор — любого;
+    остальные — не администраторов и не тех, у кого есть полномочия, которых нет у них самих: иначе через пароль
+    чужой учётной записи можно было бы получить чужие права."""
+    if actor is None:
+        return False
+    if actor.role == "admin":
+        return True
+    if not has_capability(actor, "users.manage") or target.role == "admin":
+        return False
+    return set(target.capabilities or []) <= set(actor.capabilities or [])
 
 
 def cap_level(user, level):

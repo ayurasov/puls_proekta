@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { ADMIN_SECTIONS, allowedSections, INTEGRATION_SECTIONS } from '../utils/capabilities'
 
 const routes = [
   { path: '/login', name: 'login', component: () => import('../views/LoginView.vue'), meta: { public: true, title: 'Вход' } },
@@ -9,22 +10,23 @@ const routes = [
     component: () => import('../views/ProjectView.vue'), meta: { layout: 'fill' },
   },
   { path: '/org', name: 'org', component: () => import('../views/OrgView.vue'), meta: { title: 'Структура компании' } },
-  { path: '/admin', redirect: '/admin/users' },
-  { path: '/admin/users', name: 'admin-users', component: () => import('../views/admin/UsersView.vue'), meta: { admin: true, title: 'Сотрудники' } },
-  { path: '/admin/structure', name: 'admin-structure', component: () => import('../views/admin/StructureView.vue'), meta: { admin: true, title: 'Структура компании' } },
-  { path: '/admin/org-transfer', name: 'admin-org-transfer', component: () => import('../views/admin/OrgTransferView.vue'), meta: { admin: true, title: 'Импорт и экспорт структуры' } },
-  { path: '/admin/directions', name: 'admin-directions', component: () => import('../views/admin/DirectionsView.vue'), meta: { admin: true, title: 'Направления' } },
-  { path: '/admin/access', name: 'admin-access', component: () => import('../views/admin/AccessView.vue'), meta: { admin: true, title: 'Доступы' } },
-  { path: '/admin/audit', name: 'admin-audit', component: () => import('../views/admin/AuditView.vue'), meta: { admin: true, title: 'Реестр изменений' } },
+  { path: '/admin', name: 'admin', component: () => import('../views/NotFoundView.vue'), meta: { adminHome: true } },
+  { path: '/admin/health', name: 'admin-health', component: () => import('../views/admin/SystemHealthView.vue'), meta: { capability: 'system.health', title: 'Состояние системы' } },
+  { path: '/admin/users', name: 'admin-users', component: () => import('../views/admin/UsersView.vue'), meta: { capability: 'users.manage', title: 'Сотрудники' } },
+  { path: '/admin/structure', name: 'admin-structure', component: () => import('../views/admin/StructureView.vue'), meta: { capability: 'org.manage', title: 'Структура компании' } },
+  { path: '/admin/org-transfer', name: 'admin-org-transfer', component: () => import('../views/admin/OrgTransferView.vue'), meta: { capability: ['org.manage', 'users.manage'], title: 'Импорт и экспорт структуры' } },
+  { path: '/admin/directions', name: 'admin-directions', component: () => import('../views/admin/DirectionsView.vue'), meta: { capability: 'access.manage', title: 'Направления' } },
+  { path: '/admin/access', name: 'admin-access', component: () => import('../views/admin/AccessView.vue'), meta: { capability: 'access.manage', title: 'Доступы' } },
+  { path: '/admin/audit', name: 'admin-audit', component: () => import('../views/admin/AuditView.vue'), meta: { capability: 'audit.view', title: 'Реестр изменений' } },
   // До 0.5.0 «Настройки» содержали и вход через домен: старые ссылки ?tab=ldap ведут в «Интеграции»
   {
     path: '/admin/settings', name: 'admin-settings', component: () => import('../views/admin/SettingsView.vue'),
-    meta: { admin: true, title: 'Производственный календарь' },
+    meta: { capability: 'calendar.manage', title: 'Производственный календарь' },
     beforeEnter: (to) => (to.query.tab === 'ldap' ? { path: '/admin/integrations/ldap', replace: true } : true),
   },
-  { path: '/admin/integrations', name: 'admin-integrations', component: () => import('../views/admin/IntegrationsView.vue'), meta: { admin: true, title: 'Интеграции' } },
-  { path: '/admin/integrations/jira', name: 'admin-integrations-jira', component: () => import('../views/admin/integrations/JiraIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Jira' } },
-  { path: '/admin/integrations/podelu', name: 'admin-integrations-podelu', component: () => import('../views/admin/integrations/PodeluIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · «По Делу»' } },
+  { path: '/admin/integrations', name: 'admin-integrations', component: () => import('../views/admin/IntegrationsView.vue'), meta: { capability: 'modules.manage', title: 'Интеграции' } },
+  { path: '/admin/integrations/jira', name: 'admin-integrations-jira', component: () => import('../views/admin/integrations/JiraIntegrationView.vue'), meta: { capability: 'modules.manage', title: 'Интеграции · Jira' } },
+  { path: '/admin/integrations/podelu', name: 'admin-integrations-podelu', component: () => import('../views/admin/integrations/PodeluIntegrationView.vue'), meta: { capability: 'modules.manage', title: 'Интеграции · «По Делу»' } },
   { path: '/admin/integrations/keys', name: 'admin-integrations-keys', component: () => import('../views/admin/integrations/KeysIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Ключи доступа' } },
   { path: '/admin/integrations/ldap', name: 'admin-integrations-ldap', component: () => import('../views/admin/integrations/LdapIntegrationView.vue'), meta: { admin: true, title: 'Интеграции · Вход через домен' } },
   { path: '/admin/trash', name: 'admin-trash', component: () => import('../views/admin/TrashView.vue'), meta: { trash: true, title: 'Корзина' } },
@@ -33,7 +35,7 @@ const routes = [
   { path: '/guide', name: 'guide', component: () => import('../views/GuideView.vue'), meta: { title: 'Руководство пользователя', guide: 'user' } },
   {
     path: '/guide/admin', name: 'guide-admin', component: () => import('../views/GuideView.vue'),
-    meta: { admin: true, fallback: '/guide', title: 'Руководство администратора', guide: 'admin' },
+    meta: { adminArea: true, fallback: '/guide', title: 'Руководство администратора', guide: 'admin' },
   },
   // PDF руководства в 0.2.0 лежал по адресу /user-guide.pdf — старые ссылки ведут к руководству
   { path: '/user-guide.pdf', redirect: '/guide' },
@@ -50,7 +52,7 @@ export const router = createRouter({
 export function legacyHashTarget(hash) {
   const match = /^#\/project\/(\d+)/.exec(hash || '')
   if (match) return `/projects/${match[1]}`
-  if ((hash || '').startsWith('#/admin')) return '/admin/users'
+  if ((hash || '').startsWith('#/admin')) return '/admin'
   if (hash === '#/' || hash === '#') return '/'
   return null
 }
@@ -66,9 +68,17 @@ router.beforeEach((to) => {
     return true
   }
   if (!auth.user) return { name: 'login', query: to.fullPath !== '/' ? { next: to.fullPath } : {} }
-  if (to.meta.admin && !auth.isAdmin) return to.meta.fallback ? { path: to.meta.fallback, replace: true } : { name: 'projects' }
+  const denied = to.meta.fallback ? { path: to.meta.fallback, replace: true } : { name: 'projects' }
+  // /admin — первый доступный раздел администрирования (ADR-0013: у сотрудника с полномочиями — свои разделы)
+  if (to.meta.adminHome) {
+    const first = allowedSections(auth.user, ADMIN_SECTIONS)[0] || allowedSections(auth.user, INTEGRATION_SECTIONS)[0]
+    return first ? { path: first.to, replace: true } : { name: 'projects' }
+  }
+  if (to.meta.admin && !auth.isAdmin) return denied
+  if (to.meta.adminArea && !auth.hasAdminArea) return denied
+  if (to.meta.capability && !auth.can(to.meta.capability)) return denied
   // Корзину видят и менеджеры — удалённые планы своих проектов (вернуть их может «полное управление»)
-  if (to.meta.trash && !auth.canCreateProjects) return { name: 'projects' }
+  if (to.meta.trash && !auth.canCreateProjects && !auth.can('trash.manage')) return { name: 'projects' }
   return true
 })
 

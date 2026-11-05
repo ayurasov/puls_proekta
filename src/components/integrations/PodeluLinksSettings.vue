@@ -2,6 +2,7 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
+import { useAuthStore } from '../../stores/auth'
 import { useDialogs } from '../../composables/useDialogs'
 import { formatDateTime } from '../../utils/format'
 import AppIcon from '../common/AppIcon.vue'
@@ -19,6 +20,8 @@ import { SERVER_URL_PLACEHOLDER, effectiveServerUrl, normalizeUrl, sameAddresses
  */
 const emit = defineEmits(['changed'])
 const ui = useUiStore()
+// Ключ «Пульса» открывает другой системе проекты — его выпускает только администратор (ADR-0013)
+const auth = useAuthStore()
 const { confirm } = useDialogs()
 
 const saved = ref(null)
@@ -149,8 +152,8 @@ const canEnable = computed(() => checked.value && !dirty.value)
         <div class="step-body">
           <div class="step-title">Ключ «Пульса» для «По Делу»</div>
           <p class="muted small">«По Делу» ищет с ним проекты и строки планов — только те, что доступны сотруднику в «Пульсе». Вставьте ключ в «По Делу»:
-            Настройки → Интеграции → «Пульс проекта». Ключи всех систем — в разделе
-            <router-link to="/admin/integrations/keys">«Ключи доступа»</router-link>.</p>
+            Настройки → Интеграции → «Пульс проекта».<template v-if="auth.isAdmin"> Ключи всех систем — в разделе
+              <router-link to="/admin/integrations/keys">«Ключи доступа»</router-link>.</template></p>
           <div v-if="issued" class="issued" data-testid="podelu-links-issued">
             <code class="key mono">{{ issued.key }}</code>
             <button class="btn btn-sm" type="button" data-testid="podelu-links-copy" @click="copyKey"><AppIcon :name="copied ? 'check' : 'copy'" :size="13" /> {{ copied ? 'Скопирован' : 'Скопировать' }}</button>
@@ -162,12 +165,14 @@ const canEnable = computed(() => checked.value && !dirty.value)
             <span class="muted">{{ formatDateTime(saved.inbound.createdAt) }}</span>
             <span class="muted">· {{ saved.inbound.lastUsedAt ? `«По Делу» обращалась ${formatDateTime(saved.inbound.lastUsedAt)}` : '«По Делу» ещё не обращалась' }}</span>
           </div>
-          <div class="row-actions">
+          <div v-if="auth.isAdmin" class="row-actions">
             <button class="btn btn-sm" :class="{ 'btn-primary': !saved.inbound }" type="button" :disabled="!!busy" data-testid="podelu-links-issue" @click="issueKey">
               <AppIcon name="key" :size="13" /> {{ saved.inbound ? 'Выпустить новый' : 'Выпустить ключ' }}
             </button>
             <button v-if="saved.inbound" class="btn btn-sm btn-ghost danger" type="button" @click="revokeKey">Отозвать</button>
           </div>
+          <p v-else class="muted small" data-testid="podelu-links-key-admin">Ключ выпускает и отзывает администратор: он открывает «По Делу»
+            проекты «Пульса».</p>
         </div>
       </li>
 

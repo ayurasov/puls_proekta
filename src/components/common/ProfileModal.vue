@@ -8,6 +8,7 @@ import { resizeImage } from '../../utils/images'
 import BaseModal from './BaseModal.vue'
 import UserAvatar from './UserAvatar.vue'
 import AppIcon from './AppIcon.vue'
+import { CAPABILITY_LABELS } from '../../utils/capabilities'
 
 const emit = defineEmits(['close'])
 const auth = useAuthStore()
@@ -96,6 +97,12 @@ async function changePassword() {
       <dt>Логин</dt><dd>{{ auth.user?.login }}</dd>
       <dt>Email</dt><dd>{{ auth.user?.email || '—' }}</dd>
       <dt>Вход</dt><dd>{{ auth.user?.authSource === 'ldap' ? 'учётная запись домена' : 'пароль системы' }}</dd>
+      <template v-if="!auth.isAdmin && auth.capabilities.length">
+        <dt>Полномочия</dt>
+        <dd data-testid="profile-capabilities">
+          <span v-for="cap in auth.capabilities" :key="cap" class="cap">{{ CAPABILITY_LABELS[cap] }}</span>
+        </dd>
+      </template>
     </dl>
     <p v-if="tab === 'info'" class="muted small">Изменить ФИО, должность или email может администратор.</p>
     <form v-if="tab === 'password'" class="form-stack" @submit.prevent="changePassword">
@@ -112,6 +119,7 @@ async function changePassword() {
 </template>
 
 <style scoped>
+.cap { display: inline-block; margin: 0 4px 4px 0; padding: 1px 8px; border-radius: 999px; background: #efe9fe; color: #6d3fd8; font-size: 12px; font-weight: 600; }
 .profile-head { display: flex; align-items: center; gap: 18px; margin-bottom: 16px; }
 .photo { position: relative; }
 .photo-button { border: 0; padding: 0; background: none; border-radius: 50%; }

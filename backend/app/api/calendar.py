@@ -10,7 +10,7 @@ from sqlalchemy import select
 from app import audit
 from app.extensions import db
 from app.models import CalendarDay
-from app.security import ApiError, admin_required, login_required
+from app.security import ApiError, capability_required, login_required
 
 bp = Blueprint("calendar", __name__, url_prefix="/api/calendar")
 
@@ -43,7 +43,7 @@ def list_days():
 
 
 @bp.put("/<day>")
-@admin_required
+@capability_required("calendar.manage")
 def put_day(day):
     parsed = _parse(day)
     payload = DayIn.model_validate(request.get_json(silent=True) or {})
@@ -60,7 +60,7 @@ def put_day(day):
 
 
 @bp.delete("/<day>")
-@admin_required
+@capability_required("calendar.manage")
 def delete_day(day):
     parsed = _parse(day)
     row = db.session.get(CalendarDay, parsed)

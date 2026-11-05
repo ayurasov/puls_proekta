@@ -3,6 +3,7 @@ import HelpLink from '../common/HelpLink.vue'
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../../api/client'
 import { useUiStore } from '../../stores/ui'
+import { useAuthStore } from '../../stores/auth'
 import { useDialogs } from '../../composables/useDialogs'
 import { resetPodelu } from '../../integrations/podelu'
 import AppIcon from '../common/AppIcon.vue'
@@ -15,6 +16,8 @@ import { SERVER_URL_PLACEHOLDER, effectiveServerUrl, normalizeUrl, sameAddresses
  * «Пульса» «По Делу» видна по другому адресу (оба сервиса в Docker на одной машине); сотрудники видят «Адрес «По Делу»».
  */
 const ui = useUiStore()
+// Загрузка структуры и сотрудников меняет и учётные записи: нужны оба полномочия (ADR-0013)
+const auth = useAuthStore()
 const { confirm } = useDialogs()
 
 const saved = ref(null)
@@ -118,7 +121,7 @@ async function disconnect() {
 
       <div class="footer">
         <button v-if="saved" class="btn btn-ghost danger" type="button" @click="disconnect">Отключить</button>
-        <router-link v-if="saved && !dirty" class="btn btn-ghost" to="/admin/org-transfer?tab=podelu" data-testid="podelu-sync-link"><AppIcon name="download" :size="14" /> Загрузить структуру и сотрудников</router-link>
+        <router-link v-if="saved && !dirty && auth.can('org.manage') && auth.can('users.manage')" class="btn btn-ghost" to="/admin/org-transfer?tab=podelu" data-testid="podelu-sync-link"><AppIcon name="download" :size="14" /> Загрузить структуру и сотрудников</router-link>
         <span class="spacer" />
         <button class="btn" type="button" :disabled="!!busy || !form.baseUrl || !form.login" data-testid="podelu-test" @click="test"><AppIcon name="link" :size="14" /> Проверить подключение</button>
         <button class="btn btn-primary" type="submit" :disabled="!!busy || !form.baseUrl || !form.login || (!dirty && !!saved)" data-testid="podelu-save">Сохранить</button>

@@ -24,7 +24,10 @@ from app.api.podelu import bp
 from app.extensions import db, limiter
 from app.models import Project
 from app.podelu_client import PodeluError, check_base_url, check_server_url
-from app.security import ApiError, admin_required, current_user, login_required, project_levels, require_project
+from app.security import (
+    admin_required, ApiError, capability_required, current_user, has_capability, login_required, project_levels,
+    require_project,
+)
 from app.services import podelu as podelu_service
 from app.services import podelu_links as links
 
@@ -60,13 +63,13 @@ def _suggested_url():
 
 
 @bp.get("/settings/podelu/links")
-@admin_required
+@capability_required("modules.manage")
 def get_links():
     return jsonify(links.admin_json(suggested_url=_suggested_url()))
 
 
 @bp.put("/settings/podelu/links")
-@admin_required
+@capability_required("modules.manage")
 def put_links():
     data = _form(LinksIn.model_validate(request.get_json(silent=True) or {}))
     settings = links.get_settings()
@@ -111,7 +114,7 @@ def put_links():
 
 
 @bp.delete("/settings/podelu/links")
-@admin_required
+@capability_required("modules.manage")
 def delete_links():
     settings = links.get_settings()
     inbound = links.inbound_key()
@@ -124,7 +127,7 @@ def delete_links():
 
 
 @bp.post("/settings/podelu/links/test")
-@admin_required
+@capability_required("modules.manage")
 @limiter.limit("20 per minute", key_func=_user_key)
 def test_links():
     """Проверка связи: «По Делу» принимает ключ и отвечает своей версией. Для сохранённых адреса и ключа время
@@ -212,7 +215,7 @@ def project_tasks(project_id):
         client = links.make_client()[0]
         tasks, truncated = client.project_tasks(project_id, item=item)
     except PodeluError as exc:
-        message = str(exc) if current_user().role == "admin" else \
+        message = str(exc) if has_capability(current_user(), "modules.manage") else \
             "«По Делу» сейчас не отвечает — задачи появятся позже"
         return jsonify({"enabled": True, "tasks": [], "truncated": False, "error": message})
     return jsonify({"enabled": True, "tasks": tasks, "truncated": truncated, "error": None,

@@ -105,6 +105,16 @@ await new Promise((resolveListen) => podelu.listen(PODELU_PORT, '127.0.0.1', res
 
 const seed = spawnSync(python, [join(root, 'tools/demo/seed_demo.py')], { cwd: join(root, 'backend'), env, stdio: 'inherit' })
 if (seed.status !== 0) process.exit(seed.status || 1)
+// «Состояние системы» на снимке: итог ночной резервной копии, как его записывает контейнер backup (deploy/backup.sh)
+const backupDemo = `import json, sqlite3, sys
+from datetime import datetime, timedelta, timezone
+at = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+value = {"ok": True, "at": at, "lastOkAt": at, "file": "puls_daily.dump", "size": 5452595, "label": "daily",
+         "count": 30, "totalBytes": 157286400}
+db = sqlite3.connect(sys.argv[1])
+db.execute("insert into app_settings (key, value, updated_at) values ('backup_status', ?, ?)", (json.dumps(value), at))
+db.commit()`
+spawnSync(python, ['-c', backupDemo, join(dir, 'demo.db')], { stdio: 'inherit' })
 
 const children = [
   spawn(python, ['-m', 'flask', '--app', 'wsgi', 'run', '--host', '127.0.0.1', '--port', API_PORT], { cwd: join(root, 'backend'), env, stdio: 'ignore' }),
@@ -337,6 +347,12 @@ async function adminGuide() {
   await page.locator('tr', { hasText: 'Ковалёва' }).locator('button[title="Изменить"]').click()
   await page.waitForSelector('.modal')
   await shot(page, '02-user-edit')
+  // 0.7.2: полномочия без роли администратора — список по группам в карточке сотрудника (без сохранения)
+  for (const cap of ['system.health', 'org.manage']) await page.check(`[data-cap="${cap}"]`)
+  await page.locator('[data-testid=user-capability-list]').evaluate((el) => el.scrollIntoView({ block: 'center' }))
+  await page.waitForTimeout(200)
+  await shot(page, '19-user-capabilities')
+  await page.locator('.modal-footer .btn-ghost', { hasText: 'Отмена' }).click()
   await closeOverlays(page)
 
   await page.goto(BASE + '/admin/directions')
@@ -435,6 +451,14 @@ async function adminGuide() {
   await page.click('.segmented button:has-text("Правила")')
   await page.waitForSelector('[data-testid=dep-rule]')
   await shot(page, '14-access-departments')
+
+  // 0.7.2: «Состояние системы» — после настройки интеграций, с проверкой подключений
+  await page.goto(BASE + '/admin/health')
+  await page.waitForSelector('[data-testid=health-summary]')
+  await page.click('[data-testid=health-check]')
+  await page.waitForSelector('[data-testid=health-checks]')
+  await page.waitForSelector('.toast', { state: 'detached', timeout: 15000 }).catch(() => {})
+  await shot(page, '20-health')
 }
 
 let code = 0

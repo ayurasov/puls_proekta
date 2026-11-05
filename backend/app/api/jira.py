@@ -19,7 +19,7 @@ from app.jira_client import (
     check_link_url, encrypt_token, is_epic, issue_key_from_url, jql_string, normalize_issue, parse_issue_keys,
     request_fields,
 )
-from app.security import ApiError, admin_required, current_user, login_required
+from app.security import ApiError, capability_required, current_user, has_capability, login_required
 from app.services import jira as jira_service
 
 bp = Blueprint("jira", __name__, url_prefix="/api")
@@ -81,13 +81,13 @@ def _form(payload):
 # ---------- администратор: «Интеграции» ----------
 
 @bp.get("/settings/jira")
-@admin_required
+@capability_required("modules.manage")
 def get_connection():
     return jsonify(jira_service.admin_json(jira_service.get_connection()))
 
 
 @bp.put("/settings/jira")
-@admin_required
+@capability_required("modules.manage")
 def put_connection():
     data = _form(ConnectionIn.model_validate(request.get_json(silent=True) or {}))
     existing = jira_service.get_connection()
@@ -119,7 +119,7 @@ def put_connection():
 
 
 @bp.delete("/settings/jira")
-@admin_required
+@capability_required("modules.manage")
 def delete_connection():
     existing = jira_service.get_connection()
     if existing:
@@ -144,7 +144,7 @@ PROBE_JQL = "updated >= -1d ORDER BY updated DESC"
 
 
 @bp.post("/settings/jira/test")
-@admin_required
+@capability_required("modules.manage")
 def test_connection():
     """Вход, версия Jira и поиск задач — тем же запросом, каким читаются задачи планов: «соединение установлено»
     значит, что задачи действительно будут загружаться."""
@@ -198,7 +198,7 @@ DIAG_OK, DIAG_WARN, DIAG_ERROR, DIAG_SKIP = "ok", "warn", "error", "skip"
 
 
 @bp.post("/settings/jira/diagnose")
-@admin_required
+@capability_required("modules.manage")
 @limiter.limit("10 per minute", key_func=_user_key)
 def diagnose():
     """Пошаговая проверка: адрес и сеть, вход, права, проекты, поиск, поля, задача по ключу, ссылки строк планов.
@@ -325,7 +325,7 @@ def diagnose():
 
 
 @bp.post("/settings/jira/fields")
-@admin_required
+@capability_required("modules.manage")
 def date_fields():
     """Поля Jira с датой — для выбора «начала» и «срока» задачи (по форме или сохранённому подключению)."""
     client = _admin_client()
@@ -358,7 +358,7 @@ def plan_issues(plan_id):
     if rows:
         try:
             issues, error, fetched_at = jira_service.fetch_issues(
-                list(rows), refresh=request.args.get("refresh") == "1", detailed=current_user().role == "admin")
+                list(rows), refresh=request.args.get("refresh") == "1", detailed=has_capability(current_user(), "modules.manage"))
         except JiraError as exc:
             error = str(exc)
     return jsonify({"connected": True, "issues": issues, "rows": rows, "error": error,
@@ -395,7 +395,7 @@ def search():
     if not conn:
         raise ApiError(409, "jira_not_configured", jira_service.NOT_CONFIGURED)
     keys, invalid = parse_issue_keys(payload.keys)
-    detailed = user.role == "admin"
+    detailed = has_capability(user, "modules.manage")
     if payload.filter is not None and not keys and not payload.jql.strip():
         try:
             client = jira_service.make_client(detailed=detailed)
@@ -475,7 +475,7 @@ def _editor_client(plan_id):
     if not conn:
         raise ApiError(409, "jira_not_configured", jira_service.NOT_CONFIGURED)
     try:
-        return conn, jira_service.make_client(detailed=current_user().role == "admin")
+        return conn, jira_service.make_client(detailed=has_capability(current_user(), "modules.manage"))
     except JiraError as exc:
         raise _jira_failed(exc) from None
 
@@ -611,7 +611,7 @@ def plan_source(plan_id):
         found = cached[0]
     else:
         try:
-            client = jira_service.make_client(detailed=current_user().role == "admin")
+            client = jira_service.make_client(detailed=has_capability(current_user(), "modules.manage"))
             db.session.rollback()
             found = [(k.upper(), f) for k, f in client.search(jql, request_fields(jira_service.field_map(conn)),
                                                               limit=SOURCE_LIMIT) if not is_epic(f)]

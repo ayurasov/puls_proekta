@@ -14,7 +14,7 @@ from sqlalchemy import select
 from app import audit
 from app.extensions import db
 from app.models import Department, DepartmentAccessRule, Direction, Project, User, utcnow
-from app.security import ApiError, admin_required, current_user, login_required
+from app.security import ApiError, capability_required, current_user, has_capability, login_required
 from app.services import org
 from app.services.org import OrgSnapshot
 
@@ -42,7 +42,7 @@ def _clean(value):
 def tree():
     """Вся структура: подразделения со счётчиками и сотрудники с вычисленным руководителем."""
     user = current_user()
-    snap = OrgSnapshot(include_inactive=user.role == "admin")
+    snap = OrgSnapshot(include_inactive=has_capability(user, "org.manage", "users.manage"))
     counts = org.employee_counts(snap)
     return jsonify({
         "settings": org.get_settings(),
@@ -55,7 +55,7 @@ def tree():
 @login_required
 def person(user_id):
     """Карточка сотрудника в структуре: подразделение, руководитель, цепочка подчинения, подчинённые."""
-    snap = OrgSnapshot(include_inactive=current_user().role == "admin")
+    snap = OrgSnapshot(include_inactive=has_capability(current_user(), "org.manage", "users.manage"))
     user = snap.users.get(user_id)
     if user is None:
         raise ApiError(404, "not_found", "Сотрудник не найден")
@@ -104,7 +104,7 @@ def get_settings():
 
 
 @bp.put("/org/settings")
-@admin_required
+@capability_required("org.manage")
 def put_settings():
     payload = OrgSettingsIn.model_validate(request.get_json(silent=True) or {})
     kinds = [k.model_dump() for k in payload.unitKinds]
@@ -150,7 +150,7 @@ def _check_placement(snap, dep_id, name, parent_id):
 
 
 @bp.post("/departments")
-@admin_required
+@capability_required("org.manage")
 def create_department():
     payload = DepartmentIn.model_validate(request.get_json(silent=True) or {})
     name = _clean(payload.name)
@@ -175,7 +175,7 @@ def create_department():
 
 
 @bp.patch("/departments/<dep_id>")
-@admin_required
+@capability_required("org.manage")
 def update_department(dep_id):
     data = request.get_json(silent=True) or {}
     payload = DepartmentIn.model_validate(data)
@@ -211,7 +211,7 @@ def update_department(dep_id):
 
 
 @bp.delete("/departments/<dep_id>")
-@admin_required
+@capability_required("org.manage")
 def delete_department(dep_id):
     org.lock_org()
     dep = _dep_or_404(dep_id)
@@ -241,7 +241,7 @@ class HeadsIn(BaseModel):
 
 
 @bp.put("/departments/<dep_id>/heads")
-@admin_required
+@capability_required("org.manage")
 def put_heads(dep_id):
     payload = HeadsIn.model_validate(request.get_json(silent=True) or {})
     org.lock_org()

@@ -16,7 +16,7 @@ from app import audit
 from app.api.plans import _audit_plan, _plan_with_access
 from app.extensions import db, limiter
 from app.models import CalendarDay, Direction, ItemComment, Project, User
-from app.security import ApiError, current_user, login_required, require_project
+from app.security import ApiError, current_user, has_capability, login_required, require_project
 from app.services import msproject_import as importer
 from app.services.msproject import write_mspdi
 from app.services.plan_doc import snapshot_document
@@ -153,7 +153,7 @@ def export(plan_id):
         select(ItemComment).where(ItemComment.plan_id == plan.id, ItemComment.deleted_at.is_(None))
         .order_by(ItemComment.id)).scalars() if c.item_key in alive]
     linked = {a.get("userId") for a in doc.get("assignees", []) if a.get("userId")} \
-        if current_user().role == "admin" else set()
+        if has_capability(current_user(), "users.manage") else set()
     users = [{"id": u.id, "email": u.email} for u in db.session.execute(
         select(User).where(User.id.in_(linked))).scalars()] if linked else []
     days = db.session.execute(select(CalendarDay)).scalars().all()

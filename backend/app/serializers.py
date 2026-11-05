@@ -1,5 +1,7 @@
 """Преобразование моделей в JSON API (camelCase)."""
 
+from app.capabilities import known as known_capabilities
+
 
 def iso(value):
     if value is None:
@@ -41,6 +43,8 @@ def user_full(user):
         "externalId": user.external_id,
         "orgSource": user.org_source,
         "podeluId": user.podelu_id,
+        # Полномочия без роли администратора (ADR-0013); у администратора действуют все, список не нужен
+        "capabilities": known_capabilities(user.capabilities),
     }
 
 

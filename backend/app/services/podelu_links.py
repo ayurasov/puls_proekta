@@ -161,6 +161,8 @@ class PodeluLinksClient:
         self.request_url = self.server_url or self.base_url
         self.key = check_key(key)
         self.timeout = timeout
+        # on_result(ok, message) — итог каждого запроса для «Состояния системы» (ADR-0014)
+        self.on_result = None
         self.session = requests.Session()
         self.session.headers.update({"Accept": "application/json", "Authorization": f"Bearer {self.key}"})
         self.session.verify = not accept_invalid_certs
@@ -170,6 +172,24 @@ class PodeluLinksClient:
             urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
     def get(self, path, params=None):
+        """Ответ «По Делу»; сбой связи, отказ в ключе и ошибки сервера сообщаются в on_result как неполадка."""
+        try:
+            data = self._get(path, params)
+        except PodeluError as exc:
+            bad = exc.status is None or exc.status in (401, 403) or exc.status >= 500
+            self._report(not bad, str(exc) if bad else "")
+            raise
+        self._report(True, "")
+        return data
+
+    def _report(self, ok, message):
+        if self.on_result is not None:
+            try:
+                self.on_result(ok, message)
+            except Exception:  # noqa: BLE001 — учёт состояния не должен ломать запрос
+                pass
+
+    def _get(self, path, params=None):
         url = f"{self.request_url}/api/integrations/puls/{path.lstrip('/')}"
         try:
             resp = self.session.get(url, params=params, timeout=self.timeout, allow_redirects=False, stream=True,
@@ -284,9 +304,12 @@ def make_client(override=None):
     if override is None:
         if not settings["baseUrl"] or not settings["keyEncrypted"]:
             raise PodeluError(NOT_CONFIGURED)
-        return PodeluLinksClient(settings["baseUrl"], decrypt_key(settings["keyEncrypted"]),
-                                 settings["acceptInvalidCerts"], server_url=settings.get("serverUrl") or ""), \
-            settings["baseUrl"]
+        client = PodeluLinksClient(settings["baseUrl"], decrypt_key(settings["keyEncrypted"]),
+                                   settings["acceptInvalidCerts"], server_url=settings.get("serverUrl") or "")
+        from app.services import system_health
+
+        client.on_result = system_health.reporter("podelu_links")
+        return client, settings["baseUrl"]
     base = check_base_url(override.get("baseUrl"))
     server = check_server_url(override.get("serverUrl"), base)
     key = (override.get("key") or "").strip()

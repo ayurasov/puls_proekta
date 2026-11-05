@@ -1,4 +1,7 @@
-"""Сотрудники: справочник для всех, управление — администратору."""
+"""Сотрудники: справочник для всех, управление — администратору и «Ведёт учётные записи» (ADR-0013).
+
+«Ведёт структуру компании» меняет у сотрудника только подразделение, должность и руководителя. Назначить роль
+«Администратор», выдать полномочия и менять учётную запись администратора может только администратор."""
 
 from typing import Literal, Optional
 
@@ -11,7 +14,8 @@ from app.api.avatars import read_avatar_upload, store_avatar
 from app.extensions import db
 from app.models import Project, User, UserAvatar, utcnow
 from app.passwords import hash_password, password_problem
-from app.security import ApiError, admin_required, current_user, login_required
+from app.capabilities import CAPABILITIES, known as known_capabilities
+from app.security import ApiError, can_manage_account, capability_required, current_user, has_capability, login_required
 from app.serializers import user_full, user_public
 from app.sessions import revoke_user_sessions
 
@@ -54,6 +58,8 @@ class UserUpdate(BaseModel):
     departmentId: Optional[str] = Field(default=None, max_length=36)
     managerId: Optional[int] = None
     reportsToNone: Optional[bool] = None
+    # Полномочия без роли администратора (ADR-0013) — выдаёт только администратор
+    capabilities: Optional[list[str]] = Field(default=None, max_length=len(CAPABILITIES))
 
     @field_validator("login", "name", "email", "position")
     @classmethod
@@ -74,6 +80,24 @@ def _active_admins_except(user_id):
     ).scalar_one()
 
 
+# Поля структуры: их меняет и «Ведёт структуру компании»
+ORG_FIELDS = {"departmentId", "managerId", "reportsToNone", "position"}
+
+
+def _capability_labels(values):
+    return ", ".join(CAPABILITIES[key] for key in known_capabilities(values)) or "нет"
+
+
+def _require_account(me, user, what="менять"):
+    """Учётную запись администратора и сотрудника с полномочиями, которых нет у вас, меняет администратор."""
+    if can_manage_account(me, user):
+        return
+    if user.role == "admin":
+        raise ApiError(403, "forbidden", f"Учётную запись администратора {what} может только администратор")
+    raise ApiError(403, "forbidden", f"У сотрудника есть полномочия, которых нет у вас: {what} его учётную запись "
+                                     "может администратор")
+
+
 def _get(user_id):
     user = db.session.get(User, user_id)
     if user is None:
@@ -90,7 +114,7 @@ def directory():
 
 
 @bp.get("")
-@admin_required
+@capability_required("users.manage", "org.manage", "access.manage")
 def list_users():
     users = db.session.execute(select(User).order_by(User.name)).scalars().all()
     created = dict(db.session.execute(
@@ -105,9 +129,11 @@ def list_users():
 
 
 @bp.post("")
-@admin_required
+@capability_required("users.manage")
 def create_user():
     payload = UserCreate.model_validate(request.get_json(silent=True) or {})
+    if payload.role == "admin" and current_user().role != "admin":
+        raise ApiError(403, "forbidden", "Роль «Администратор» назначает только администратор")
     if _login_taken(payload.login):
         raise ApiError(409, "login_taken", "Логин уже занят")
     password_hash = None
@@ -126,7 +152,7 @@ def create_user():
 
 
 @bp.patch("/<int:user_id>")
-@admin_required
+@capability_required("users.manage", "org.manage")
 def update_user(user_id):
     me = current_user()
     payload = UserUpdate.model_validate(request.get_json(silent=True) or {})
@@ -139,6 +165,21 @@ def update_user(user_id):
     user = _get(user_id)
     entity = f"user #{user.id} ({user.name})"
     revoke = False
+    fields = payload.model_fields_set
+    if me.role != "admin":
+        if not has_capability(me, "users.manage"):
+            # «Ведёт структуру компании» — только подразделение, должность и руководитель
+            if fields - ORG_FIELDS:
+                raise ApiError(403, "forbidden", "Ответственный за структуру меняет только подразделение, должность "
+                                                 "и руководителя")
+        elif fields - ORG_FIELDS:
+            _require_account(me, user)
+        if payload.role == "admin":
+            raise ApiError(403, "forbidden", "Роль «Администратор» назначает только администратор")
+        if "capabilities" in fields:
+            raise ApiError(403, "forbidden", "Полномочия выдаёт только администратор")
+        if user.id == me.id and ({"role", "isActive", "authSource", "login"} & fields):
+            raise ApiError(400, "self_change", "Свою роль, вход и включение меняет администратор")
 
     if payload.isActive is False and user.id == me.id:
         raise ApiError(400, "self_deactivate", "Нельзя отключить свою учётную запись")
@@ -168,6 +209,16 @@ def update_user(user_id):
                 user.password_hash = None
 
     changes += _apply_org_fields(user, payload)
+
+    if payload.capabilities is not None:
+        unknown = [c for c in payload.capabilities if c not in CAPABILITIES]
+        if unknown:
+            raise ApiError(400, "validation_error", f"Неизвестные полномочия: {', '.join(unknown)}")
+        new_caps = known_capabilities(payload.capabilities)
+        old_caps = known_capabilities(user.capabilities)
+        if new_caps != old_caps:
+            user.capabilities = new_caps
+            changes.append(("capabilities", _capability_labels(old_caps), _capability_labels(new_caps)))
 
     if payload.password:
         if user.auth_source == "ldap":
@@ -238,12 +289,13 @@ def _apply_org_fields(user, payload):
 
 
 @bp.delete("/<int:user_id>")
-@admin_required
+@capability_required("users.manage")
 def delete_user(user_id):
     me = current_user()
     user = _get(user_id)
     if user.id == me.id:
         raise ApiError(400, "self_delete", "Нельзя удалить свою учётную запись")
+    _require_account(me, user, "удалить")
     if user.role == "admin" and user.is_active and _active_admins_except(user.id) == 0:
         raise ApiError(400, "last_admin", "В системе должен остаться хотя бы один активный администратор")
     audit.record("Пользователи", "delete", f"user #{user.id} ({user.name})", "", user.name, "")
@@ -254,9 +306,10 @@ def delete_user(user_id):
 
 
 @bp.put("/<int:user_id>/avatar")
-@admin_required
+@capability_required("users.manage")
 def admin_upload_avatar(user_id):
     user = _get(user_id)
+    _require_account(current_user(), user)
     content_type, data = read_avatar_upload(current_app.config["AVATAR_MAX_BYTES"])
     store_avatar(user, content_type, data)
     audit.record("Пользователи", "update", f"user #{user.id} ({user.name})", "avatar", "", "фото обновлено")
@@ -265,9 +318,10 @@ def admin_upload_avatar(user_id):
 
 
 @bp.delete("/<int:user_id>/avatar")
-@admin_required
+@capability_required("users.manage")
 def admin_delete_avatar(user_id):
     user = _get(user_id)
+    _require_account(current_user(), user)
     avatar = db.session.get(UserAvatar, user.id)
     if avatar is not None:
         db.session.delete(avatar)
