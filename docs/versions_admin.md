@@ -3,6 +3,32 @@
 Документ содержит технические и эксплуатационные изменения. Пользовательский рассказ — в
 [versions.md](versions.md).
 
+## Версия 0.7.3 (Ноябрь 2026 г.)
+
+Резервные копии: расписание и хранение в «Пульсе» ([ADR-0015](architecture/adr-0015-backups.md)). Подробно —
+[release notes](release-notes/v0.7.3.md).
+
+### Обновление
+
+- `sh deploy/update.sh v0.7.3`. Миграций нет: `GET /api/health/ready` →
+  `{"schema":"0008_user_capabilities","version":"0.7.3"}`. Новый `deploy/backup.sh` подхватывается контейнером
+  `backup` после `docker compose up -d` (скрипт смонтирован, образ не меняется) — `update.sh` делает это сам.
+- Пока администратор не сохранил расписание в «Пульсе», служба работает по `BACKUP_HOUR` и `BACKUP_RETENTION_DAYS`
+  из `.env`, как раньше; копии вручную и перед обновлением при этом не удаляются (`keepManualDays` = 0).
+- В первый же шаг после обновления служба сделает сегодняшнюю копию, если сегодня ещё не было копии `daily`,
+  отмеченной новой службой (старая отметку не ставила).
+
+### Изменения
+
+- `app_settings`: `backup_settings` (пишет «Пульс»), `backup_request` («Сделать копию сейчас»), `backup_status`
+  (пишет служба: итог, `files`, `service`, `seenAt` раз в 5 минут, `running`, `lastDailyDate`).
+- `GET /api/system/backups` (администратор, `system.health`, `backups.manage`), `PUT /api/system/backups/settings`
+  и `POST /api/system/backups/run` (администратор, `backups.manage`; 409 — копия уже запрошена или делается).
+- `deploy/backup.sh`: `loop` — шаг раз в минуту, `tick` — один шаг (для проверки); расписание по дням недели с
+  догоняющей копией; хранение `daily` и остальных копий раздельно; `find -exec rm` вместо `-delete` (не во всех
+  сборках busybox). `BACKUP_PATH` — каталог копий внутри контейнера (по умолчанию `/backups`).
+- Полномочие `backups.manage` «Ведёт резервное копирование» (ADR-0013).
+
 ## Версия 0.7.2 (Ноябрь 2026 г.)
 
 Состояние системы ([ADR-0014](architecture/adr-0014-system-health.md)) и полномочия без роли администратора
