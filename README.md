@@ -43,7 +43,7 @@
 | Переход с 1.0.1 (runbook) | [MD](docs/runbooks/v0.2.0-migration-from-1.0.1.md) |
 | Ревизия 1.0.1: найденные дефекты и решения | [MD](docs/review/v0.2.0-revision-1.0.1.md) |
 | Нагрузочное тестирование | [MD](docs/performance/loadtest-v0.2.0.md) |
-| Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0014](docs/architecture/adr-0014-system-health.md) |
+| Архитектурные решения | [ADR-0001](docs/architecture/adr-0001-platform-and-stack.md) — [ADR-0015](docs/architecture/adr-0015-backups.md) |
 | Независимые проверки | [перепроверка 0.7.1](docs/review/v0.7.1-recheck-after-0.6.1.md), [0.7.0](docs/review/v0.7.0-independent-checks.md), [0.4.0](docs/review/v0.4.0-independent-checks.md), [0.2.1 и 0.3.0](docs/review/v0.3.0-independent-checks.md) |
 | Release notes | [v0.7.1](docs/release-notes/v0.7.1.md), [v0.7.0](docs/release-notes/v0.7.0.md), [v0.6.1](docs/release-notes/v0.6.1.md), [v0.6.0](docs/release-notes/v0.6.0.md), [v0.5.1](docs/release-notes/v0.5.1.md), [v0.5.0](docs/release-notes/v0.5.0.md), [v0.4.0](docs/release-notes/v0.4.0.md), [v0.3.1](docs/release-notes/v0.3.1.md), [v0.3.0](docs/release-notes/v0.3.0.md), [v0.2.1](docs/release-notes/v0.2.1.md), [v0.2.0](docs/release-notes/v0.2.0.md) |
 
@@ -54,6 +54,12 @@
 DOCX и PDF собираются из Markdown командой `python3 tools/docs/build_manuals.py` (pandoc, python-docx, pypdf,
 Chromium из Playwright). Снимки экранов — `node tools/docs/screenshots.mjs` на демонстрационных данных
 вымышленной компании (`tools/demo/seed_demo.py`).
+
+## Что нового в 0.7.3
+
+Регулярные резервные копии настраиваются в «Пульсе»: расписание по дням недели, сроки хранения, «Сделать копию
+сейчас», список копий и состояние службы копий — «Администрирование → Резервные копии»
+([ADR-0015](docs/architecture/adr-0015-backups.md), [release notes](docs/release-notes/v0.7.3.md)).
 
 ## Что нового в 0.7.2
 

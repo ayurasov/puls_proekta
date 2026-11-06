@@ -49,6 +49,6 @@ describe('полномочия без роли администратора (0.7
   })
 
   it('группы для списка у администратора', () => {
-    expect(capabilityGroups().map((g) => [g.name, g.items.length])).toEqual([['Система', 4], ['Люди и доступы', 3], ['Проекты', 1]])
+    expect(capabilityGroups().map((g) => [g.name, g.items.length])).toEqual([['Система', 5], ['Люди и доступы', 3], ['Проекты', 1]])
   })
 })

@@ -8,6 +8,7 @@
 
 CAPABILITIES = {
     "system.health": "Смотрит состояние системы",
+    "backups.manage": "Ведёт резервное копирование",
     "modules.manage": "Настраивает модули",
     "calendar.manage": "Ведёт производственный календарь",
     "audit.view": "Смотрит реестр изменений",

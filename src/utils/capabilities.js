@@ -10,6 +10,10 @@ export const CAPABILITIES = [
     hint: 'Раздел «Состояние системы»: сервер, база данных, резервные копии, ошибки, подключения',
   },
   {
+    key: 'backups.manage', group: 'Система', label: 'Ведёт резервное копирование',
+    hint: 'Расписание и хранение резервных копий, копия по запросу',
+  },
+  {
     key: 'modules.manage', group: 'Система', label: 'Настраивает модули',
     hint: 'Jira и «По Делу»: подключение, проверка, поля сроков, ссылки из задач',
   },
@@ -77,6 +81,7 @@ export function canManageAccount(actor, target) {
  */
 export const ADMIN_SECTIONS = [
   { to: '/admin/health', capability: 'system.health', icon: 'pulse', label: 'Состояние системы' },
+  { to: '/admin/backups', capability: ['backups.manage', 'system.health'], icon: 'archive', label: 'Резервные копии' },
   { to: '/admin/users', capability: 'users.manage', icon: 'users', label: 'Сотрудники' },
   { to: '/admin/structure', capability: 'org.manage', icon: 'hierarchy', label: 'Структура' },
   { to: '/admin/org-transfer', capability: ['org.manage', 'users.manage'], icon: 'upload', label: 'Импорт и экспорт' },

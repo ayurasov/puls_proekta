@@ -57,7 +57,7 @@ test('сотрудник с полномочиями видит только с�
   await login(viewer, 'e2e.viewer')
   const nav = viewer.locator('[data-testid=sidebar-admin] .nav-item')
   await nav.first().waitFor()
-  assert.deepEqual((await nav.allTextContents()).map((t) => t.trim()), ['Состояние системы', 'Сотрудники', 'Импорт и экспорт'])
+  assert.deepEqual((await nav.allTextContents()).map((t) => t.trim()), ['Состояние системы', 'Резервные копии', 'Сотрудники', 'Импорт и экспорт'])
   // В импорте и экспорте — только сотрудники: структура и синхронизации требуют «Ведёт структуру компании»
   await viewer.goto(`${BASE}/admin/org-transfer`)
   await viewer.locator('[data-testid=transfer-tab-employees]').waitFor()
