@@ -73,3 +73,13 @@ export function pluralize(n, one, few, many) {
 export function countLabel(n, one, few, many) {
   return `${n} ${pluralize(n, one, few, many)}`
 }
+
+/** Размер по-русски: «5,2 МБ», «840 КБ». */
+export function formatBytes(value) {
+  let size = Number(value) || 0
+  for (const unit of ['Б', 'КБ', 'МБ', 'ГБ', 'ТБ']) {
+    if (size < 1024 || unit === 'ТБ') return unit === 'Б' ? `${Math.round(size)} Б` : `${NUMBER.format(Math.round(size * 10) / 10)} ${unit}`
+    size /= 1024
+  }
+  return ''
+}

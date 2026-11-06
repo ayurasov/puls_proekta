@@ -105,14 +105,29 @@ await new Promise((resolveListen) => podelu.listen(PODELU_PORT, '127.0.0.1', res
 
 const seed = spawnSync(python, [join(root, 'tools/demo/seed_demo.py')], { cwd: join(root, 'backend'), env, stdio: 'inherit' })
 if (seed.status !== 0) process.exit(seed.status || 1)
-// «Состояние системы» на снимке: итог ночной резервной копии, как его записывает контейнер backup (deploy/backup.sh)
+// «Резервные копии» и «Состояние системы» на снимках: расписание, сохранённое в «Пульсе», и то, что записывает
+// служба копий (deploy/backup.sh) — ночные копии за две недели, копия перед обновлением, отметка «служба работает»
 const backupDemo = `import json, sqlite3, sys
 from datetime import datetime, timedelta, timezone
-at = (datetime.now(timezone.utc) - timedelta(hours=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
-value = {"ok": True, "at": at, "lastOkAt": at, "file": "puls_daily.dump", "size": 5452595, "label": "daily",
-         "count": 30, "totalBytes": 157286400}
+now = datetime.now(timezone.utc).replace(tzinfo=None)
+msk = timedelta(hours=3)
+iso = lambda d: d.strftime("%Y-%m-%dT%H:%M:%SZ")
+night = (now + msk).replace(hour=3, minute=0, second=12) - msk
+if night > now:
+    night -= timedelta(days=1)
+files = [{"name": "puls_%s_daily.dump" % (night - timedelta(days=i) + msk).strftime("%Y%m%d-%H%M%S"),
+          "size": 5452595 - i * 18000, "at": iso(night - timedelta(days=i))} for i in range(14)]
+update = night - timedelta(days=2, hours=-9)
+files.insert(2, {"name": "puls_%s_pre-update.dump" % (update + msk).strftime("%Y%m%d-%H%M%S"), "size": 5418000,
+                 "at": iso(update)})
+settings = {"enabled": True, "time": "03:00", "days": [1, 2, 3, 4, 5, 6, 7], "retentionDays": 30, "keepManualDays": 90}
+status = {"ok": True, "at": iso(night), "lastOkAt": iso(night), "file": files[0]["name"], "size": files[0]["size"],
+          "label": "daily", "lastDailyDate": (night + msk).date().isoformat(), "seenAt": iso(now - timedelta(minutes=2)),
+          "service": {**settings, "source": "settings", "tz": "Europe/Moscow", "utcOffset": "+0300"},
+          "files": files, "count": len(files), "totalBytes": sum(f["size"] for f in files)}
 db = sqlite3.connect(sys.argv[1])
-db.execute("insert into app_settings (key, value, updated_at) values ('backup_status', ?, ?)", (json.dumps(value), at))
+for key, value in (("backup_settings", settings), ("backup_status", status)):
+    db.execute("insert into app_settings (key, value, updated_at) values (?, ?, ?)", (key, json.dumps(value), iso(now)))
 db.commit()`
 spawnSync(python, ['-c', backupDemo, join(dir, 'demo.db')], { stdio: 'inherit' })
 
@@ -459,6 +474,12 @@ async function adminGuide() {
   await page.waitForSelector('[data-testid=health-checks]')
   await page.waitForSelector('.toast', { state: 'detached', timeout: 15000 }).catch(() => {})
   await shot(page, '20-health')
+
+  // 0.7.3: «Резервные копии» — служба, расписание и хранение, список копий
+  await page.goto(BASE + '/admin/backups')
+  await page.waitForSelector('[data-testid=backup-files]')
+  await page.waitForTimeout(300)
+  await shot(page, '21-backups')
 }
 
 let code = 0

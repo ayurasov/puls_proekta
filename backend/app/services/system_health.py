@@ -35,7 +35,6 @@ ERRORS_KEEP = 50
 ERRORS_WINDOW = timedelta(hours=24)
 # Порог «много ошибок» — за последний час
 ERRORS_BURST = 20
-BACKUP_WARN, BACKUP_ERROR = timedelta(hours=26), timedelta(hours=50)
 DISK_MIN_FREE = 1024 ** 3
 SLOW_DB_MS = 500
 ORDER = {"ok": 0, "off": 0, "warn": 1, "error": 2}
@@ -227,34 +226,56 @@ def _app_item(now):
 
 
 def _backups_item(now):
+    """Резервные копии (ADR-0015): работает ли служба копий, по расписанию ли последняя копия, удалась ли она."""
+    from app.services import backups
+
     info = _setting(BACKUP_KEY, {})
-    last_ok = _parse(info.get("lastOkAt"))
+    link, capability = "/admin/backups", "system.health"
+    title = "Резервные копии"
     if not info:
-        return _item("backups", "Резервные копии", "off", "Сведений о резервных копиях нет", [
-            "Копии делает контейнер backup (docker compose): после первой копии здесь появятся её время и размер",
-        ])
+        return _item("backups", title, "off", "Резервное копирование не настроено", [
+            "Копии делает контейнер backup (docker compose up -d backup): после его запуска здесь появятся "
+            "расписание, время и размер копий",
+        ], link, capability)
+    last_ok = _parse(info.get("lastOkAt"))
+    service = info.get("service") if isinstance(info.get("service"), dict) else None
+    seen = _parse(info.get("seenAt"))
     details = []
+    if service:
+        details.append(f"Расписание: {backups.schedule_text(service)}"
+                       + ("" if service.get("source") == "settings" else " (из настроек сервера)"))
     if info.get("count") is not None:
         details.append(f"Копий хранится: {info['count']}, всего {fmt_bytes(info.get('totalBytes'))}")
-    if info.get("file"):
-        details.append(f"Последний файл: {info['file']}")
+    if service and seen and now - seen > backups.SERVICE_STALE:
+        return _item("backups", title, "error", f"Служба резервного копирования не отвечает: последний раз "
+                     f"{ago(seen, now)} — проверьте контейнер backup", details, link, capability)
     if info.get("ok") is False:
         details.insert(0, f"Последняя удачная копия: {ago(last_ok, now)}")
         failed = _parse(info.get("at"))
-        return _item("backups", "Резервные копии", "error",
+        return _item("backups", title, "error",
                      f"Последняя копия не удалась ({ago(failed, now)}): {info.get('error') or 'ошибка pg_dump'}",
-                     details)
+                     details, link, capability)
+    if service and not service.get("enabled"):
+        return _item("backups", title, "warn", "Копии по расписанию выключены"
+                     + (f"; последняя — {ago(last_ok, now)}" if last_ok else ""), details, link, capability)
     if last_ok is None:
-        return _item("backups", "Резервные копии", "warn", "Удачных копий ещё не было", details)
+        return _item("backups", title, "warn", "Удачных копий ещё не было", details, link, capability)
+    # Сколько можно ждать: промежуток между днями расписания (у ежедневного — сутки) и запас
+    gap = backups.max_gap_days(service.get("days")) if service else 1
+    period = timedelta(days=gap or 1)
     age = now - last_ok
     size = f", {fmt_bytes(info.get('size'))}" if info.get("size") else ""
-    if age > BACKUP_ERROR:
-        return _item("backups", "Резервные копии", "error",
-                     f"Копий нет больше двух суток: последняя {ago(last_ok, now)}", details)
-    if age > BACKUP_WARN:
-        return _item("backups", "Резервные копии", "warn",
-                     f"Копии не было больше суток: последняя {ago(last_ok, now)}", details)
-    return _item("backups", "Резервные копии", "ok", f"Последняя копия {ago(last_ok, now)}{size}", details)
+    if age > period + backups.GRACE_ERROR:
+        return _item("backups", title, "error",
+                     f"Копий нет дольше, чем по расписанию: последняя {ago(last_ok, now)}", details, link, capability)
+    if age > period + backups.GRACE_WARN:
+        return _item("backups", title, "warn",
+                     f"Копия по расписанию запаздывает: последняя {ago(last_ok, now)}", details, link, capability)
+    upcoming = backups.next_run(service, now, info.get("lastDailyDate")) if service else None
+    if upcoming:
+        local = upcoming + backups.offset(service.get("utcOffset"))
+        details.insert(0, f"Следующая копия: {local.strftime('%d.%m в %H:%M')}")
+    return _item("backups", title, "ok", f"Последняя копия {ago(last_ok, now)}{size}", details, link, capability)
 
 
 def _errors_item(now):

@@ -11,6 +11,7 @@ const routes = [
   },
   { path: '/org', name: 'org', component: () => import('../views/OrgView.vue'), meta: { title: 'Структура компании' } },
   { path: '/admin', name: 'admin', component: () => import('../views/NotFoundView.vue'), meta: { adminHome: true } },
+  { path: '/admin/backups', name: 'admin-backups', component: () => import('../views/admin/BackupsView.vue'), meta: { capability: ['backups.manage', 'system.health'], title: 'Резервные копии' } },
   { path: '/admin/health', name: 'admin-health', component: () => import('../views/admin/SystemHealthView.vue'), meta: { capability: 'system.health', title: 'Состояние системы' } },
   { path: '/admin/users', name: 'admin-users', component: () => import('../views/admin/UsersView.vue'), meta: { capability: 'users.manage', title: 'Сотрудники' } },
   { path: '/admin/structure', name: 'admin-structure', component: () => import('../views/admin/StructureView.vue'), meta: { capability: 'org.manage', title: 'Структура компании' } },
